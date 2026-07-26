@@ -365,7 +365,7 @@ async function saveDB(db) {
         // Always refresh the local cache immediately, regardless of whether
         // the live save below succeeds — so a later brief outage still has
         // a recent copy to fall back to.
-        window.storage.set(DB_KEY, JSON.stringify(db), true).catch(() => {});
+        localStorage.setItem(DB_KEY, JSON.stringify(db));
         try {
             const res = await fetch(SHEETS_SYNC_URL, {
                 method: "POST",
