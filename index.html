@@ -319,7 +319,7 @@ function _notifySave(status) { _saveListeners.forEach(fn => fn(status)); }
    local CACHE only — updated every time Sheets is successfully reached, and
    used as a fallback display if Sheets is briefly unreachable, but never
    trusted as the source of truth once Sheets is available again. */
-async function loadDB() {
+async async function loadDB() {
     if (SHEETS_SYNC_URL) {
         try {
             const res = await fetch(SHEETS_SYNC_URL, {
