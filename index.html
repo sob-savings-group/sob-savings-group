@@ -267,7 +267,7 @@ function fmt(n) {
     const v = Number(n) || 0;
     return "UGX " + v.toLocaleString('en-UG', { maximumFractionDigits: 0 });
 }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+function todayISO() {     return new Date().toLocaleDateString("en-CA", {         timeZone: "Africa/Nairobi"     }); }
 function addDays(dateStr, days) {
     const d = new Date(dateStr);
     d.setDate(d.getDate() + days);
