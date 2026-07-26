@@ -330,7 +330,7 @@ async function loadDB() {
             const data = await res.json();
             if (data.ok) {
                 // Keep the local cache fresh, best-effort, never blocking.
-                window.storage.set(DB_KEY, JSON.stringify(data.db), true).catch(() => {});
+                localStorage.setItem(DB_KEY, JSON.stringify(data.db));
                 return data.db;
             }
             console.error("Backend rejected request:", data.error);
