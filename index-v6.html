@@ -1,0 +1,1795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SOB Savings Group</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#0B0E14;            /* deep dark navy page background, not pure black */
+    --ink:#161A24;           /* elevated dark surface - headers, buttons, filled panels */
+    --text:#F1F0EA;          /* crisp off-white - primary text */
+    --ink-soft:#8A92A6;      /* muted slate - secondary text */
+    --gold:#C5A059;          /* muted metallic gold - used sparingly for accents */
+    --gold-dim:#E2C88F;
+    --cream:#0B0E14;         /* page background (kept var name for compatibility) */
+    --paper:rgba(255,255,255,0.035); /* glass card surface */
+    --green:#2FBF71;         /* vivid emerald, tuned for dark backgrounds */
+    --rust:#F0703A;          /* vivid burnt orange, tuned for dark backgrounds */
+    --line:rgba(197,160,89,0.14); /* ultra-subtle gold border */
+  }
+  *{box-sizing:border-box;}
+  html{background:var(--bg);}
+  body{
+    margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:
+      radial-gradient(ellipse 900px 500px at 20% -10%, rgba(120,90,200,0.16), transparent 60%),
+      radial-gradient(ellipse 700px 500px at 100% 0%, rgba(197,160,89,0.08), transparent 55%),
+      var(--bg);
+    background-attachment:fixed;
+    color:var(--text);
+    min-height:100vh;
+  }
+  h1,h2,h3,.display{font-family:Georgia,'Times New Roman',serif;}
+  .mono{font-family:'Courier New',monospace;}
+  ::selection{background:var(--gold-dim);color:#1a1a1a;}
+  button{font-family:inherit;cursor:pointer;}
+  input,select{font-family:inherit;}
+  ::-webkit-scrollbar{width:6px;height:6px;}
+  ::-webkit-scrollbar-thumb{background:rgba(197,160,89,0.25);border-radius:4px;}
+  .glow-text{ text-shadow: 0 0 18px rgba(197,160,89,0.35), 0 0 2px rgba(255,255,255,0.15); }
+  .scroll-fade{
+    overflow-x:auto; scrollbar-width:none; -ms-overflow-style:none;
+    -webkit-mask-image: linear-gradient(to right, black 92%, transparent 100%);
+    mask-image: linear-gradient(to right, black 92%, transparent 100%);
+  }
+  .scroll-fade::-webkit-scrollbar{ display:none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"use strict";
+const { useState, useEffect, useMemo, useCallback } = React;
+/* ============ CONFIG ============ */
+// TODO: paste your deployed Google Apps Script Web App URL here to sync with
+// the master Google Sheet. Leave blank to run on built-in storage only.
+const SHEETS_SYNC_URL = "https://script.google.com/macros/s/AKfycbwW5e5uDBcRyc7mFltKIIeib2voJwlZ2Fbx47md2iezKG16I61-n_Bxaq8-EyEtA2nD/exec"; // paste your deployed Apps Script Web App URL here
+const SHEETS_SECRET_KEY = "WISDOM-comesfromGOD@SOB2026"; // must match SECRET_KEY in Code.gs
+const ADMIN_PIN = "2026"; // fallback ONLY — used when AUTH_SERVER_URL below is blank.
+                          // A PIN stored here is visible to anyone who views this
+                          // page's source. Set up the auth server (Code_Auth.gs) for
+                          // real protection — once AUTH_SERVER_URL is set, this
+                          // constant is no longer used for the actual check.
+
+// Optional real auth server (see Code_Auth.gs) — a small, SEPARATE Apps Script
+// with its own spreadsheet, whose only job is checking PINs server-side, so
+// they're never exposed in this file's visible source. It never touches any
+// financial data. Leave blank to keep using the (visible, weaker) ADMIN_PIN above.
+const AUTH_SERVER_URL = "https://script.google.com/macros/s/AKfycbw2w0L7SLdbPcELQCYD7c2YZQSu6jZPeyjCrZJh7cSPhPDHZi4DKU-mHLRFgUs9Z9LNWA/exec";
+const AUTH_SERVER_KEY = "WISDOM-comesfromGOD@SOB2026";
+
+// Optional one-way auto-backup (see Code_Backup.gs) — sends a safety-net
+// snapshot to a separate Google Drive folder at most once per hour, in the
+// background. This is NOT a live connection: nothing reads from it, the
+// app never depends on it, and if it's unreachable the app just continues
+// normally. Leave blank to skip this entirely.
+const AUTO_BACKUP_URL = "https://script.google.com/macros/s/AKfycbzBLVzzdld7XfV0akpqzrwzOE2CwXHE8LQfiw89ZI5tKaecU_RJTPwh3f3IRrxpTE_e2g/exec";
+const AUTO_BACKUP_KEY = "AUTO-SOB DATA BACKUP@2026";
+const AUTO_BACKUP_MIN_INTERVAL_MS = 15 * 60 * 1000; // routine saves: at most every 15 minutes
+let _lastAutoBackupAttempt = 0;
+
+function sendAutoBackup(db) {
+    _lastAutoBackupAttempt = Date.now();
+    // Fire-and-forget: never awaited, never blocks saving, never surfaces
+    // an error to the user — this is a pure background safety net.
+    fetch(AUTO_BACKUP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ key: AUTO_BACKUP_KEY, action: "saveBackup", json: JSON.stringify(db) })
+    }).catch(e => console.log("[auto-backup skipped — relay unreachable]", e));
+}
+function maybeAutoBackup(db) {
+    if (!AUTO_BACKUP_URL) return;
+    if (Date.now() - _lastAutoBackupAttempt < AUTO_BACKUP_MIN_INTERVAL_MS) return;
+    sendAutoBackup(db);
+}
+// Bypasses the routine throttle entirely — used right after anything that
+// would be genuinely painful to lose (loan issuance, repayments, voids,
+// airtime fulfillment, restores), so at most the loss window for those
+// specific events is however long the network takes, not up to 15 minutes.
+function forceAutoBackup(db) {
+    if (!AUTO_BACKUP_URL) return;
+    sendAutoBackup(db);
+}
+
+async function checkPin(role, memberId, pin) {
+    if (!AUTH_SERVER_URL) {
+        // No real server configured — fall back to the local constant, which
+        // is not truly secret since it's visible in this page's source.
+        if (role === "admin") return { ok: pin === ADMIN_PIN, hasPin: true, viaServer: false };
+        return { ok: false, hasPin: false, viaServer: false };
+    }
+    try {
+        const res = await fetch(AUTH_SERVER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ key: AUTH_SERVER_KEY, action: "checkPin", role, memberId, pin })
+        });
+        const data = await res.json();
+        return Object.assign({}, data, { viaServer: true });
+    } catch (e) {
+        console.error("Auth server unreachable, falling back to local check.", e);
+        if (role === "admin") return { ok: pin === ADMIN_PIN, hasPin: true, viaServer: false };
+        return { ok: false, hasPin: false, viaServer: false };
+    }
+}
+// Staff login: one PIN field, no role picker — whichever role's PIN matches
+// determines access. Only works when the real auth server is configured,
+// since role-splitting requires server-side storage of multiple PINs; the
+// local ADMIN_PIN fallback only ever supports the single full-access role.
+async function checkStaffPin(pin) {
+    if (!AUTH_SERVER_URL) {
+        return { ok: pin === ADMIN_PIN, matchedRole: pin === ADMIN_PIN ? "admin" : null, viaServer: false };
+    }
+    try {
+        const res = await fetch(AUTH_SERVER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ key: AUTH_SERVER_KEY, action: "checkStaffPin", pin })
+        });
+        const data = await res.json();
+        return Object.assign({}, data, { viaServer: true });
+    } catch (e) {
+        console.error("Auth server unreachable, falling back to local admin-only check.", e);
+        return { ok: pin === ADMIN_PIN, matchedRole: pin === ADMIN_PIN ? "admin" : null, viaServer: false };
+    }
+}
+// Self-service PIN change — requires knowing the current correct PIN. Only
+// works when the real auth server is configured, since the local fallback
+// constant can't actually be updated from inside the running app.
+async function changePin(role, oldPin, newPin) {
+    if (!AUTH_SERVER_URL) return { ok: false, error: "No auth server configured — cannot change PIN from here." };
+    try {
+        const res = await fetch(AUTH_SERVER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({ key: AUTH_SERVER_KEY, action: "changePin", role, oldPin, newPin })
+        });
+        return await res.json();
+    } catch (e) {
+        return { ok: false, error: "Could not reach the auth server." };
+    }
+}
+
+// Traccar SMS Gateway setup (this is the whole thing — no tunnel, no local
+// network, no ngrok needed):
+//   1. Admin installs "Traccar SMS Gateway" from the Play Store on their phone
+//   2. Opens the app, taps Start — an API key/token is displayed on screen
+//   3. Paste that token below as SMS_GATEWAY_KEY, and Admin's own number as
+//      ADMIN_PHONE
+// That's it. The URL below is Traccar's own public relay — it works over the
+// phone's normal mobile data or WiFi, reaching it from anywhere (including
+// this web app), which is what makes this workable for 80+ members rather
+// than requiring everyone on the same local network.
+const SMS_GATEWAY_URL = "https://www.traccar.org/sms/";
+const SMS_GATEWAY_KEY = ""; // paste the token shown in the Traccar app here
+const ADMIN_PHONE = "";     // Admin's own phone number, e.g. "+256700000000"
+
+const AIRTIME_MONTHLY_CAP = 20000;   // UGX — total airtime per member per calendar month
+const AIRTIME_SMS_FEE = 200;         // UGX — flat two-way notification fee per request
+
+async function sendSMS(toPhone, message) {
+    if (!SMS_GATEWAY_KEY) {
+        console.log("[SMS skipped — SMS_GATEWAY_KEY not set yet]", toPhone, message);
+        return { ok: false, skipped: true, error: "SMS gateway not configured yet." };
+    }
+    try {
+        const res = await fetch(SMS_GATEWAY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": SMS_GATEWAY_KEY },
+            body: JSON.stringify({ to: toPhone, message: message })
+        });
+        if (!res.ok) {
+            return { ok: false, error: `Gateway responded with status ${res.status} — the phone or gateway may be offline.` };
+        }
+        return { ok: true };
+    } catch (e) {
+        return { ok: false, error: "Could not reach the SMS gateway — the phone may be offline or the gateway app closed." };
+    }
+}
+// Shared helper so any failed send (not a "not configured yet" no-op, a real
+// failure once the gateway IS configured) is recorded visibly, not just
+// logged quietly to the browser console where nobody would see it.
+function recordSmsFailure(currentDb, setDBFn, context, error) {
+    const entry = { id: uid("SMSFAIL"), date: todayISO(), context, error };
+    const nx = Object.assign({}, currentDb, { smsFailures: [entry, ...(currentDb.smsFailures || [])] });
+    setDBFn(nx);
+    saveDB(nx);
+}
+
+
+const SEED_DATA = {"members":[{"id":"SOB-001","name":"Wakooli Emmanuel","phone":"256755805503","email":"wakoolie@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-002","name":"Templa Sekiwu","phone":"256705389034","email":"templa621@gmail.com","location":"Nalugala","regDate":"2023-11-20"},{"id":"SOB-003","name":"Dr. Daniel Kuteesa","phone":"256702834290","email":"kuteesadaniel004@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-004","name":"Joshua Ssebadduka","phone":"700332722","email":"ssjoshua1@gmail.com","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-005","name":"Elder-Kironde John","phone":"706496404","email":"kirondej220@gmail.com","location":"Lyammutundwe ","regDate":"2023-11-20"},{"id":"SOB-006","name":"Arthur Birungi","phone":"256759180561","email":"arthurprince450@gmail.com","location":"Garuga ","regDate":"2023-11-20"},{"id":"SOB-007","name":"Erick Musoke","phone":"256775397527","email":"ericmusoke18@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-008","name":"DIANA Nakiganda","phone":"752975431","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-009","name":"Kadama Grace","phone":"775885482","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-010","name":"Newton Abraham","phone":"775929611","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-011","name":"Kagimu Francis","phone":"755924822","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-012","name":"Kemi Paul","phone":"759895517","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-013","name":"Joshua Ndyabagyera","phone":"704961330","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-014","name":"Calvin & Cealan","phone":"775492474","email":"catayebwa@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-015","name":"Ssebuguluse Deziderio","phone":"777087909","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-016","name":"Gideon Kuteesa","phone":"256756804039","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-017","name":"WinnieHildah Gooding","phone":"751196675","email":"winniehildah3@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-018","name":"Keith Muwanguzi","phone":"744047769","email":742038029.0,"location":"","regDate":"2023-11-20"},{"id":"SOB-019","name":"kaweesi Jackson Mukisa","phone":"756049776","email":"mukisajackson090@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-020","name":"Biyinzika Daniel","phone":"700332722","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-021","name":"Enock Kuteesa","phone":"700332722","email":"","location":"kawafu ","regDate":"2023-11-20"},{"id":"SOB-022","name":"MIRACLE Blessings","phone":"783744098","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-023","name":"Jayden Kaweesi","phone":"765818648","email":"","location":"Kabaale","regDate":"2023-11-20"},{"id":"SOB-024","name":"DENISON Mulindwa","phone":"256774020205","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-025","name":"Nabawanuka Amina","phone":"703154463","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-026","name":"Shiloh Shield","phone":"741007957","email":"mawejjenl@gmail.com","location":"","regDate":"2023-11-20"},{"id":"SOB-027","name":"Moris Mubiru","phone":"704380938","email":"","location":"","regDate":"2024-11-20"},{"id":"SOB-028","name":"Birungi Angel N.","phone":"753786714","email":"","location":"Kawafu","regDate":"2024-11-20"},{"id":"SOB-029","name":"Kugobera Anne","phone":"759882525","email":"","location":"Garuga ","regDate":"2023-11-20"},{"id":"SOB-030","name":"Benjamin Mwesigwa","phone":"700332722","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-031","name":"Bwiti Abigail","phone":"256763757794","email":"","location":"Garuga ","regDate":"2023-11-20"},{"id":"SOB-032","name":"Martin Moluma","phone":"700717383","email":"","location":"Nkumba central ","regDate":"2023-11-20"},{"id":"SOB-033","name":"Ronald Agaba","phone":"755122555","email":"","location":"","regDate":"2024-11-20"},{"id":"SOB-034","name":"Sylvia Nansamba","phone":"752972715","email":"","location":"Kawafu ","regDate":"2024-11-20"},{"id":"SOB-035","name":"Robert Kigozi","phone":"704165910","email":"","location":"Nkumba central ","regDate":"2023-11-20"},{"id":"SOB-036","name":"Faith B.kabagyenyi","phone":"703154463","email":"","location":"Kawafu ","regDate":"2024-11-20"},{"id":"SOB-037","name":"Angel Birungi","phone":"","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-038","name":"Kasozi Dauglas","phone":"700204116","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-039","name":"Ndagire Blessings","phone":"256700418973","email":"","location":"kitala ","regDate":"2024-11-20"},{"id":"SOB-040","name":"Alison Kabwama","phone":"754639463","email":"","location":"Kawafu ","regDate":"2023-11-20"},{"id":"SOB-041","name":"Natulinda Maria","phone":"703258625","email":"","location":"Bubuli ","regDate":"2024-11-20"},{"id":"SOB-042","name":"Kuteesa Timothy","phone":"709562908","email":"","location":"","regDate":"2024-11-20"},{"id":"SOB-043","name":"Masaaba Dickinson","phone":"770432353","email":"","location":"","regDate":"2023-11-20"},{"id":"SOB-044","name":"Nabuuma Angel","phone":"701194092","email":"","location":"","regDate":"2024-11-20"},{"id":"SOB-045","name":"Keirah Muwanguzi","phone":"742038029","email":"kwagalabrenda000@gmail.com","location":"Lyamutundwe","regDate":"2025-12-21"},{"id":"SOB-046","name":"Matendo Esther","phone":"774020205","email":"","location":"Kawafu","regDate":"2025-12-21"},{"id":"SOB-047","name":"Nansamba Daphine","phone":"774020205","email":"","location":"Kawafu","regDate":"2025-12-21"},{"id":"SOB-048","name":"Maria Shekinah k","phone":"741007957","email":"","location":"Garuga","regDate":"2025-12-21"},{"id":"SOB-049","name":"Samuel Friend K","phone":"755924822","email":"","location":"Garuga","regDate":"2025-12-21"},{"id":"SOB-050","name":"Iga Tonny","phone":"701945846","email":"","location":"","regDate":"2026-01-01"},{"id":"SOB-051","name":"SB-SAVINGS","phone":"","email":"","location":"","regDate":"2026-01-01"},{"id":"SOB-052","name":"Zipporah Kuteesa","phone":"759511868","email":"zipporahkuteesa03@gmail.com","location":"Kawafu ","regDate":"2026-01-04"},{"id":"SOB-053","name":"Ireen Ssebadduka","phone":"774020205","email":"","location":"Kawafu ","regDate":"2026-01-18"},{"id":"SOB-054","name":"Kyolaba Josephine","phone":"755543801","email":"kyolabajosephine88@gmail.com","location":"","regDate":"2026-01-19"},{"id":"SOB-055","name":"Nakasagga Elizabeth Najjemba","phone":"709586903","email":"elizabethug417@gmail.com","location":"Mulago k'la","regDate":"2026-01-19"}],"transactions":[{"id":"TXN-OZLLKF","date":"2025-12-21","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-DEV4QF","date":"2025-12-21","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":145000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1STU22","date":"2025-12-21","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1399KC","date":"2025-12-21","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":2000000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-0VA1ET"},{"id":"TXN-IWH11H","date":"2025-12-21","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-X19XY6","date":"2025-12-21","memberId":"SOB-006","memberName":"Arthur Birungi","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1V2NHI","date":"2025-12-21","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-D7T5GN","date":"2025-12-21","memberId":"SOB-010","memberName":"Newton Abraham","amount":700000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-QPL8BU","date":"2025-12-21","memberId":"SOB-011","memberName":"Kagimu Francis","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-YIRNZS","date":"2025-12-21","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-TWMWZM","date":"2025-12-21","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-9MFKVN","date":"2025-12-21","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-9EENY9","date":"2025-12-21","memberId":"SOB-020","memberName":"Biyinzika Daniel ","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HX0Z4G","date":"2025-12-21","memberId":"SOB-021","memberName":"Enock Kuteesa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NYKF77","date":"2025-12-21","memberId":"SOB-023","memberName":"Jayden Kaweesi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-IUXWUV","date":"2025-12-21","memberId":"SOB-024","memberName":"DENISON Mulindwa","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AL0MH1","date":"2025-12-21","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HL7E9T","date":"2025-12-21","memberId":"SOB-026","memberName":"Shiloh Shield","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MTPSI7","date":"2025-12-21","memberId":"SOB-028","memberName":"Birungi Angel N.","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XQ47M3","date":"2025-12-21","memberId":"SOB-029","memberName":"Kugobera Anne","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OGCCFC","date":"2025-12-21","memberId":"SOB-030","memberName":"Benjamin Mwesigwa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AYQUI9","date":"2025-12-21","memberId":"SOB-031","memberName":"Bwiti Abigail","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-T9310C","date":"2025-12-21","memberId":"SOB-032","memberName":"Martin Moluma","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-PQA0CP","date":"2025-12-21","memberId":"SOB-034","memberName":"Sylvia Nansamba","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VZZQA4","date":"2025-12-21","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-8LWYYP","date":"2025-12-21","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-C3XRSZ","date":"2025-12-21","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-N34CQL","date":"2025-12-21","memberId":"SOB-040","memberName":"Alison Kabwama","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GQR6HS","date":"2025-12-21","memberId":"SOB-041","memberName":"Natulinda Maria","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KDNWR4","date":"2025-12-21","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XXBBT6","date":"2025-12-21","memberId":"SOB-046","memberName":"Matendo Esther","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-99UYDE","date":"2025-12-21","memberId":"SOB-047","memberName":"Nansamba Daphine","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-095QDF","date":"2025-12-21","memberId":"SOB-048","memberName":"Maria Shekinah k","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-L12MP3","date":"2025-12-21","memberId":"SOB-049","memberName":"Samuel Friend K","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1HROHN","date":"2025-12-28","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XODINL","date":"2025-12-28","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":40000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SANA0X","date":"2025-12-28","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-B3NKM7","date":"2025-12-28","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-YWG3IQ","date":"2025-12-28","memberId":"SOB-024","memberName":"DENISON Mulindwa","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4KRTD9","date":"2025-12-28","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5QGP20","date":"2025-12-28","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-B19KCV","date":"2025-12-28","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-P563HU","date":"2025-12-28","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-QM3M1J","date":"2026-01-01","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":200000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-ETHD4G"},{"id":"TXN-VHV11J","date":"2026-01-01","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-IDRU8B","date":"2026-01-02","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5UW1XF","date":"2026-01-04","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-K037JB","date":"2026-01-04","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":8000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CMVQAY","date":"2026-01-04","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":30000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Y01N1G","date":"2026-01-04","memberId":"SOB-014","memberName":"Calvin & Cealan","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KFVKJT","date":"2026-01-04","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-10HJE6","date":"2026-01-04","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-EYKFQH","date":"2026-01-04","memberId":"SOB-028","memberName":"Birungi Angel N.","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1Y2A02","date":"2026-01-04","memberId":"SOB-034","memberName":"Sylvia Nansamba","amount":30000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HAGLX1","date":"2026-01-04","memberId":"SOB-035","memberName":"Robert Kigozi","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-UONWUI","date":"2026-01-04","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-ULPYVQ","date":"2026-01-04","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-E19KSW","date":"2026-01-04","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":290000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-8C5L75","date":"2026-01-07","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":150000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-306IAO","date":"2026-01-11","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3C9PX5","date":"2026-01-11","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Y7XMPY","date":"2026-01-11","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-F7XSEB","date":"2026-01-11","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":8000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-BLATHK","date":"2026-01-11","memberId":"SOB-009","memberName":"Kadama Grace","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-R949Q2","date":"2026-01-11","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-2X8783","date":"2026-01-11","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-7ZOHAP","date":"2026-01-11","memberId":"SOB-020","memberName":"Biyinzika Daniel ","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SKAPPD","date":"2026-01-11","memberId":"SOB-021","memberName":"Enock Kuteesa","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-FDNQQR","date":"2026-01-11","memberId":"SOB-022","memberName":"MIRACLE Blessings","amount":17000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-46S0TW","date":"2026-01-11","memberId":"SOB-022","memberName":"MIRACLE Blessings","amount":200000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-RW9MMQ"},{"id":"TXN-Z1O7AA","date":"2026-01-11","memberId":"SOB-023","memberName":"Jayden Kaweesi","amount":23000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-JMDPKZ","date":"2026-01-11","memberId":"SOB-030","memberName":"Benjamin Mwesigwa","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-7RT5IG","date":"2026-01-11","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-9JAVBV","date":"2026-01-11","memberId":"SOB-040","memberName":"Alison Kabwama","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RIYEBG","date":"2026-01-11","memberId":"SOB-041","memberName":"Natulinda Maria","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-DQDJPF","date":"2026-01-11","memberId":"SOB-046","memberName":"Matendo Esther","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SP5ALG","date":"2026-01-11","memberId":"SOB-047","memberName":"Nansamba Daphine","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GCQ87Y","date":"2026-01-11","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":310000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-QHX8PW","date":"2026-01-12","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":30000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-01FI1S","date":"2026-01-12","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-2ULVAA","date":"2026-01-12","memberId":"SOB-007","memberName":"Erick Musoke","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CB1ANQ","date":"2026-01-18","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-6T3A2N","date":"2026-01-18","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-E0AJ52","date":"2026-01-18","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":1000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-N79IWV","date":"2026-01-18","memberId":"SOB-014","memberName":"Calvin & Cealan","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Q8LOAV","date":"2026-01-18","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":40000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-X16V7M","date":"2026-01-18","memberId":"SOB-019","memberName":"kaweesi Jackson Mukisa","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-BZ7497","date":"2026-01-18","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KJA447","date":"2026-01-18","memberId":"SOB-032","memberName":"Martin Moluma","amount":200000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-L4DCVH"},{"id":"TXN-4Z86F1","date":"2026-01-18","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RXEL7D","date":"2026-01-18","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":150000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-D0LV3X","date":"2026-01-21","memberId":"SOB-054","memberName":"Kyolaba Josephine ","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-ZH3HHY","date":"2026-01-21","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":25000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-ADLT2S","date":"2026-01-23","memberId":"SOB-015","memberName":"Ssebuguluse Deziderio ","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Q7KORQ","date":"2026-01-23","memberId":"SOB-015","memberName":"Ssebuguluse Deziderio ","amount":100000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-OLIIV3"},{"id":"TXN-QYE6UU","date":"2026-01-25","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-43B3A9","date":"2026-01-25","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-880YY1","date":"2026-01-25","memberId":"SOB-019","memberName":"kaweesi Jackson Mukisa","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XJUXXC","date":"2026-01-25","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-P1NSL5","date":"2026-01-25","memberId":"SOB-028","memberName":"Birungi Angel N.","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-67GU02","date":"2026-01-25","memberId":"SOB-035","memberName":"Robert Kigozi","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MXXTW6","date":"2026-01-25","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-24HACB","date":"2026-01-25","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":140000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CBWQ0F","date":"2026-01-25","memberId":"SOB-053","memberName":"Ireen Ssebadduka ","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KS3QZ5","date":"2026-01-28","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-T6BFBZ","date":"2026-01-31","memberId":"SOB-007","memberName":"Erick Musoke","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-P8IUYI","date":"2026-02-01","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-09T0PO","date":"2026-02-01","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":8000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RMBBV1","date":"2026-02-01","memberId":"SOB-009","memberName":"Kadama Grace","amount":400000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-DANDSJ","date":"2026-02-01","memberId":"SOB-014","memberName":"Calvin & Cealan","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-9U8QT4","date":"2026-02-01","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-I894HD","date":"2026-02-01","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-QUTJZM","date":"2026-02-01","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-O54UVC","date":"2026-02-01","memberId":"SOB-043","memberName":"Masaaba Dickinson","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-7VK2TQ","date":"2026-02-01","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":80000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RJ5KIA","date":"2026-02-02","memberId":"SOB-035","memberName":"Robert Kigozi","amount":1500000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-4KX1CT"},{"id":"TXN-KNCJ0F","date":"2026-02-02","memberId":"SOB-035","memberName":"Robert Kigozi","amount":50000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-LN0HXX","date":"2026-02-02","memberId":"SOB-040","memberName":"Alison Kabwama","amount":100000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-4MPYK3"},{"id":"TXN-ZJO2G1","date":"2026-02-03","memberId":"SOB-011","memberName":"Kagimu Francis","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3VT3QK","date":"2026-02-08","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-6EVIRS","date":"2026-02-08","memberId":"SOB-009","memberName":"Kadama Grace","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XW80U0","date":"2026-02-08","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AHA22Q","date":"2026-02-08","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KX9NG4","date":"2026-02-08","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-22DN66","date":"2026-02-08","memberId":"SOB-040","memberName":"Alison Kabwama","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KB1H9Z","date":"2026-02-08","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-B4FV18","date":"2026-02-08","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3KNSPN","date":"2026-02-12","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":200000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-TEPOQR"},{"id":"TXN-YMS60I","date":"2026-02-15","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-H3R96N","date":"2026-02-15","memberId":"SOB-009","memberName":"Kadama Grace","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-WSXHY1","date":"2026-02-15","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XUHFI6","date":"2026-02-15","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AAK13D","date":"2026-02-15","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-K1H2Y1","date":"2026-02-15","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OCUEOI","date":"2026-02-15","memberId":"SOB-054","memberName":"Kyolaba Josephine ","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3JY6WH","date":"2026-02-18","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":1680.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-AFGSY8","date":"2026-02-18","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":12460.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-HEZD8W","date":"2026-02-18","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":7000.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-JDF8HW","date":"2026-02-18","memberId":"SOB-006","memberName":"Arthur Birungi","amount":196.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-IWQKRG","date":"2026-02-18","memberId":"SOB-007","memberName":"Erick Musoke","amount":3360.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-179BLO","date":"2026-02-18","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":952.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-O5WD2A","date":"2026-02-18","memberId":"SOB-009","memberName":"Kadama Grace","amount":16800.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-17PTKJ","date":"2026-02-18","memberId":"SOB-010","memberName":"Newton Abraham","amount":19600.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-XP62OA","date":"2026-02-18","memberId":"SOB-011","memberName":"Kagimu Francis","amount":4200.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-NS1YG3","date":"2026-02-18","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":2128.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-64CCG9","date":"2026-02-18","memberId":"SOB-014","memberName":"Calvin & Cealan","amount":2240.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-GCFAIQ","date":"2026-02-18","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":420.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-VXZ2S7","date":"2026-02-18","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":9520.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-V3P7UN","date":"2026-02-18","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":280.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-G6S7XB","date":"2026-02-18","memberId":"SOB-019","memberName":"kaweesi Jackson Mukisa","amount":756.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-LXA16F","date":"2026-02-18","memberId":"SOB-020","memberName":"Biyinzika Daniel ","amount":5880.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-COOG78","date":"2026-02-18","memberId":"SOB-021","memberName":"Enock Kuteesa","amount":5880.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-6830YU","date":"2026-02-18","memberId":"SOB-023","memberName":"Jayden Kaweesi","amount":784.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-Z9GZJ2","date":"2026-02-18","memberId":"SOB-024","memberName":"DENISON Mulindwa","amount":280.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-0J5VBB","date":"2026-02-18","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":1500.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-2O4WPG","date":"2026-02-18","memberId":"SOB-026","memberName":"Shiloh Shield","amount":140.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-2BJIF0","date":"2026-02-18","memberId":"SOB-028","memberName":"Birungi Angel N.","amount":308.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-U7ZSTB","date":"2026-02-18","memberId":"SOB-029","memberName":"Kugobera Anne","amount":1400.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-6Z1KUM","date":"2026-02-18","memberId":"SOB-030","memberName":"Benjamin Mwesigwa","amount":5880.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-9W4A15","date":"2026-02-18","memberId":"SOB-031","memberName":"Bwiti Abigail","amount":560.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-NENAUO","date":"2026-02-18","memberId":"SOB-034","memberName":"Sylvia Nansamba","amount":1036.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-DD95Y0","date":"2026-02-18","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":476.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-S5HBJK","date":"2026-02-18","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":708.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-4H54J2","date":"2026-02-18","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":1596.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-MMZ4L1","date":"2026-02-18","memberId":"SOB-041","memberName":"Natulinda Maria","amount":5880.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-XHPFCO","date":"2026-02-18","memberId":"SOB-043","memberName":"Masaaba Dickinson","amount":560.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-LPLETI","date":"2026-02-18","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":252.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-K2F2F6","date":"2026-02-18","memberId":"SOB-046","memberName":"Matendo Esther","amount":6160.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-08AXUA","date":"2026-02-18","memberId":"SOB-047","memberName":"Nansamba Daphine","amount":6160.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-J6T4S3","date":"2026-02-18","memberId":"SOB-048","memberName":"Maria Shekinah k","amount":140.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-DKIIEB","date":"2026-02-18","memberId":"SOB-049","memberName":"Samuel Friend K","amount":140.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-EG7V1I","date":"2026-02-18","memberId":"SOB-051","memberName":"SB-SAVINGS","amount":280.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-D588Y1","date":"2026-02-18","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":27180.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-GEPMBR","date":"2026-02-18","memberId":"SOB-054","memberName":"Kyolaba Josephine ","amount":560.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-TA1KYI","date":"2026-02-18","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":700.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-VCP35J","date":"2026-02-22","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VIO0VQ","date":"2026-02-22","memberId":"SOB-005","memberName":"Elder-Kironde John","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VN74AD","date":"2026-02-22","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-BRS9N9","date":"2026-02-22","memberId":"SOB-014","memberName":"Calvin & Cealan","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-34K571","date":"2026-02-22","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":70000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5CJBCE","date":"2026-02-22","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1FLU1T","date":"2026-02-22","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SC52QF","date":"2026-02-22","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Z0Y5IV","date":"2026-02-22","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-B5RMVE","date":"2026-02-22","memberId":"SOB-053","memberName":"Ireen Ssebadduka ","amount":1400.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-M08U3O","date":"2026-02-25","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":600.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NLOD3X","date":"2026-02-28","memberId":"SOB-007","memberName":"Erick Musoke","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-UQTDOY","date":"2026-02-28","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":2500.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-URTKWU","date":"2026-03-01","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-P9H43S","date":"2026-03-01","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-UKRPOO","date":"2026-03-01","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-TAMYWP","date":"2026-03-01","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MUGHCK","date":"2026-03-01","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SWOGDV","date":"2026-03-08","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-LHD062","date":"2026-03-08","memberId":"SOB-011","memberName":"Kagimu Francis","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HFVMCU","date":"2026-03-08","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":70000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OXBXGW","date":"2026-03-08","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":4000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GM0KFC","date":"2026-03-08","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":75000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HHOYMD","date":"2026-03-08","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KRYHAX","date":"2026-03-08","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":300000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-M9NJF6","date":"2026-03-08","memberId":"SOB-054","memberName":"Kyolaba Josephine ","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-90E445","date":"2026-03-09","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":700000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-GSMM6N","date":"2026-03-09","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":811000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-JRSJW0"},{"id":"TXN-PJZQ1A","date":"2026-03-15","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VPF31M","date":"2026-03-15","memberId":"SOB-009","memberName":"Kadama Grace","amount":300000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-YBIEYQ","date":"2026-03-15","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-IZ3JNP","date":"2026-03-15","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":600000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GN7K58","date":"2026-03-15","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":6000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NIF4SQ","date":"2026-03-15","memberId":"SOB-040","memberName":"Alison Kabwama","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-PWLW6I","date":"2026-03-15","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":4000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-UWSR3J","date":"2026-03-16","memberId":"SOB-011","memberName":"Kagimu Francis","amount":70000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-8192KY"},{"id":"TXN-2ZS8FM","date":"2026-03-20","memberId":"SOB-019","memberName":"kaweesi Jackson Mukisa","amount":18000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-14FMW5","date":"2026-03-22","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4NDDQF","date":"2026-03-22","memberId":"SOB-009","memberName":"Kadama Grace","amount":150000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CEJIOW","date":"2026-03-22","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RPS9O7","date":"2026-03-22","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VAHG3G","date":"2026-03-22","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5FO8DW","date":"2026-03-22","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":8000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-WQ2QAZ","date":"2026-03-22","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1FFPE8","date":"2026-03-22","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NFQOJU","date":"2026-03-22","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-78BJR7","date":"2026-03-23","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":0.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-G893JG","date":"2026-03-23","memberId":"SOB-011","memberName":"Kagimu Francis","amount":2000000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-9CRPUY"},{"id":"TXN-DLHE6W","date":"2026-03-23","memberId":"SOB-051","memberName":"SB-SAVINGS","amount":7568.0,"purpose":"Profit distribution","type":"Profit"},{"id":"TXN-J0UKXT","date":"2026-03-23","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":1500.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MRLDNK","date":"2026-03-29","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-TQ4TUD","date":"2026-03-29","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HAA9C5","date":"2026-03-29","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-DT7UYW","date":"2026-03-29","memberId":"SOB-009","memberName":"Kadama Grace","amount":150000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-ONKWZQ","date":"2026-03-29","memberId":"SOB-015","memberName":"Ssebuguluse Deziderio ","amount":40000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-6PGS2O","date":"2026-03-29","memberId":"SOB-041","memberName":"Natulinda Maria","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-XHDSZ5","date":"2026-04-05","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CDK3PJ","date":"2026-04-05","memberId":"SOB-009","memberName":"Kadama Grace","amount":150000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-0UYDKB","date":"2026-04-05","memberId":"SOB-010","memberName":"Newton Abraham","amount":170000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AAJN3L","date":"2026-04-05","memberId":"SOB-011","memberName":"Kagimu Francis","amount":15000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-6HB5NI","date":"2026-04-05","memberId":"SOB-015","memberName":"Ssebuguluse Deziderio ","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OYP9Y9","date":"2026-04-05","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":800000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-D4V9LY","date":"2026-04-05","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1NGJ5I","date":"2026-04-05","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":9000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-S2PN0N","date":"2026-04-05","memberId":"SOB-022","memberName":"MIRACLE Blessings","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NULN4P","date":"2026-04-05","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-H5X57Z","date":"2026-04-06","memberId":"SOB-007","memberName":"Erick Musoke","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-YCB84M","date":"2026-04-12","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5M70I4","date":"2026-04-12","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-RXPB81","date":"2026-04-12","memberId":"SOB-009","memberName":"Kadama Grace","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-076O27","date":"2026-04-12","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-422RZL","date":"2026-04-12","memberId":"SOB-018","memberName":"Keith Muwanguzi","amount":4500.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-K922HW","date":"2026-04-12","memberId":"SOB-040","memberName":"Alison Kabwama","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-K5U9R6","date":"2026-04-12","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AKTMHI","date":"2026-04-19","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-LJSVPQ","date":"2026-04-19","memberId":"SOB-011","memberName":"Kagimu Francis","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4STUD3","date":"2026-04-19","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-5K2RMZ","date":"2026-04-19","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-437QL4","date":"2026-04-21","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":300000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-L30PWS","date":"2026-04-21","memberId":"SOB-035","memberName":"Robert Kigozi","amount":400000.0,"purpose":"Loan Repayment","type":"Loan Repayment","loanId":"LOAN-4KX1CT"},{"id":"TXN-6N7ADU","date":"2026-04-26","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-SJXOJR","date":"2026-04-26","memberId":"SOB-045","memberName":"Keirah Muwanguzi","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-EAM4HJ","date":"2026-04-27","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":1103.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-2U6K78","date":"2026-04-30","memberId":"SOB-004","memberName":"Joshua Ssebadduka","amount":50000.0,"purpose":"Loan Disbursement","type":"Loan Disbursement","loanId":"LOAN-RGRBK6"},{"id":"TXN-E3UMCA","date":"2026-05-01","memberId":"SOB-038","memberName":"Kasozi Dauglas ","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-796Z8Z","date":"2026-05-03","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-ZMASNU","date":"2026-05-03","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3USPX3","date":"2026-05-03","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Z13QSJ","date":"2026-05-03","memberId":"SOB-023","memberName":"Jayden Kaweesi","amount":2000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-X1GRLQ","date":"2026-05-04","memberId":"SOB-007","memberName":"Erick Musoke","amount":70000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OAPBW7","date":"2026-05-04","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-EKJJC5","date":"2026-05-05","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":1100.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4EZYDD","date":"2026-05-10","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-KQX2O8","date":"2026-05-10","memberId":"SOB-009","memberName":"Kadama Grace","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CZWBJM","date":"2026-05-10","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GXI3H6","date":"2026-05-10","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-LLAQSR","date":"2026-05-10","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-3W2ERJ","date":"2026-05-16","memberId":"SOB-035","memberName":"Robert Kigozi","amount":1000000.0,"purpose":"Loan Repayment","type":"Loan Repayment","loanId":"LOAN-4KX1CT"},{"id":"TXN-WU03IV","date":"2026-05-17","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-A049KK","date":"2026-05-17","memberId":"SOB-009","memberName":"Kadama Grace","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-LJR9OX","date":"2026-05-17","memberId":"SOB-011","memberName":"Kagimu Francis","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-I71XN8","date":"2026-05-17","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VHGYWR","date":"2026-05-17","memberId":"SOB-022","memberName":"MIRACLE Blessings","amount":100000.0,"purpose":"Loan Repayment","type":"Loan Repayment","loanId":"LOAN-RW9MMQ"},{"id":"TXN-8UEOJ8","date":"2026-05-19","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":750000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-JCIFVL","date":"2026-05-24","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-QTL7CL","date":"2026-05-24","memberId":"SOB-009","memberName":"Kadama Grace","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-VH039Q","date":"2026-05-24","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-J93QEF","date":"2026-05-24","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-IRY62C","date":"2026-05-24","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-TEOTAH","date":"2026-05-26","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":200000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-T3GNGJ","date":"2026-05-30","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-765WHU","date":"2026-06-07","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4L8P00","date":"2026-06-07","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AAMJFP","date":"2026-06-07","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MXCD91","date":"2026-06-09","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CD9MAG","date":"2026-06-14","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-LURNTO","date":"2026-06-14","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-0KUE2K","date":"2026-06-14","memberId":"SOB-007","memberName":"Erick Musoke","amount":100000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-EG9LZM","date":"2026-06-14","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4ECLE1","date":"2026-06-14","memberId":"SOB-016","memberName":"Gideon Kuteesa","amount":7000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-GN7F81","date":"2026-06-14","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-I3SQAL","date":"2026-06-14","memberId":"SOB-025","memberName":"Nabawanuka Amina","amount":3000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-UC5391","date":"2026-06-14","memberId":"SOB-036","memberName":"Faith B.kabagyenyi","amount":5000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-1Q30C6","date":"2026-06-14","memberId":"SOB-052","memberName":"Zipporah Kuteesa ","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-M20V82","date":"2026-06-21","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-NH71V7","date":"2026-06-24","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":650000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-V8SAAE","date":"2026-06-26","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-78MSJ7","date":"2026-06-28","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":70000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-PEYHD7","date":"2026-06-28","memberId":"SOB-009","memberName":"Kadama Grace","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-179LM5","date":"2026-06-28","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-OIFP6B","date":"2026-07-02","memberId":"SOB-007","memberName":"Erick Musoke","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-HO7S7H","date":"2026-07-03","memberId":"SOB-009","memberName":"Kadama Grace","amount":900000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-34W8VD","date":"2026-07-05","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-FFERK1","date":"2026-07-05","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":4000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-O9IEBG","date":"2026-07-05","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":300000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-I1LCOX","date":"2026-07-05","memberId":"SOB-035","memberName":"Robert Kigozi","amount":50000.0,"purpose":"Loan Repayment","type":"Loan Repayment","loanId":"LOAN-4KX1CT"},{"id":"TXN-JFABJT","date":"2026-07-06","memberId":"SOB-009","memberName":"Kadama Grace","amount":1050000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-04UJTQ","date":"2026-07-12","memberId":"SOB-013","memberName":"Joshua Ndyabagyera","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-4HNCG3","date":"2026-07-12","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-MHARXO","date":"2026-07-12","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-8DR347","date":"2026-07-12","memberId":"SOB-019","memberName":"kaweesi Jackson Mukisa","amount":20000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-AFLMY5","date":"2026-07-12","memberId":"SOB-023","memberName":"Jayden Kaweesi","amount":10000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-2PG01J","date":"2026-07-12","memberId":"SOB-034","memberName":"Sylvia Nansamba","amount":30000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-Z79W56","date":"2026-07-12","memberId":"SOB-035","memberName":"Robert Kigozi","amount":20000.0,"purpose":"Loan Repayment","type":"Loan Repayment","loanId":"LOAN-4KX1CT"},{"id":"TXN-DKVCBI","date":"2026-07-12","memberId":"SOB-039","memberName":"Ndagire Blessings","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-BY260I","date":"2026-07-14","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":600000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-G819KI","date":"2026-07-15","memberId":"SOB-002","memberName":"Templa Sekiwu","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-8AUKYU","date":"2026-07-19","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-FA82C2","date":"2026-07-19","memberId":"SOB-010","memberName":"Newton Abraham","amount":40000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-M7BH1K","date":"2026-07-19","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-CXX65O","date":"2026-07-21","memberId":"SOB-055","memberName":"Nakasagga Elizabeth Najjemba","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-R4CXC0","date":"2026-07-26","memberId":"SOB-003","memberName":"Dr. Daniel Kuteesa","amount":50000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-R0CKU6","date":"2026-07-26","memberId":"SOB-007","memberName":"Erick Musoke","amount":150000.0,"purpose":"Withdraw","type":"Withdraw"},{"id":"TXN-1GCETM","date":"2026-07-26","memberId":"SOB-008","memberName":"DIANA Nakiganda","amount":4000.0,"purpose":"Savings","type":"Savings"},{"id":"TXN-TLFM34","date":"2026-07-26","memberId":"SOB-017","memberName":"WinnieHildah Gooding","amount":100000.0,"purpose":"Savings","type":"Savings"}],"loans":[{"id":"LOAN-0VA1ET","date":"2025-12-21","memberId":"SOB-005","memberName":"Elder-Kironde John","loanAmount":2000000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":2000000.0,"amountPaid":0,"dueDate":"2026-03-21","nextChargeDate":"2026-01-21","rateSetDate":"2025-12-21","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-ETHD4G","date":"2026-01-01","memberId":"SOB-002","memberName":"Templa Sekiwu","loanAmount":200000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":200000.0,"amountPaid":0,"dueDate":"2026-04-01","nextChargeDate":"2026-02-01","rateSetDate":"2026-01-01","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-RW9MMQ","date":"2026-01-11","memberId":"SOB-022","memberName":"MIRACLE Blessings","loanAmount":200000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":200000.0,"amountPaid":100000.0,"dueDate":"2026-04-11","nextChargeDate":"2026-02-11","rateSetDate":"2026-01-11","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-L4DCVH","date":"2026-01-18","memberId":"SOB-032","memberName":"Martin Moluma","loanAmount":200000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":200000.0,"amountPaid":0,"dueDate":"2026-04-18","nextChargeDate":"2026-02-18","rateSetDate":"2026-01-18","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-OLIIV3","date":"2026-01-23","memberId":"SOB-015","memberName":"Ssebuguluse Deziderio ","loanAmount":100000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":100000.0,"amountPaid":0,"dueDate":"2026-04-23","nextChargeDate":"2026-02-23","rateSetDate":"2026-01-23","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-4KX1CT","date":"2026-02-02","memberId":"SOB-035","memberName":"Robert Kigozi","loanAmount":1500000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":1500000.0,"amountPaid":1470000.0,"dueDate":"2026-05-02","nextChargeDate":"2026-03-02","rateSetDate":"2026-02-02","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-4MPYK3","date":"2026-02-02","memberId":"SOB-040","memberName":"Alison Kabwama","loanAmount":100000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":100000.0,"amountPaid":0,"dueDate":"2026-05-02","nextChargeDate":"2026-03-02","rateSetDate":"2026-02-02","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-TEPOQR","date":"2026-02-12","memberId":"SOB-025","memberName":"Nabawanuka Amina","loanAmount":200000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":200000.0,"amountPaid":0,"dueDate":"2026-05-12","nextChargeDate":"2026-03-12","rateSetDate":"2026-02-12","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-JRSJW0","date":"2026-03-09","memberId":"SOB-004","memberName":"Joshua Ssebadduka","loanAmount":811000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":811000.0,"amountPaid":0,"dueDate":"2026-06-09","nextChargeDate":"2026-04-09","rateSetDate":"2026-03-09","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-8192KY","date":"2026-03-16","memberId":"SOB-011","memberName":"Kagimu Francis","loanAmount":70000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":70000.0,"amountPaid":0,"dueDate":"2026-06-16","nextChargeDate":"2026-04-16","rateSetDate":"2026-03-16","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-9CRPUY","date":"2026-03-23","memberId":"SOB-011","memberName":"Kagimu Francis","loanAmount":2000000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":2000000.0,"amountPaid":0,"dueDate":"2026-06-23","nextChargeDate":"2026-04-23","rateSetDate":"2026-03-23","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"},{"id":"LOAN-RGRBK6","date":"2026-04-30","memberId":"SOB-004","memberName":"Joshua Ssebadduka","loanAmount":50000.0,"interestRate":0,"interestAmount":0,"monthlyInterestAmount":0,"graceMonths":3,"totalPayable":50000.0,"amountPaid":0,"dueDate":"2026-07-30","nextChargeDate":"2026-05-30","rateSetDate":"2026-04-30","status":"Active","datePaidFull":"","remarks":"Imported from master spreadsheet \u2014 historical interest terms unknown"}],"requests":[],"airtimeRequests":[],"ledger":[{"date":"2025-12-21","amount":1234000.0,"bankedBy":"Francis","receivedBy":"","receiptNumber":"","type":"Deposit","purpose":"Deposit","memberId":"","loanAmount":"","profitEarned":0,"runningBalance":1234000},{"date":"2026-01-01","amount":500000.0,"bankedBy":"Francis","receivedBy":"","receiptNumber":"","type":"Loan","purpose":"Loan","memberId":"SOB-005","loanAmount":500000.0,"profitEarned":0,"runningBalance":734000.0},{"date":"2026-01-01","amount":200000.0,"bankedBy":"Francis","receivedBy":"","receiptNumber":"","type":"Loan","purpose":"Loan","memberId":"SOB-002","loanAmount":200000.0,"profitEarned":0,"runningBalance":534000.0},{"date":"2026-01-31","amount":60000.0,"bankedBy":"Elder Kironde","receivedBy":"Elder John","receiptNumber":"","type":"Profit","purpose":"Profit","memberId":"","loanAmount":"","profitEarned":60000.0,"runningBalance":534000.0},{"date":"2026-01-31","amount":6000.0,"bankedBy":"Francis","receivedBy":"Templa","receiptNumber":"","type":"Profit","purpose":"Profit","memberId":"","loanAmount":"","profitEarned":6000.0,"runningBalance":534000.0},{"date":"2026-01-04","amount":433000.0,"bankedBy":"Francis","receivedBy":"","receiptNumber":"","type":"Deposit","purpose":"Deposit","memberId":"","loanAmount":"","profitEarned":0,"runningBalance":967000.0},{"date":"2026-01-04","amount":400000.0,"bankedBy":"","receivedBy":"Elder John","receiptNumber":"","type":"Loan","purpose":"Loan","memberId":"","loanAmount":400000.0,"profitEarned":0,"runningBalance":567000.0}],"auditLog":[],"reconciliations":[],"lastBackupDate":null,"smsFailures":[],"seq":{"member":0,"loan":0,"txn":0,"req":0,"ledger":0}};
+/* ============ INTEREST RULE ============
+   More savings relative to loan = lower rate.
+   Savings >= 2x Loan        -> 3%
+   Loan < Savings < 2x Loan  -> 5%
+   Savings <= Loan, > 2/3 Loan -> 10%
+   Savings <= 2/3 Loan (or blank/zero) -> 15%
+*/
+function interestRate(loanAmount, savings) {
+    const s = Number(savings) || 0;
+    const l = Number(loanAmount) || 0;
+    if (l <= 0)
+        return 0;
+    if (s <= 0)
+        return 15;
+    if (s >= 2 * l)
+        return 3;
+    if (s > l)
+        return 5;
+    if (s > (2 / 3) * l)
+        return 10;
+    return 15;
+}
+function fmt(n) {
+    const v = Number(n) || 0;
+    return "UGX " + v.toLocaleString('en-UG', { maximumFractionDigits: 0 });
+}
+// East Africa Time (EAT, UTC+3) — a fixed offset with no daylight saving
+// observed. Every date/time calculation in this app goes through these
+// functions so records, due dates, and reports stay consistent in EAT no
+// matter what timezone the device or browser opening the app is set to.
+const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
+function nowInEAT() {
+    return new Date(Date.now() + EAT_OFFSET_MS);
+}
+function todayISO() {
+    return nowInEAT().toISOString().slice(0, 10);
+}
+function nowTimeEAT() {
+    return nowInEAT().toISOString();
+}
+function addDays(dateStr, days) {
+    if (!dateStr || typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        console.error("addDays received an invalid date value:", dateStr, "— using today's date instead so the app doesn't crash.");
+        dateStr = todayISO();
+    }
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (isNaN(dt.getTime())) {
+        console.error("addDays produced an invalid date from:", dateStr, "— using today's date instead.");
+        return todayISO();
+    }
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+}
+function addMonths(dateStr, months) {
+    if (!dateStr || typeof dateStr !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+        console.error("addMonths received an invalid date value:", dateStr, "— using today's date instead so the app doesn't crash.");
+        dateStr = todayISO();
+    }
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (isNaN(dt.getTime())) {
+        console.error("addMonths produced an invalid date from:", dateStr, "— using today's date instead.");
+        return todayISO();
+    }
+    dt.setUTCMonth(dt.getUTCMonth() + months);
+    return dt.toISOString().slice(0, 10);
+}
+function uid(prefix) {
+    return prefix + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+/* ============ STORAGE LAYER ============
+   Uses artifact persistent storage (shared across everyone using this app link).
+   If SHEETS_SYNC_URL is set, writes also POST to Apps Script (fire-and-forget,
+   no-cors, text/plain) matching the FCMS sync pattern, and reads can be swapped
+   to fetch from the sheet instead once you wire up doGet in Apps Script. */
+const DB_KEY = "sob_db_v1";
+const emptyDB = () => ({
+    members: [],
+    transactions: [],
+    loans: [],
+    requests: [],
+    airtimeRequests: [],
+    ledger: [],
+    auditLog: [],
+    reconciliations: [],
+    lastBackupDate: null,
+    smsFailures: [],
+    seq: { member: 0, loan: 0, txn: 0, req: 0, ledger: 0 }
+});
+/* ============ AUDIT LOG ============
+   Every sensitive action (deletions, restores, loan issuance, repayments,
+   airtime decisions) gets a permanent, timestamped entry here. This does not
+   replace real access control — with a single shared Admin PIN, anyone using
+   it is recorded simply as "Admin," not as a specific individual. What this
+   DOES give: a visible record that something happened and when, so nothing
+   destructive can vanish without a trace. */
+function logAudit(db, action, details) {
+    const entry = { id: uid("LOG"), date: todayISO(), time: nowTimeEAT(), action, details };
+    return Object.assign({}, db, { auditLog: [entry, ...(db.auditLog || [])] });
+}
+let _saveListeners = [];
+function onSaveStatus(fn) { _saveListeners.push(fn); return () => { _saveListeners = _saveListeners.filter(f => f !== fn); }; }
+function _notifySave(status) { _saveListeners.forEach(fn => fn(status)); }
+/* Sheets (via Code.gs, pointed at a dedicated internal spreadsheet) is the
+   authoritative store when configured. Claude's own storage is kept as a
+   local CACHE only — updated every time Sheets is successfully reached, and
+   used as a fallback display if Sheets is briefly unreachable, but never
+   trusted as the source of truth once Sheets is available again.
+   Uses the browser's own localStorage (not Claude's artifact storage,
+   which only exists inside Claude and isn't available here). */
+function cacheGet(key) {
+    try {
+        const v = localStorage.getItem(key);
+        return v ? JSON.parse(v) : null;
+    }
+    catch (e) { return null; }
+}
+function cacheSet(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); }
+    catch (e) { /* storage unavailable (e.g. private browsing) — ignore */ }
+}
+async function loadDB() {
+    if (SHEETS_SYNC_URL) {
+        try {
+            const res = await fetch(SHEETS_SYNC_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({ key: SHEETS_SECRET_KEY, action: "getAll" })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                cacheSet(DB_KEY, data.db);
+                return data.db;
+            }
+            console.error("Backend rejected request:", data.error);
+        }
+        catch (e) {
+            console.error("Could not reach spreadsheet backend — using last cached copy if available.", e);
+        }
+        const cached = cacheGet(DB_KEY);
+        if (cached) {
+            _notifySave({ ok: false, error: "Showing a locally cached copy — could not reach the live spreadsheet backend. Changes made now may not be saved until the connection is restored." });
+            return cached;
+        }
+        return emptyDB();
+    }
+    return cacheGet(DB_KEY) || emptyDB();
+}
+async function saveDB(db) {
+    maybeAutoBackup(db);
+    if (SHEETS_SYNC_URL) {
+        cacheSet(DB_KEY, db);
+        try {
+            const res = await fetch(SHEETS_SYNC_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain;charset=utf-8" },
+                body: JSON.stringify({ key: SHEETS_SECRET_KEY, action: "syncAll", db })
+            });
+            const data = await res.json();
+            if (!data.ok) { console.error("Backend save rejected:", data.error); _notifySave({ ok: false, error: data.error || "Backend rejected the save." }); }
+            else { _notifySave({ ok: true }); }
+        }
+        catch (e) {
+            console.error("Could not save to spreadsheet backend — cached locally, will need to resync.", e);
+            _notifySave({ ok: false, error: "Could not reach the live spreadsheet backend. Your change was cached locally but is NOT yet saved to the authoritative store — try again once reconnected." });
+        }
+        return;
+    }
+    cacheSet(DB_KEY, db);
+    _notifySave({ ok: true });
+}
+/* ============ RING GAUGE (signature element) ============
+   Shows which interest tier a member currently sits in, based on savings:loan ratio. */
+function TierRing({ savings, loan }) {
+    const rate = loan > 0 ? interestRate(loan, savings) : (savings > 0 ? 3 : 15);
+    const tiers = [
+        { label: "3%", threshold: "Savings ≥ 2× loan", color: "var(--green)" },
+        { label: "5%", threshold: "Loan < Savings < 2× loan", color: "#5A7D3A" },
+        { label: "10%", threshold: "Savings ≤ loan, > ⅔ loan", color: "var(--gold)" },
+        { label: "15%", threshold: "Savings ≤ ⅔ loan", color: "var(--rust)" }
+    ];
+    const activeIdx = tiers.findIndex(t => t.label === rate + "%");
+    const r = 54, C = 2 * Math.PI * r;
+    const seg = C / 4;
+    return (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "18px" } },
+        React.createElement("svg", { width: "128", height: "128", viewBox: "0 0 128 128" },
+            tiers.map((t, i) => (React.createElement("circle", { key: i, cx: "64", cy: "64", r: r, fill: "none", stroke: i === activeIdx ? t.color : "var(--line)", strokeWidth: i === activeIdx ? 10 : 6, strokeDasharray: `${seg - 4} ${C - seg + 4}`, strokeDashoffset: -i * seg, transform: "rotate(-90 64 64)", strokeLinecap: "round" }))),
+            React.createElement("text", { x: "64", y: "60", textAnchor: "middle", fontFamily: "Fraunces, serif", fontSize: "26", fontWeight: "600", fill: "var(--text)" },
+                rate,
+                "%"),
+            React.createElement("text", { x: "64", y: "78", textAnchor: "middle", fontFamily: "Work Sans, sans-serif", fontSize: "10", fill: "var(--ink-soft)" }, "your rate")),
+        React.createElement("div", { style: { fontSize: "13px", color: "var(--ink-soft)", lineHeight: 1.6 } },
+            React.createElement("div", { style: { fontFamily: "Fraunces, serif", fontSize: "15px", color: "var(--text)", marginBottom: "4px" } }, "Savings lower your rate"),
+            tiers.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: "6px", opacity: i === activeIdx ? 1 : 0.55 } },
+                React.createElement("span", { style: { width: 8, height: 8, borderRadius: "50%", background: t.color, display: "inline-block" } }),
+                React.createElement("span", null,
+                    t.label,
+                    " \u2014 ",
+                    t.threshold)))))));
+}
+/* ============ SHARED UI BITS ============ */
+function Card({ children, style }) {
+    return React.createElement("div", { style: Object.assign({ background: "var(--paper)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", border: "1px solid var(--line)", borderRadius: "16px", padding: "20px", boxShadow: "0 8px 32px 0 rgba(0,0,0,0.37)" }, style) }, children);
+}
+function StatCard({ label, value, accent }) {
+    return (React.createElement(Card, { style: { flex: 1, minWidth: "140px" } },
+        React.createElement("div", { style: { fontSize: "12px", color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" } }, label),
+        React.createElement("div", { className: "display", style: { fontSize: "24px", fontWeight: 600, color: accent || "var(--text)" } }, value)));
+}
+function Pill({ status }) {
+    const map = {
+        "Active": { bg: "#DCF3E4", col: "#166B3F" },
+        "Overdue": { bg: "#FCE1D6", col: "#A03D14" },
+        "Fully Paid": { bg: "#FBEAC2", col: "#8A6108" },
+        "Pending": { bg: "#FBEAC2", col: "#8A6108" },
+        "Approved": { bg: "#DCF3E4", col: "#166B3F" },
+        "Rejected": { bg: "#FCE1D6", col: "#A03D14" },
+    };
+    const s = map[status] || { bg: "#EEE", col: "#555" };
+    return React.createElement("span", { style: { background: s.bg, color: s.col, fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "999px" } }, status);
+}
+/* Color-coded badge for transaction purpose/type — each kind of money movement
+   gets its own distinct, vivid color so the ledger is scannable at a glance. */
+function TypeBadge({ type, label }) {
+    const map = {
+        "Deposit": { bg: "#FBD5E8", col: "#8E1857" },          // vivid magenta/pink — money saved in
+        "Savings": { bg: "#FBD5E8", col: "#8E1857" },
+        "Withdrawal": { bg: "#FDE0CC", col: "#8E3D08" },       // burnt orange — money taken out
+        "Withdraw": { bg: "#FDE0CC", col: "#8E3D08" },
+        "Loan": { bg: "#E7DBFB", col: "#4C1899" },             // vivid violet — loan disbursed
+        "Loan Disbursement": { bg: "#E7DBFB", col: "#4C1899" },
+        "Repayment": { bg: "#CFF5EA", col: "#0A6B5E" },        // teal-green — loan being repaid
+        "Loan Repayment": { bg: "#CFF5EA", col: "#0A6B5E" },
+        "Profit": { bg: "#FDECAF", col: "#8A6108" },           // bright gold — profit distributed
+        "Interest": { bg: "#FEE1B8", col: "#8A4A08" },         // amber — interest charged
+        "Bank Charge": { bg: "#E3E7EE", col: "#374151" },      // steel gray — fee, not a member action
+        "Penalty": { bg: "#F9D3D3", col: "#8A1414" },          // deep crimson — late/overdue charge
+    };
+    const s = map[type] || { bg: "#EEE", col: "#555" };
+    return React.createElement("span", { style: { background: s.bg, color: s.col, fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "999px", whiteSpace: "nowrap" } }, label || type);
+}
+function Btn({ children, onClick, kind = "primary", style, type = "button" }) {
+    const styles = {
+        primary: { background: "var(--ink)", color: "var(--text)", border: "1px solid var(--line)" },
+        gold: { background: "linear-gradient(180deg, var(--gold-dim), var(--gold))", color: "#1A1408" },
+        ghost: { background: "rgba(255,255,255,0.03)", color: "var(--text)", border: "1px solid var(--line)" },
+        danger: { background: "transparent", color: "var(--rust)", border: "1px solid var(--rust)" }
+    };
+    return React.createElement("button", { type: type, onClick: onClick, style: Object.assign(Object.assign({ padding: "9px 16px", borderRadius: "9px", fontSize: "14px", fontWeight: 600, border: "none" }, styles[kind]), style) }, children);
+}
+function Field({ label, children }) {
+    return React.createElement("label", { style: { display: "block", marginBottom: "12px" } },
+        React.createElement("div", { style: { fontSize: "12px", color: "var(--ink-soft)", marginBottom: "5px", fontWeight: 600 } }, label),
+        children);
+}
+const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "14px", background: "rgba(255,255,255,0.04)", color: "var(--text)" };
+/* ============ LOGIN ============ */
+function normalizeId(raw) {
+    // Strip everything except letters and digits, uppercase the letters.
+    // The digit sequence itself must still match exactly (no zero-padding
+    // forgiveness) — only case and separator characters (-, space, etc.)
+    // are ignored.
+    return (raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+function Login({ onLogin, db }) {
+    const [mode, setMode] = useState("member");
+    const [memberId, setMemberId] = useState("");
+    const [firstName, setFirstName] = useState("");
+    const [memberPin, setMemberPin] = useState("");
+    const [pin, setPin] = useState("");
+    const [error, setError] = useState("");
+    const [busy, setBusy] = useState(false);
+    const submit = async () => {
+        if (busy) return;
+        if (mode === "admin") {
+            if (!pin.trim()) {
+                setError("Please enter the admin PIN.");
+                return;
+            }
+            setBusy(true);
+            const result = await checkStaffPin(pin.trim());
+            setBusy(false);
+            if (result.lockedOut) {
+                setError("Too many failed attempts. Please wait 15 minutes before trying again.");
+            }
+            else if (result.ok && result.matchedRole) {
+                onLogin({ role: result.matchedRole, _rawPin: pin.trim() });
+            }
+            else {
+                setError("The PIN you entered is incorrect. Please try again.");
+            }
+            return;
+        }
+        const idNorm = normalizeId(memberId);
+        const nameNorm = firstName.trim().toLowerCase();
+        if (!idNorm || !nameNorm) {
+            setError("Please enter both your Member ID and first name.");
+            return;
+        }
+        const byId = db.members.find(mm => normalizeId(mm.id) === idNorm);
+        if (!byId) {
+            setError(`No member found with ID "${memberId.trim()}". Please check your Member ID and try again.`);
+            return;
+        }
+        // Match against ANY word in the registered name (or the explicit
+        // Login Name override, if Admin set one) — not just the first word.
+        // This handles records stored surname-first, first-name-first, or
+        // any other order, without needing to fix existing member records.
+        const candidates = byId.loginName
+            ? [byId.loginName.trim().toLowerCase()]
+            : byId.name.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const nameMatches = candidates.includes(nameNorm);
+        if (!nameMatches) {
+            setError(`The first name doesn't match our records for ${byId.id}. Please check and try again.`);
+            return;
+        }
+        // Optional extra layer: if a PIN is configured for this member, it's
+        // required too. ID + name alone are not truly secret (both are
+        // knowable/guessable), so a PIN gives real members a way to add
+        // actual protection if they want it. Checked via the auth server
+        // when one is configured; otherwise falls back to the PIN stored
+        // on the member record itself (visible in this file's source, so
+        // weaker, but still better than nothing).
+        if (AUTH_SERVER_URL) {
+            setBusy(true);
+            const result = await checkPin("member", byId.id, memberPin.trim());
+            setBusy(false);
+            if (result.lockedOut) {
+                setError("Too many failed attempts. Please wait 15 minutes before trying again.");
+                return;
+            }
+            if (result.hasPin && !result.ok) {
+                setError("Incorrect PIN for this account. Please try again.");
+                return;
+            }
+        }
+        else if (byId.pin) {
+            if (memberPin !== byId.pin) {
+                setError("Incorrect PIN for this account. Please try again.");
+                return;
+            }
+        }
+        const hasActivity = db.transactions.some(t => t.memberId === byId.id);
+        if (!hasActivity) {
+            setError("Sorry, you're not registered yet — your account has no recorded transactions. Please contact the admin to complete your registration.");
+            return;
+        }
+        onLogin({ role: "member", member: byId });
+    };
+    return (React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" } },
+        React.createElement("div", { style: { width: "100%", maxWidth: "380px" } },
+            React.createElement("div", { style: { textAlign: "center", marginBottom: "28px" } },
+                React.createElement("div", { className: "display glow-text", style: { fontSize: "13px", letterSpacing: "0.22em", color: "var(--gold)", textTransform: "uppercase", marginBottom: "8px" } }, "Sons of Bethel"),
+                React.createElement("h1", { className: "glow-text", style: { margin: 0, fontSize: "30px", fontWeight: 600, color: "var(--text)" } }, "Savings Group"),
+                React.createElement("div", { style: { fontSize: "13px", color: "var(--ink-soft)", marginTop: "6px" } }, "Every shilling accounted for.")),
+            React.createElement(Card, null,
+                React.createElement("div", { style: { display: "flex", gap: "6px", marginBottom: "18px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--line)", padding: "5px", borderRadius: "12px" } }, ["member", "admin"].map(m => (React.createElement("button", { key: m, onClick: () => { setMode(m); setError(""); }, style: { flex: 1, padding: "9px", borderRadius: "8px", fontWeight: 600, fontSize: "13px", transition: "all 0.2s ease",
+                        background: mode === m ? "rgba(197,160,89,0.08)" : "transparent",
+                        border: mode === m ? "1px solid var(--gold)" : "1px solid transparent",
+                        boxShadow: mode === m ? "inset 0 0 14px rgba(197,160,89,0.18)" : "none",
+                        color: mode === m ? "var(--gold-dim)" : "var(--ink-soft)" } }, m === "member" ? "Member" : "Admin")))),
+                mode === "member" ? (React.createElement(React.Fragment, null,
+                    React.createElement(Field, { label: "Member ID (e.g. SOB-015)" },
+                        React.createElement("input", { style: inputStyle, value: memberId, onChange: e => setMemberId(e.target.value), placeholder: "SOB-015" })),
+                    React.createElement(Field, { label: "First Name" },
+                        React.createElement("input", { style: inputStyle, value: firstName, onChange: e => setFirstName(e.target.value), placeholder: "Aaron" })),
+                    React.createElement(Field, { label: "PIN (only if your account has one set)" },
+                        React.createElement("input", { style: inputStyle, type: "password", inputMode: "numeric", value: memberPin, onChange: e => setMemberPin(e.target.value), placeholder: "Leave blank if none" })))) : (React.createElement(Field, { label: "Admin PIN" },
+                    React.createElement("input", { style: inputStyle, type: "password", value: pin, onChange: e => setPin(e.target.value), placeholder: "\u2022\u2022\u2022\u2022" }))),
+                error && React.createElement("div", { style: { color: "var(--rust)", fontSize: "13px", marginBottom: "10px" } }, error),
+                React.createElement(Btn, { onClick: submit, kind: "gold", style: { width: "100%", opacity: busy ? 0.6 : 1 } }, busy ? "Checking\u2026" : "Sign In")),
+            db.members.length === 0 && (React.createElement("div", { style: { fontSize: "12px", color: "var(--ink-soft)", textAlign: "center", marginTop: "14px" } }, "No members registered yet \u2014 sign in as Admin to add the first one.")))));
+}
+/* ============ MEMBER PORTAL ============ */
+function buildLedger(db, memberId) {
+    const txns = activeTransactions(db).filter(t => t.memberId === memberId).slice().sort((a, b) => a.date.localeCompare(b.date));
+    let savings = 0, loan = 0, profit = 0, running = 0;
+    const rows = [];
+    txns.forEach(t => {
+        const amt = Number(t.amount) || 0;
+        let cashflow = 0;
+        // Savings figure: the member's true current balance — deposits, minus
+        // withdrawals and bank charges actually taken from their balance,
+        // plus any profit distributed to them. This is shown consistently as
+        // "Savings" everywhere in the app (Statement, Overview, Monthly
+        // Summary, the per-row Saving column) so every view agrees.
+        if (t.type === "Savings") {
+            cashflow = amt;
+            savings += amt;
+        }
+        else if (t.type === "Withdraw") {
+            cashflow = -amt;
+            savings -= amt;
+        }
+        else if (t.type === "Loan Disbursement") {
+            cashflow = -amt;
+            loan -= amt;
+        }
+        else if (t.type === "Loan Repayment") {
+            cashflow = amt;
+            loan += amt;
+        }
+        else if (t.type === "Interest") {
+            // Interest renewed on an overdue loan: increases what's owed but is
+            // not cash moving in or out, so it does not touch Cashflow.
+            loan -= amt;
+        }
+        else if (t.type === "Penalty") {
+            // A late/overdue penalty charged against a specific loan: increases
+            // what's owed, same non-cash treatment as Interest.
+            loan -= amt;
+        }
+        else if (t.type === "Bank Charge") {
+            // A fee actually deducted from the member's cash balance (e.g. a
+            // mobile money or bank transaction fee) — real cash leaving.
+            cashflow = -amt;
+            savings -= amt;
+        }
+        else if (t.type === "Profit") {
+            cashflow = amt;
+            savings += amt;
+        }
+        // Profit column: cumulative sum of "Profit"-purpose amounts ONLY —
+        // still tracked as its own figure too, for transparency about how
+        // much of the balance came from profit specifically.
+        let profitThisRow = 0;
+        if (t.type === "Profit") {
+            profitThisRow = amt;
+            profit += profitThisRow;
+        }
+        running += cashflow;
+        rows.push({
+            date: t.date, id: memberId, name: t.memberName, amount: amt, purpose: t.purpose || "", type: t.type,
+            cashflow, saving: savings, loan, profit, runningBalance: running
+        });
+    });
+    return { rows, totals: { savings, loan, profit, running } };
+}
+function buildLoanLedger(db, memberId) {
+    const loans = activeLoans(db).filter(l => l.memberId === memberId);
+    const rows = [];
+    loans.forEach(l => {
+        const principal = Number(l.loanAmount);
+        rows.push({
+            date: l.date, purpose: "Loan Disbursement", amount: principal,
+            interestRate: "", gracePeriod: (l.graceMonths || 3) + " Months",
+            interestAmount: "", totalOwed: principal, totalRepaid: 0,
+            loanBalance: principal, status: l.status
+        });
+        const events = activeTransactions(db).filter(t => t.loanId === l.id && (t.type === "Interest" || t.type === "Penalty" || t.type === "Loan Repayment")).sort((a, b) => a.date.localeCompare(b.date));
+        let owed = principal, repaidCum = 0;
+        events.forEach(t => {
+            if (t.type === "Interest" || t.type === "Penalty") {
+                owed += Number(t.amount);
+                rows.push({
+                    date: t.date, purpose: t.purpose || (t.type === "Penalty" ? "Penalty charged" : "Interest charged"), amount: Number(t.amount),
+                    interestRate: t.type === "Interest" ? l.interestRate : "", gracePeriod: (l.graceMonths || 3) + " Months",
+                    interestAmount: Number(t.amount), totalOwed: owed, totalRepaid: repaidCum,
+                    loanBalance: owed - repaidCum, status: l.status
+                });
+            } else {
+                repaidCum += Number(t.amount);
+                rows.push({
+                    date: t.date, purpose: "Loan Repayment", amount: Number(t.amount),
+                    interestRate: "", gracePeriod: "", interestAmount: "", totalOwed: owed,
+                    totalRepaid: repaidCum, loanBalance: owed - repaidCum, status: l.status
+                });
+            }
+        });
+    });
+    return rows;
+}
+/* ============ SOFT DELETE ============
+   Nothing is ever truly erased. "Deleting" a transaction or loan marks it
+   voided (with a reason and timestamp) and excludes it from every balance
+   calculation below — but the record itself stays in the data permanently,
+   visible in the Voided Records view, so history can never silently vanish. */
+function activeTransactions(db) {
+    return db.transactions.filter(t => !t.voided);
+}
+function activeLoans(db) {
+    return db.loans.filter(l => !l.voided);
+}
+// Business rule:
+// Loan interest tiers are calculated using actual savings only
+// (Savings − Withdrawals). Profit is displayed in member balances
+// but is intentionally excluded from interest-tier calculations.
+// Confirmed as deliberate policy — do not add Profit into this figure.
+function currentSavings(db, memberId) {
+    return activeTransactions(db).filter(t => t.memberId === memberId).reduce((bal, t) => {
+        if (t.type === "Savings") return bal + Number(t.amount);
+        if (t.type === "Withdraw") return bal - Number(t.amount);
+        return bal;
+    }, 0);
+}
+function monthsBetween(a, b) {
+    const [ya, ma] = a.split("-").map(Number);
+    const [yb, mb] = b.split("-").map(Number);
+    return (yb - ya) * 12 + (mb - ma);
+}
+/* Interest is a FLAT monthly amount, set using the tiered rule (comparing
+   loan balance against savings) at the time it's set. That same amount is
+   charged identically for 3 consecutive months — it does not compound or
+   grow month to month. After the 3rd charge, before the 4th month's charge,
+   the amount is re-evaluated against the current balance and savings — but
+   it can only go DOWN or stay the SAME, never higher than it was before. */
+function applyLoanAging(db) {
+    let changed = false;
+    let transactions = db.transactions.slice();
+    const loans = db.loans.map(l => {
+        try {
+            if (l.status === "Fully Paid" || l.voided) return l;
+            let loan = Object.assign({}, l);
+            if (!loan.date || typeof loan.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(loan.date)) {
+                console.error("Loan", loan.id, "has a missing or invalid date — skipping aging for this loan so it doesn't affect the rest of the app.", loan);
+                return l;
+            }
+            if (!loan.nextChargeDate) loan.nextChargeDate = addMonths(loan.date, 1);
+            if (!loan.rateSetDate) loan.rateSetDate = loan.date;
+        if (loan.monthlyInterestAmount === undefined) {
+            const outstanding0 = Number(loan.totalPayable) - Number(loan.amountPaid || 0);
+            loan.monthlyInterestAmount = Math.round(outstanding0 * (Number(loan.interestRate) || 0) / 100);
+            // Historical/imported loans start with an unknown rate (often 0).
+            // That is a placeholder, not a real established amount — so the
+            // "never increase" cap must not apply until a real rate has been
+            // determined at least once.
+            loan.rateEstablished = !!(Number(loan.interestRate) > 0);
+        }
+        if (loan.rateEstablished === undefined) loan.rateEstablished = true;
+        let guard = 0;
+        while (todayISO() >= loan.nextChargeDate && guard < 36) {
+            changed = true;
+            const outstanding = Number(loan.totalPayable) - Number(loan.amountPaid || 0);
+            // Revision is due once 3 full months have passed since the current
+            // amount was set — i.e. charges 1, 2, 3 use the same amount, and
+            // charge 4 is when it gets re-checked.
+            const dueForRevision = monthsBetween(loan.rateSetDate, loan.nextChargeDate) > 3;
+            let chargeAmount = loan.monthlyInterestAmount;
+            let rate = Number(loan.interestRate) || 0;
+            let purposeNote;
+            if (dueForRevision) {
+                const savingsNow = currentSavings(db, loan.memberId);
+                const candidateRate = interestRate(outstanding, savingsNow);
+                const candidateAmount = Math.round(outstanding * candidateRate / 100);
+                const previousAmount = loan.monthlyInterestAmount;
+                if (!loan.rateEstablished) {
+                    // First real determination for this loan (e.g. an imported
+                    // loan whose original terms were unknown) — no cap yet.
+                    chargeAmount = candidateAmount;
+                    rate = candidateRate;
+                    loan.rateEstablished = true;
+                    purposeNote = `Rate established at ${rate}% (based on balance ${fmt(outstanding)} and savings ${fmt(savingsNow)}); monthly interest set to ${fmt(chargeAmount)}`;
+                }
+                else {
+                    // Cap: the revised amount may only decrease or stay the
+                    // same, never exceed the previous monthly amount.
+                    chargeAmount = Math.min(candidateAmount, previousAmount);
+                    rate = outstanding > 0 ? Math.round((chargeAmount / outstanding) * 100) : 0;
+                    const held = candidateAmount >= previousAmount;
+                    purposeNote = `Quarterly review: monthly interest ${held ? "held at" : "reduced to"} ${fmt(chargeAmount)} (based on balance ${fmt(outstanding)} and savings ${fmt(savingsNow)}; can only decrease or stay the same, never increase)`;
+                }
+                loan.rateSetDate = loan.nextChargeDate;
+                loan.monthlyInterestAmount = chargeAmount;
+            }
+            else {
+                purposeNote = `Monthly interest charged: ${fmt(chargeAmount)} (flat for this 3-month cycle)`;
+            }
+            const newTotalPayable = outstanding + chargeAmount;
+            transactions = [{
+                id: uid("TXN"), date: loan.nextChargeDate, memberId: loan.memberId, memberName: loan.memberName,
+                amount: chargeAmount, purpose: purposeNote,
+                type: "Interest", loanId: loan.id
+            }, ...transactions];
+            loan = Object.assign({}, loan, {
+                interestRate: rate, interestAmount: chargeAmount, totalPayable: newTotalPayable, amountPaid: 0,
+                dueDate: dueForRevision ? addMonths(loan.rateSetDate, 3) : loan.dueDate,
+                nextChargeDate: addMonths(loan.nextChargeDate, 1),
+                status: "Active"
+            });
+            guard++;
+        }
+        return loan;
+        }
+        catch (err) {
+            console.error("Loan", l.id, "failed to process during aging — skipped so it doesn't crash the whole app. Please check this loan's data.", err);
+            return l;
+        }
+    });
+    return changed ? Object.assign({}, db, { loans, transactions }) : db;
+}
+function memberFinancials(db, memberId) {
+    const ledger = buildLedger(db, memberId);
+    const loans = activeLoans(db).filter(l => l.memberId === memberId);
+    const loanBalance = loans.reduce((a, l) => a + Math.max(0, Number(l.totalPayable) - Number(l.amountPaid || 0)), 0);
+    return { savings: ledger.totals.savings, loanBalance, txns: activeTransactions(db).filter(t => t.memberId === memberId), loans, ledger };
+}
+/* ============ AIRTIME ============
+   Rules: UGX 20,000 total airtime per member per calendar month (no per-request
+   limit, no reason field needed). Blocked entirely if the member has ANY
+   unpaid loan (Active or Overdue — a fully paid loan does not block).
+   A flat UGX 200 two-way SMS fee is added on top and shown before submission. */
+function airtimeUsedThisMonth(db, memberId) {
+    const thisMonth = todayISO().slice(0, 7);
+    return (db.airtimeRequests || [])
+        .filter(r => r.memberId === memberId && r.status !== "Rejected" && r.date.slice(0, 7) === thisMonth)
+        .reduce((a, r) => a + Number(r.airtimeAmount), 0);
+}
+function hasUnpaidLoan(db, memberId) {
+    return activeLoans(db).some(l => l.memberId === memberId && l.status !== "Fully Paid");
+}
+function StatementView({ member, financials }) {
+    const { savings, loanBalance, loans } = financials;
+    const totalProfit = financials.ledger.totals.profit;
+    const runningBalance = financials.ledger.totals.running;
+    const outstandingLoans = (loans || []).filter(l => l.status !== "Fully Paid" && (Number(l.totalPayable) - Number(l.amountPaid || 0)) > 0);
+    const hasOverdue = outstandingLoans.some(l => l.status === "Overdue");
+    return (React.createElement(Card, null,
+        React.createElement("div", { style: { marginBottom: "14px" } },
+            React.createElement("div", { className: "display", style: { fontSize: "12px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--gold)" } }, "Sons of Bethel Savings Group"),
+            React.createElement("h3", { style: { margin: "2px 0 0 0", fontSize: "18px" } }, "Member Statement")),
+        outstandingLoans.length > 0 && (React.createElement("div", { style: {
+                marginBottom: "16px", background: hasOverdue ? "#F9D3D3" : "#FEE1B8",
+                border: "1px solid " + (hasOverdue ? "#E8A3A3" : "#F0C98A"),
+                borderRadius: "10px", padding: "12px 14px", fontSize: "13px", lineHeight: 1.6,
+                color: hasOverdue ? "#8A1414" : "#7A4A0A"
+            } },
+            React.createElement("strong", null, hasOverdue ? "\u26A0\uFE0F Loan overdue: " : "\u26A0\uFE0F Outstanding loan: "),
+            `Mu kiseera kino okyabanjibwa ${fmt(loanBalance)} ku looni yo. Amagoba gabalirirwa ne gagattibwako buli mwezi. Wabula omuwendo gw'amagoba gukebejjebwa era ne gusobola okukyuka buli emyezi esatu (nga gusinziira ku bbalansi n'obulamu bw'akaunti yo). Tukusaba okugenda eri admin osasule ekitundu oba looni yonna mu bwangu nga bwe kisoboka.`)),
+        React.createElement("div", { style: { fontSize: "13px", color: "var(--ink-soft)", marginBottom: "14px", lineHeight: 1.8 } },
+            React.createElement("div", null,
+                React.createElement("strong", { style: { color: "var(--text)" } }, "Member ID:"),
+                " ",
+                member.id),
+            React.createElement("div", null,
+                React.createElement("strong", { style: { color: "var(--text)" } }, "Member Name:"),
+                " ",
+                member.name),
+            React.createElement("div", null,
+                React.createElement("strong", { style: { color: "var(--text)" } }, "Statement Date:"),
+                " ",
+                todayISO())),
+        React.createElement("div", { style: { borderTop: "1px solid var(--line)", paddingTop: "14px", fontSize: "14px", lineHeight: 2 } },
+            React.createElement("div", null,
+                React.createElement("strong", null, "Total Savings:"),
+                " ",
+                fmt(savings),
+                " \u2014 keep saving, you're building your future."),
+            React.createElement("div", null,
+                React.createElement("strong", null, "Loan:"),
+                " ",
+                fmt(loanBalance),
+                " \u2014 we encourage faithfulness in repayment."),
+            React.createElement("div", null,
+                React.createElement("strong", null, "Total Profit:"),
+                " ",
+                fmt(totalProfit),
+                " \u2014 earned from savings and interest."),
+            React.createElement("div", { style: { fontWeight: 700, marginTop: "6px" } },
+                "Current Running Balance: ",
+                fmt(runningBalance))),
+        React.createElement("div", { style: { marginTop: "16px", background: "var(--ink)", color: "#fff", padding: "12px 14px", borderRadius: "8px", fontSize: "12px", lineHeight: 1.6 } }, "This statement reflects live transactions recorded by the group admin. For any clarification, please contact the admin.")));
+}
+function MemberPortal({ member, db, setDB, logout }) {
+    const [tab, setTab] = useState("statement");
+    const [phone, setPhone] = useState("");
+    const [amount, setAmount] = useState("");
+    const [msg, setMsg] = useState("");
+    const financials = useMemo(() => memberFinancials(db, member.id), [db, member.id]);
+    const { savings, loanBalance, loans } = financials;
+    const savingsLedger = financials.ledger.rows;
+    const loanLedger = useMemo(() => buildLoanLedger(db, member.id), [db, member.id]);
+    const profitRows = savingsLedger.filter(r => r.profit > 0);
+    const usedThisMonth = airtimeUsedThisMonth(db, member.id);
+    const remainingCap = Math.max(0, AIRTIME_MONTHLY_CAP - usedThisMonth);
+    const blockedByLoan = hasUnpaidLoan(db, member.id);
+    const myAirtimeRequests = (db.airtimeRequests || []).filter(r => r.memberId === member.id).sort((a, b) => b.date.localeCompare(a.date));
+    const requestedAmount = Number(amount) || 0;
+    const total = requestedAmount > 0 ? requestedAmount + AIRTIME_SMS_FEE : 0;
+    const canSubmit = requestedAmount > 0 && requestedAmount <= remainingCap && total <= savings && !blockedByLoan;
+    const submitAirtime = () => {
+        if (!canSubmit) return;
+        const req = {
+            id: uid("AIR"), date: todayISO(), memberId: member.id, memberName: member.name,
+            phone: phone.trim(), airtimeAmount: requestedAmount, fee: AIRTIME_SMS_FEE, total, status: "Pending"
+        };
+        const newDB = Object.assign({}, db, { airtimeRequests: [req, ...(db.airtimeRequests || [])] });
+        setDB(newDB); saveDB(newDB);
+        if (ADMIN_PHONE) {
+            sendSMS(ADMIN_PHONE, `SOB Airtime request: ${member.name} (${member.id}) wants ${fmt(requestedAmount)} airtime to ${phone.trim()}. Open the app to fulfill.`)
+                .then(result => { if (!result.ok && !result.skipped) recordSmsFailure(newDB, setDB, `Airtime request alert to Admin for ${member.name}`, result.error); });
+        }
+        setPhone(""); setAmount(""); setMsg("Request submitted — Admin has been notified.");
+    };
+    const tabs = [["statement", "Statement"], ["savings", "Individual Savings"], ["loan", "Loan Calculation"], ["profit", "Profit"], ["airtime", "Airtime"]];
+    return (React.createElement(Shell, { title: member.name, subtitle: member.id, onLogout: logout },
+        React.createElement("div", { className: "scroll-fade", style: { display: "flex", gap: "8px", marginBottom: "22px", paddingBottom: "4px" } }, tabs.map(([k, l]) => (React.createElement("button", { key: k, onClick: () => setTab(k), style: {
+                padding: "8px 16px", borderRadius: "999px", fontWeight: 600, fontSize: "13px", whiteSpace: "nowrap", flexShrink: 0,
+                background: tab === k ? "var(--ink)" : "rgba(255,255,255,0.03)", border: tab === k ? "1px solid var(--gold)" : "1px solid var(--line)", color: tab === k ? "var(--gold-dim)" : "var(--ink-soft)"
+            } }, l)))),
+        tab === "statement" && React.createElement(StatementView, { member: member, financials: financials }),
+        tab === "savings" && (React.createElement(Card, null,
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Individual Savings"),
+            savingsLedger.length === 0 ? React.createElement(Empty, { text: "No transactions recorded yet." }) :
+                React.createElement(Table, { cols: ["Date", "ID", "Name", "Amount", "Purpose", "Cashflow", "Saving", "Loan", "Profit", "Running Balance"], rows: savingsLedger.slice().reverse().map(r => [
+                        r.date, r.id, r.name, fmt(r.amount), React.createElement(TypeBadge, { type: r.type, label: r.purpose || r.type }), fmt(r.cashflow), fmt(r.saving), fmt(r.loan), fmt(r.profit), fmt(r.runningBalance)
+                    ]) }))),
+        tab === "loan" && (React.createElement(Card, null,
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Loan Calculation"),
+            loanLedger.length === 0 ? React.createElement(Empty, { text: "No loans on record." }) :
+                React.createElement(Table, { cols: ["Trans_Date", "Purpose", "Amount", "Interest Rate", "Grace Period", "Interest Amount", "Total Owed", "Total Repaid", "Loan Balance", "Status"], rows: loanLedger.map(r => [
+                        r.date, React.createElement(TypeBadge, { type: r.purpose, label: r.purpose }), fmt(r.amount), r.interestRate !== "" ? r.interestRate + "%" : "—", r.gracePeriod || "—",
+                        r.interestAmount !== "" ? fmt(r.interestAmount) : "—", r.totalOwed !== "" ? fmt(r.totalOwed) : "—",
+                        fmt(r.totalRepaid), fmt(r.loanBalance),
+                        React.createElement(Pill, { status: r.status })
+                    ]) }))),
+        tab === "profit" && (React.createElement(Card, null,
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Profit"),
+            profitRows.length === 0 ? React.createElement(Empty, { text: "No profit recorded yet \u2014 profit is credited once a loan is fully repaid." }) :
+                React.createElement(Table, { cols: ["Date", "ID", "Name", "Amount", "Purpose", "Cashflow", "Saving", "Loan", "Profit", "Running Balance"], rows: profitRows.slice().reverse().map(r => [
+                        r.date, r.id, r.name, fmt(r.amount), React.createElement(TypeBadge, { type: r.type, label: r.purpose || r.type }), fmt(r.cashflow), fmt(r.saving), fmt(r.loan), fmt(r.profit), fmt(r.runningBalance)
+                    ]) }))),
+        tab === "airtime" && (React.createElement(Card, { style: { maxWidth: "440px" } },
+            React.createElement("h3", { style: { margin: "0 0 6px 0", fontSize: "16px" } }, "Request Airtime"),
+            React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "12px", color: "var(--ink-soft)" } }, "For emergencies only. Limit: UGX " + AIRTIME_MONTHLY_CAP.toLocaleString() + " per month."),
+            blockedByLoan && React.createElement("div", { style: { background: "#F9D3D3", border: "1px solid #E8A3A3", color: "#8A1414", borderRadius: "8px", padding: "10px 12px", fontSize: "13px", marginBottom: "14px" } }, "Airtime is not available while you have an unpaid loan. Please clear your loan balance first."),
+            !blockedByLoan && React.createElement("div", { style: { fontSize: "12px", color: "var(--ink-soft)", marginBottom: "14px" } }, `Used this month: ${fmt(usedThisMonth)} of ${fmt(AIRTIME_MONTHLY_CAP)} \u2014 remaining: ${fmt(remainingCap)}`),
+            !blockedByLoan && React.createElement(React.Fragment, null,
+                React.createElement(Field, { label: "Phone Number" },
+                    React.createElement("input", { style: inputStyle, value: phone, onChange: e => setPhone(e.target.value), placeholder: "07XX XXX XXX" })),
+                React.createElement(Field, { label: "Airtime Amount (UGX)" },
+                    React.createElement("input", { style: inputStyle, type: "number", value: amount, onChange: e => setAmount(e.target.value), placeholder: "e.g. 5000" })),
+                requestedAmount > 0 && React.createElement("div", { style: { background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: "8px", padding: "12px 14px", fontSize: "13px", marginBottom: "14px", lineHeight: 1.8 } },
+                    React.createElement("div", null, "Airtime amount: ", fmt(requestedAmount)),
+                    React.createElement("div", null, "Notification fee (2-way SMS): ", fmt(AIRTIME_SMS_FEE)),
+                    React.createElement("div", { style: { fontWeight: 700, borderTop: "1px solid var(--line)", marginTop: "6px", paddingTop: "6px" } }, "Total to be deducted: ", fmt(total))),
+                requestedAmount > remainingCap && React.createElement("div", { style: { color: "var(--rust)", fontSize: "12px", marginBottom: "10px" } }, "This exceeds your remaining monthly limit of " + fmt(remainingCap) + "."),
+                requestedAmount > 0 && total > savings && React.createElement("div", { style: { color: "var(--rust)", fontSize: "12px", marginBottom: "10px" } }, "Your savings balance is not enough to cover this request."),
+                React.createElement(Btn, { onClick: submitAirtime, kind: "gold", style: { opacity: canSubmit ? 1 : 0.5 } }, "Submit Request"),
+                msg && React.createElement("div", { style: { marginTop: "12px", fontSize: "13px", color: "var(--green)" } }, msg)),
+            React.createElement("h3", { style: { margin: "22px 0 12px 0", fontSize: "16px" } }, "Your airtime requests"),
+            myAirtimeRequests.length === 0 ? React.createElement(Empty, { text: "No airtime requests yet." }) :
+                React.createElement(Table, { cols: ["Date", "Phone", "Airtime", "Fee", "Total", "Status"], rows: myAirtimeRequests.map(r => [r.date, r.phone, fmt(r.airtimeAmount), fmt(r.fee), fmt(r.total), React.createElement(Pill, { status: r.status })]) })))));
+}
+
+function daysSince(dateStr) {
+    if (!dateStr) return Infinity;
+    const then = new Date(dateStr);
+    const now = new Date(todayISO());
+    return Math.floor((now - then) / (1000 * 60 * 60 * 24));
+}
+function RiskWarnings({ db }) {
+    const backupDays = daysSince(db.lastBackupDate);
+    const needsBackup = backupDays >= 7;
+    const usingDefaultPin = ADMIN_PIN === "2026";
+    const noRealAuth = !AUTH_SERVER_URL;
+    const weakSecurity = usingDefaultPin && noRealAuth;
+    const recentSmsFailures = (db.smsFailures || []).filter(f => daysSince(f.date) <= 2);
+    if (!needsBackup && !weakSecurity && recentSmsFailures.length === 0) return null;
+    return React.createElement("div", { style: { marginBottom: "18px", display: "flex", flexDirection: "column", gap: "8px" } },
+        needsBackup && React.createElement("div", { style: { background: "#FEE1B8", border: "1px solid #F0C98A", color: "#7A4A0A", borderRadius: "10px", padding: "12px 14px", fontSize: "13px" } },
+            React.createElement("strong", null, "\u26A0\uFE0F Backup reminder: "),
+            db.lastBackupDate
+                ? `It's been ${backupDays} days since your last backup (${db.lastBackupDate}). If this app's link is ever unpublished, all data since then could be permanently lost. Go to the Backup tab and download a copy now.`
+                : "No backup has ever been taken. If this app's link is ever unpublished, all data would be permanently lost with no way to recover it. Go to the Backup tab and download a copy now."),
+        weakSecurity && React.createElement("div", { style: { background: "#F9D3D3", border: "1px solid #E8A3A3", color: "#8A1414", borderRadius: "10px", padding: "12px 14px", fontSize: "13px" } },
+            React.createElement("strong", null, "\u26A0\uFE0F Security warning: "),
+            "This system is using the default Admin PIN with no real auth server configured — the PIN is visible to anyone who views this page's source code. Set up Code_Auth.gs (see the comments at the top of this file) for real protection, or at minimum change ADMIN_PIN to something private."),
+        recentSmsFailures.length > 0 && React.createElement("div", { style: { background: "#E3E7EE", border: "1px solid #C7D0DE", color: "#374151", borderRadius: "10px", padding: "12px 14px", fontSize: "13px" } },
+            React.createElement("strong", null, `\uD83D\uDCF1 ${recentSmsFailures.length} SMS notification${recentSmsFailures.length > 1 ? "s" : ""} failed to send in the last 2 days: `),
+            "the phone or gateway may be offline. Please contact the affected member(s) directly to confirm they got the information. Details: ",
+            recentSmsFailures.slice(0, 3).map(f => f.context).join("; ")));
+}
+function AdminPortal({ db, setDB, logout, role }) {
+    const [tab, setTab] = useState("overview");
+    const allTabs = [
+        ["overview", "Overview"], ["airtime", "Airtime Requests"], ["members", "Members"],
+        ["ledger", "Administration"], ["transactions", "Transactions"],
+        ["loans", "Loans & Interest"], ["summary", "Monthly Summary"], ["reconciliation", "Reconciliation"],
+        ["auditlog", "Audit Log"], ["backup", "Backup"]
+    ];
+    // Role-based access: Treasurer handles day-to-day money without seeing
+    // the Audit Log or Backup/Restore controls. Oversight can watch without
+    // being able to touch or change anything at all — genuinely read-only,
+    // not just hidden buttons. Admin (the default/fallback role) sees
+    // everything, so a single-person setup loses nothing.
+    const treasurerTabs = ["overview", "airtime", "members", "ledger", "transactions", "loans", "summary", "reconciliation"];
+    const oversightTabs = ["overview", "auditlog"];
+    const tabs = role === "treasurer" ? allTabs.filter(([k]) => treasurerTabs.includes(k))
+        : role === "oversight" ? allTabs.filter(([k]) => oversightTabs.includes(k))
+        : allTabs;
+    const roleLabel = role === "treasurer" ? "Treasurer" : role === "oversight" ? "Oversight (read-only)" : "Admin";
+    const update = (fn, critical) => { setDB(prev => { const nx = fn(prev); saveDB(nx); if (critical) forceAutoBackup(nx); return nx; }); };
+    const totalSavings = activeTransactions(db).filter(t => t.type === "Savings").reduce((a, t) => a + Number(t.amount), 0)
+        - activeTransactions(db).filter(t => t.type === "Withdraw").reduce((a, t) => a + Number(t.amount), 0)
+        - activeTransactions(db).filter(t => t.type === "Bank Charge").reduce((a, t) => a + Number(t.amount), 0)
+        + activeTransactions(db).filter(t => t.type === "Profit").reduce((a, t) => a + Number(t.amount), 0);
+    const totalLoansOut = activeLoans(db).reduce((a, l) => a + (Number(l.totalPayable) - Number(l.amountPaid || 0)), 0);
+    const totalLoanDisbursed = activeLoans(db).reduce((a, l) => a + Number(l.loanAmount), 0);
+    const totalInterestExpected = activeTransactions(db).filter(t => t.type === "Interest" || t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
+    const totalProfit = activeTransactions(db).filter(t => t.type === "Profit").reduce((a, t) => a + Number(t.amount), 0);
+    const groupBalance = db.ledger.length ? Number(db.ledger[db.ledger.length - 1].runningBalance) : 0;
+    const pendingAirtime = (db.airtimeRequests || []).filter(r => r.status === "Pending").length;
+    const fulfillAirtime = (req) => {
+        update(prev => {
+            const airtimeRequests = (prev.airtimeRequests || []).map(r => r.id === req.id ? Object.assign({}, r, { status: "Fulfilled", fulfilledDate: todayISO() }) : r);
+            const txn = { id: uid("TXN"), date: todayISO(), memberId: req.memberId, memberName: req.memberName,
+                amount: req.total, purpose: `Airtime purchase (${fmt(req.airtimeAmount)} to ${req.phone}) + UGX ${req.fee} notification fee`, type: "Withdraw" };
+            const nx = Object.assign({}, prev, { airtimeRequests, transactions: [txn, ...prev.transactions] });
+            return logAudit(nx, "Airtime fulfilled", `${fmt(req.total)} total for ${req.memberName} (${req.memberId}) to ${req.phone}`);
+        }, true);
+        sendSMS(req.phone, `Your SOB airtime request of ${fmt(req.airtimeAmount)} has been fulfilled. Thank you.`)
+            .then(result => { if (!result.ok && !result.skipped) recordSmsFailure(db, setDB, `Airtime fulfillment confirmation to ${req.memberName} (${req.phone})`, result.error); });
+    };
+    const rejectAirtime = (req) => {
+        update(prev => logAudit(Object.assign({}, prev, { airtimeRequests: (prev.airtimeRequests || []).map(r => r.id === req.id ? Object.assign({}, r, { status: "Rejected" }) : r) }), "Airtime rejected", `${fmt(req.total)} request for ${req.memberName} (${req.memberId})`));
+    };
+    const allowedTabKeys = new Set(tabs.map(([k]) => k));
+    const activeTab = allowedTabKeys.has(tab) ? tab : tabs[0][0];
+    return (React.createElement(Shell, { title: "Admin", subtitle: `Sons of Bethel Savings Group \u2014 ${roleLabel}`, onLogout: logout },
+        React.createElement("div", { className: "scroll-fade", style: { display: "flex", gap: "8px", marginBottom: "22px", paddingBottom: "4px" } }, tabs.map(([k, l]) => (React.createElement("button", { key: k, onClick: () => setTab(k), style: {
+                padding: "8px 16px", borderRadius: "999px", fontWeight: 600, fontSize: "13px", position: "relative", whiteSpace: "nowrap", flexShrink: 0,
+                background: activeTab === k ? "var(--ink)" : "rgba(255,255,255,0.03)", border: activeTab === k ? "1px solid var(--gold)" : "1px solid var(--line)", color: activeTab === k ? "var(--gold-dim)" : "var(--ink-soft)"
+            } },
+            l,
+            k === "airtime" && pendingAirtime > 0 && React.createElement("span", { style: { marginLeft: "6px", background: "var(--gold)", color: "#1A1408", borderRadius: "999px", padding: "1px 7px", fontSize: "11px", fontWeight: 700 } }, pendingAirtime))))),
+        React.createElement(RiskWarnings, { db: db }),
+        activeTab === "overview" && (React.createElement("div", { style: { display: "flex", gap: "14px", flexWrap: "wrap" } },
+            React.createElement(StatCard, { label: "Group Savings", value: fmt(totalSavings), accent: "var(--green)" }),
+            React.createElement(StatCard, { label: "Loan Disbursed", value: fmt(totalLoanDisbursed), accent: "var(--gold)" }),
+            React.createElement(StatCard, { label: "Interest Expected", value: fmt(totalInterestExpected), accent: "var(--gold)" }),
+            React.createElement(StatCard, { label: "Loans Outstanding", value: fmt(totalLoansOut), accent: "var(--rust)" }),
+            React.createElement(StatCard, { label: "Profit Earned", value: fmt(totalProfit), accent: "var(--gold)" }),
+            React.createElement(StatCard, { label: "Members", value: db.members.length }))),
+        activeTab === "airtime" && (React.createElement(Card, null,
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Airtime requests"),
+            (!db.airtimeRequests || db.airtimeRequests.length === 0) ? React.createElement(Empty, { text: "No airtime requests yet." }) :
+                React.createElement(Table, { cols: ["Date", "Member", "Phone", "Airtime", "Fee", "Total", "Status", "Action"], rows: db.airtimeRequests.map(r => [
+                        r.date, `${r.memberName} (${r.memberId})`, r.phone, fmt(r.airtimeAmount), fmt(r.fee), fmt(r.total),
+                        React.createElement(Pill, { status: r.status }),
+                        r.status === "Pending" ?
+                            React.createElement("div", { style: { display: "flex", gap: "6px" } },
+                                React.createElement(Btn, { kind: "gold", style: { padding: "5px 10px", fontSize: "12px" }, onClick: () => fulfillAirtime(r) }, "Mark Fulfilled"),
+                                React.createElement(Btn, { kind: "danger", style: { padding: "5px 10px", fontSize: "12px" }, onClick: () => rejectAirtime(r) }, "Reject")) : "—"
+                    ]) }))),
+        activeTab === "members" && React.createElement(MembersTab, { db: db, update: update }),
+        activeTab === "ledger" && React.createElement(LedgerTab, { db: db, update: update }),
+        activeTab === "transactions" && React.createElement(TransactionsTab, { db: db, update: update }),
+        activeTab === "loans" && React.createElement(LoansTab, { db: db, update: update }),
+        activeTab === "summary" && React.createElement(SummaryTab, { db: db }),
+        activeTab === "reconciliation" && React.createElement(ReconciliationTab, { db: db, update: update }),
+        activeTab === "auditlog" && React.createElement(AuditLogTab, { db: db }),
+        activeTab === "backup" && React.createElement(BackupTab, { db: db, setDB: setDB })));
+}
+function MembersTab({ db, update }) {
+    const [form, setForm] = useState({ name: "", loginName: "", phone: "", email: "", location: "" });
+    const [importMsg, setImportMsg] = useState("");
+    const alreadyImported = SEED_DATA.members.every(sm => db.members.some(m => m.id === sm.id));
+    const importSeed = () => {
+        const existingIds = new Set(db.members.map(m => m.id));
+        const newMembers = SEED_DATA.members.filter(m => !existingIds.has(m.id));
+        if (newMembers.length === 0) {
+            setImportMsg("Already imported — no new members to add. Nothing was changed.");
+            return;
+        }
+        const existingTxnIds = new Set(db.transactions.map(t => t.id));
+        const existingLoanIds = new Set(db.loans.map(l => l.id));
+        const newTxns = SEED_DATA.transactions.filter(t => !existingTxnIds.has(t.id));
+        const newLoans = SEED_DATA.loans.filter(l => !existingLoanIds.has(l.id));
+        update(prev => {
+            const merged = Object.assign(Object.assign({}, prev), {
+                members: [...prev.members, ...newMembers],
+                transactions: [...prev.transactions, ...newTxns],
+                loans: [...prev.loans, ...newLoans],
+                ledger: [...prev.ledger, ...SEED_DATA.ledger]
+            });
+            // Imported historical loans have no interest terms and may already be
+            // past their 3-month due date — age them immediately so real interest
+            // is applied right away instead of waiting for the next app reload.
+            return applyLoanAging(merged);
+        });
+        setImportMsg(`Imported ${newMembers.length} members, ${newTxns.length} transactions, ${newLoans.length} loans. Any already-overdue imported loans have had real interest applied automatically.`);
+    };
+    const add = () => {
+        if (!form.name.trim())
+            return;
+        const n = db.members.length + 1;
+        const id = "SOB-" + String(n).padStart(3, "0");
+        const loginName = form.loginName.trim() || form.name.trim().split(" ")[0];
+        const member = { id, name: form.name.trim(), loginName, phone: form.phone, email: form.email, location: form.location, regDate: todayISO() };
+        update(prev => (Object.assign(Object.assign({}, prev), { members: [...prev.members, member] })));
+        setForm({ name: "", loginName: "", phone: "", email: "", location: "" });
+    };
+    const updateLoginName = (memberId, value) => {
+        update(prev => (Object.assign(Object.assign({}, prev), { members: prev.members.map(m => m.id === memberId ? Object.assign(Object.assign({}, m), { loginName: value }) : m) })));
+    };
+    const updateMemberPin = (memberId, value) => {
+        const clean = value.replace(/\D/g, "").slice(0, 4);
+        update(prev => (Object.assign(Object.assign({}, prev), { members: prev.members.map(m => m.id === memberId ? Object.assign(Object.assign({}, m), { pin: clean }) : m) })));
+    };
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 100%", background: "var(--cream)", border: "1px dashed var(--gold)" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Import real member data"),
+            React.createElement("p", { style: { margin: "0 0 12px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "Loads the 55 members, 321 transactions, 12 loans, and 7 ledger entries extracted from the legacy master spreadsheet. Safe to click more than once — already-imported records are never duplicated."),
+            React.createElement(Btn, { onClick: importSeed, kind: alreadyImported ? "ghost" : "gold" }, alreadyImported ? "Already Imported" : "Import 55 Members & History"),
+            importMsg && React.createElement("div", { style: { marginTop: "10px", fontSize: "13px", color: "var(--green)" } }, importMsg)),
+        React.createElement(Card, { style: { flex: "1 1 280px" } },
+            React.createElement("h3", { style: { margin: "0 0 14px 0", fontSize: "16px" } }, "Register member"),
+            React.createElement(Field, { label: "Full Name" },
+                React.createElement("input", { style: inputStyle, value: form.name, onChange: e => setForm(Object.assign(Object.assign({}, form), { name: e.target.value })), placeholder: "Aaron Mugisha" })),
+            React.createElement(Field, { label: "Login Name (their preferred/religious name — leave blank to use first word of Full Name)" },
+                React.createElement("input", { style: inputStyle, value: form.loginName, onChange: e => setForm(Object.assign(Object.assign({}, form), { loginName: e.target.value })), placeholder: "e.g. Aaron" })),
+            React.createElement(Field, { label: "Phone" },
+                React.createElement("input", { style: inputStyle, value: form.phone, onChange: e => setForm(Object.assign(Object.assign({}, form), { phone: e.target.value })), placeholder: "07XX XXX XXX" })),
+            React.createElement(Field, { label: "Email" },
+                React.createElement("input", { style: inputStyle, value: form.email, onChange: e => setForm(Object.assign(Object.assign({}, form), { email: e.target.value })), placeholder: "name@email.com" })),
+            React.createElement(Field, { label: "Location" },
+                React.createElement("input", { style: inputStyle, value: form.location, onChange: e => setForm(Object.assign(Object.assign({}, form), { location: e.target.value })), placeholder: "Abaita-Ababiri" })),
+            React.createElement(Btn, { onClick: add, kind: "gold" }, "Add Member")),
+        React.createElement(Card, { style: { flex: "2 1 400px" } },
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } },
+                "Registered members (",
+                db.members.length,
+                ")"),
+            React.createElement("p", { style: { margin: "0 0 10px 0", fontSize: "12px", color: "var(--ink-soft)" } }, "Login Name is what a member types at sign-in — edit it directly below if it's wrong (e.g. their religious name instead of the first word of their full name). PIN is optional \u2014 if set, that member must also enter it to sign in, as an extra layer on top of ID + name (which are not truly secret on their own)."),
+            db.members.length === 0 ? React.createElement(Empty, { text: "No members registered yet." }) :
+                React.createElement(Table, { cols: ["ID", "Name", "Login Name", "PIN (optional)", "Phone", "Location"], rows: db.members.map(m => [
+                        m.id, m.name,
+                        React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { padding: "5px 8px", width: "120px" }), defaultValue: m.loginName || m.name.trim().split(" ")[0], onBlur: e => updateLoginName(m.id, e.target.value) }),
+                        React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { padding: "5px 8px", width: "80px" }), type: "text", inputMode: "numeric", defaultValue: m.pin || "", placeholder: "none", onBlur: e => updateMemberPin(m.id, e.target.value) }),
+                        m.phone || "—", m.location || "—"
+                    ]) }))));
+}
+function LedgerTab({ db, update }) {
+    const [form, setForm] = useState({ amount: "", bankedBy: "", receivedBy: "", receiptNumber: "", type: "Deposit", purpose: "", memberId: "" });
+    const add = () => {
+        if (!form.amount)
+            return;
+        const prevBal = db.ledger.length ? Number(db.ledger[db.ledger.length - 1].runningBalance) : 0;
+        const signed = ["Loan", "Withdrawal", "Bank Charge", "Penalty"].includes(form.type) ? -Number(form.amount) : Number(form.amount);
+        const entry = Object.assign(Object.assign({}, form), { date: todayISO(), runningBalance: prevBal + signed });
+        update(prev => (Object.assign(Object.assign({}, prev), { ledger: [...prev.ledger, entry] })));
+        setForm({ amount: "", bankedBy: "", receivedBy: "", receiptNumber: "", type: "Deposit", purpose: "", memberId: "" });
+    };
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 280px" } },
+            React.createElement("h3", { style: { margin: "0 0 14px 0", fontSize: "16px" } }, "Record group transaction"),
+            React.createElement(Field, { label: "Type" },
+                React.createElement("select", { style: inputStyle, value: form.type, onChange: e => setForm(Object.assign(Object.assign({}, form), { type: e.target.value })) },
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Deposit"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Loan"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Profit"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Withdrawal"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Bank Charge"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Penalty"))),
+            React.createElement(Field, { label: "Amount (UGX)" },
+                React.createElement("input", { style: inputStyle, type: "number", value: form.amount, onChange: e => setForm(Object.assign(Object.assign({}, form), { amount: e.target.value })) })),
+            React.createElement(Field, { label: "Banked By" },
+                React.createElement("input", { style: inputStyle, value: form.bankedBy, onChange: e => setForm(Object.assign(Object.assign({}, form), { bankedBy: e.target.value })) })),
+            React.createElement(Field, { label: "Received By" },
+                React.createElement("input", { style: inputStyle, value: form.receivedBy, onChange: e => setForm(Object.assign(Object.assign({}, form), { receivedBy: e.target.value })) })),
+            React.createElement(Field, { label: "Receipt Number" },
+                React.createElement("input", { style: inputStyle, value: form.receiptNumber, onChange: e => setForm(Object.assign(Object.assign({}, form), { receiptNumber: e.target.value })) })),
+            React.createElement(Field, { label: "Purpose" },
+                React.createElement("input", { style: inputStyle, value: form.purpose, onChange: e => setForm(Object.assign(Object.assign({}, form), { purpose: e.target.value })) })),
+            React.createElement(Btn, { onClick: add, kind: "gold" }, "Add Entry")),
+        React.createElement(Card, { style: { flex: "2 1 400px" } },
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } },
+                "Ledger (",
+                db.ledger.length,
+                ")"),
+            db.ledger.length === 0 ? React.createElement(Empty, { text: "No ledger entries yet." }) :
+                React.createElement(Table, { cols: ["Date", "Type", "Amount", "Purpose", "Receipt#", "Balance"], rows: db.ledger.slice().sort((a, b) => b.date.localeCompare(a.date)).map(l => [l.date, React.createElement(TypeBadge, { type: l.type }), fmt(l.amount), l.purpose || "—", l.receiptNumber || "—", fmt(l.runningBalance)]) }))));
+}
+function TransactionsTab({ db, update }) {
+    const [filter, setFilter] = useState("");
+    const [form, setForm] = useState({ memberId: "", type: "Savings", amount: "", purpose: "" });
+    const rows = db.transactions.filter(t => !filter || t.memberId.toUpperCase().includes(filter.toUpperCase()) || t.memberName.toLowerCase().includes(filter.toLowerCase()));
+    const record = () => {
+        const member = db.members.find(m => m.id === form.memberId);
+        if (!member || !form.amount || Number(form.amount) <= 0) return;
+        update(prev => {
+            const txn = { id: uid("TXN"), date: todayISO(), memberId: member.id, memberName: member.name,
+                amount: Number(form.amount), purpose: form.purpose || form.type, type: form.type };
+            return Object.assign(Object.assign({}, prev), { transactions: [txn, ...prev.transactions] });
+        }, true);
+        setForm({ memberId: "", type: "Savings", amount: "", purpose: "" });
+    };
+    const deleteTxn = (txn) => {
+        const reason = window.prompt(`Void this ${txn.type} transaction of ${fmt(txn.amount)} for ${txn.memberName}?\n\nThis will NOT be permanently erased — it stays in the record marked "Voided" and excluded from all balances, for audit purposes. Please give a reason:`);
+        if (reason === null || !reason.trim()) return;
+        update(prev => {
+            const transactions = prev.transactions.map(t => t.id === txn.id ? Object.assign({}, t, { voided: true, voidReason: reason.trim(), voidDate: todayISO() }) : t);
+            return logAudit(Object.assign({}, prev, { transactions }), "Voided transaction", `${txn.type} of ${fmt(txn.amount)} for ${txn.memberName} (${txn.memberId}) — reason: ${reason.trim()}`);
+        }, true);
+    };
+    // Build a per-member ledger lookup so every transaction row can show its
+    // running Saving/Loan/Profit/Running Balance at that point in time.
+    const ledgerLookup = {};
+    Array.from(new Set(db.transactions.map(t => t.memberId))).forEach(mid => {
+        buildLedger(db, mid).rows.forEach(r => { ledgerLookup[mid + "|" + r.date + "|" + r.amount + "|" + r.type] = ledgerLookup[mid + "|" + r.date + "|" + r.amount + "|" + r.type] || []; ledgerLookup[mid + "|" + r.date + "|" + r.amount + "|" + r.type].push(r); });
+    });
+    const rowsWithBalances = rows.slice().sort((a, b) => b.date.localeCompare(a.date)).map(t => {
+        const key = t.memberId + "|" + t.date + "|" + t.amount + "|" + t.type;
+        const matches = ledgerLookup[key] || [];
+        const r = matches.shift();
+        return { t, r };
+    });
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 260px" } },
+            React.createElement("h3", { style: { margin: "0 0 14px 0", fontSize: "16px" } }, "Record member transaction"),
+            React.createElement(Field, { label: "Member" },
+                React.createElement("select", { style: inputStyle, value: form.memberId, onChange: e => setForm(Object.assign(Object.assign({}, form), { memberId: e.target.value })) },
+                    React.createElement("option", { value: "", style: { background: "#161A24", color: "#F1F0EA" } }, "Select member\u2026"),
+                    db.members.map(m => React.createElement("option", { key: m.id, value: m.id, style: { background: "#161A24", color: "#F1F0EA" } }, `${m.id} — ${m.name}`)))),
+            React.createElement(Field, { label: "Type" },
+                React.createElement("select", { style: inputStyle, value: form.type, onChange: e => setForm(Object.assign(Object.assign({}, form), { type: e.target.value })) },
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Savings"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Withdraw"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Profit"),
+                    React.createElement("option", { style: { background: "#161A24", color: "#F1F0EA" } }, "Bank Charge"))),
+            React.createElement(Field, { label: "Amount (UGX)" },
+                React.createElement("input", { style: inputStyle, type: "number", value: form.amount, onChange: e => setForm(Object.assign(Object.assign({}, form), { amount: e.target.value })) })),
+            React.createElement(Field, { label: form.type === "Profit" ? "Profit sharing detail (what this share is from)" : "Purpose (optional)" },
+                React.createElement("input", { style: inputStyle, value: form.purpose, onChange: e => setForm(Object.assign(Object.assign({}, form), { purpose: e.target.value })), placeholder: form.type === "Profit" ? "e.g. share of Q2 loan interest earned" : "e.g. weekly savings" })),
+            React.createElement(Btn, { onClick: record, kind: "gold" }, "Record Transaction")),
+        React.createElement(Card, { style: { flex: "2 1 400px" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px" } },
+                React.createElement("h3", { style: { margin: 0, fontSize: "16px" } },
+                    "Member transactions (",
+                    rows.length,
+                    ")"),
+                React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { maxWidth: "220px" }), placeholder: "Filter by member name or ID", value: filter, onChange: e => setFilter(e.target.value) })),
+            rows.length === 0 ? React.createElement(Empty, { text: "No transactions found." }) :
+                React.createElement(Table, { cols: ["Date", "Member", "Type", "Amount", "Purpose", "Saving", "Loan", "Profit", "Running Balance", ""], rows: rowsWithBalances.map(({ t, r }) => [
+                        t.date, `${t.memberName} (${t.memberId})`, React.createElement(TypeBadge, { type: t.type }), fmt(t.amount),
+                        t.voided ? React.createElement("span", { style: { color: "var(--rust)" } }, "VOIDED — ", t.voidReason || "") : (t.purpose || "—"),
+                        r ? fmt(r.saving) : "—", r ? fmt(r.loan) : "—", r ? fmt(r.profit) : "—", r ? fmt(r.runningBalance) : "—",
+                        t.voided ? "—" : React.createElement(Btn, { kind: "danger", style: { padding: "4px 10px", fontSize: "12px" }, onClick: () => deleteTxn(t) }, "Delete")
+                    ]) }))));
+}
+function LoansTab({ db, update }) {
+    const [repay, setRepay] = useState({});
+    const [penalty, setPenalty] = useState({});
+    const [interestAdd, setInterestAdd] = useState({});
+    const [newLoan, setNewLoan] = useState({ memberId: "", loanAmount: "", monthlyInterestAmount: "", graceMonths: "3", remarks: "" });
+    const issueLoan = () => {
+        const member = db.members.find(m => m.id === newLoan.memberId);
+        const loanAmount = Number(newLoan.loanAmount);
+        const monthlyInterestAmount = Number(newLoan.monthlyInterestAmount);
+        if (!member || !loanAmount || loanAmount <= 0 || monthlyInterestAmount === undefined || newLoan.monthlyInterestAmount === "" || monthlyInterestAmount < 0) return;
+        const impliedRate = loanAmount > 0 ? Math.round((monthlyInterestAmount / loanAmount) * 100) : 0;
+        const graceMonths = Number(newLoan.graceMonths) || 3;
+        const loanId = uid("LOAN");
+        update(prev => {
+            const loan = {
+                id: loanId, date: todayISO(), memberId: member.id, memberName: member.name,
+                loanAmount, interestRate: impliedRate, interestAmount: monthlyInterestAmount, monthlyInterestAmount, graceMonths,
+                totalPayable: loanAmount, amountPaid: 0,
+                dueDate: addMonths(todayISO(), graceMonths), nextChargeDate: addMonths(todayISO(), 1), rateSetDate: todayISO(),
+                status: "Active", datePaidFull: "", remarks: newLoan.remarks || ""
+            };
+            const disburseTxn = { id: uid("TXN"), date: todayISO(), memberId: member.id, memberName: member.name,
+                amount: loanAmount, purpose: "Loan Disbursement", type: "Loan Disbursement", loanId };
+            const nx = Object.assign(Object.assign({}, prev), { loans: [loan, ...prev.loans], transactions: [disburseTxn, ...prev.transactions] });
+            return logAudit(nx, "Loan issued", `${fmt(loanAmount)} to ${member.name} (${member.id}), monthly interest ${fmt(monthlyInterestAmount)}`);
+        }, true);
+        setNewLoan({ memberId: "", loanAmount: "", monthlyInterestAmount: "", graceMonths: "3", remarks: "" });
+    };
+    const markRepay = (loan) => {
+        const amt = Number(repay[loan.id] || 0);
+        if (amt <= 0)
+            return;
+        update(prev => {
+            const loans = prev.loans.map(l => {
+                if (l.id !== loan.id)
+                    return l;
+                const newPaid = Number(l.amountPaid || 0) + amt;
+                const outstanding = Number(l.totalPayable) - newPaid;
+                const status = outstanding <= 0 ? "Fully Paid" : (todayISO() > l.dueDate ? "Overdue" : "Active");
+                return Object.assign(Object.assign({}, l), { amountPaid: newPaid, status, datePaidFull: outstanding <= 0 ? todayISO() : "" });
+            });
+            const txn = { id: uid("TXN"), date: todayISO(), memberId: loan.memberId, memberName: loan.memberName,
+                amount: amt, purpose: "Loan Repayment", type: "Loan Repayment", loanId: loan.id };
+            const nx = Object.assign(Object.assign({}, prev), { loans, transactions: [txn, ...prev.transactions] });
+            return logAudit(nx, "Repayment recorded", `${fmt(amt)} for ${loan.memberName} (${loan.memberId})`);
+        }, true);
+        setRepay(Object.assign(Object.assign({}, repay), { [loan.id]: "" }));
+    };
+    const markPenalty = (loan) => {
+        const amt = Number(penalty[loan.id] || 0);
+        if (amt <= 0)
+            return;
+        update(prev => {
+            const loans = prev.loans.map(l => {
+                if (l.id !== loan.id)
+                    return l;
+                const newTotal = Number(l.totalPayable) + amt;
+                const outstanding = newTotal - Number(l.amountPaid || 0);
+                const status = outstanding <= 0 ? "Fully Paid" : (todayISO() > l.dueDate ? "Overdue" : "Active");
+                return Object.assign(Object.assign({}, l), { totalPayable: newTotal, status });
+            });
+            const txn = { id: uid("TXN"), date: todayISO(), memberId: loan.memberId, memberName: loan.memberName,
+                amount: amt, purpose: "Penalty charged", type: "Penalty", loanId: loan.id };
+            return Object.assign(Object.assign({}, prev), { loans, transactions: [txn, ...prev.transactions] });
+        }, true);
+        setPenalty(Object.assign(Object.assign({}, penalty), { [loan.id]: "" }));
+    };
+    const markInterest = (loan) => {
+        const outstanding = Number(loan.totalPayable) - Number(loan.amountPaid || 0);
+        const savingsNow = currentSavings(db, loan.memberId);
+        const suggested = Math.round(outstanding * interestRate(outstanding, savingsNow) / 100);
+        const amt = Number(interestAdd[loan.id]) || suggested;
+        if (!amt || amt <= 0)
+            return;
+        update(prev => {
+            const loans = prev.loans.map(l => {
+                if (l.id !== loan.id)
+                    return l;
+                const newTotal = Number(l.totalPayable) + amt;
+                const outstandingNew = newTotal - Number(l.amountPaid || 0);
+                const status = outstandingNew <= 0 ? "Fully Paid" : (todayISO() > l.dueDate ? "Overdue" : "Active");
+                return Object.assign(Object.assign({}, l), { totalPayable: newTotal, interestAmount: amt, monthlyInterestAmount: amt, status });
+            });
+            const txn = { id: uid("TXN"), date: todayISO(), memberId: loan.memberId, memberName: loan.memberName,
+                amount: amt, purpose: `Interest charged manually on outstanding ${fmt(outstanding)}`, type: "Interest", loanId: loan.id };
+            return Object.assign(Object.assign({}, prev), { loans, transactions: [txn, ...prev.transactions] });
+        }, true);
+        setInterestAdd(Object.assign(Object.assign({}, interestAdd), { [loan.id]: "" }));
+    };
+    const deleteLoan = (loan) => {
+        const linked = db.transactions.filter(t => t.loanId === loan.id && !t.voided).length;
+        const reason = window.prompt(`Void this loan (${fmt(loan.loanAmount)} to ${loan.memberName}) and all ${linked} of its linked transactions (disbursement, interest, repayments, penalties)?\n\nThis will NOT be permanently erased — everything stays in the record marked "Voided" and excluded from all balances, for audit purposes. Please give a reason:`);
+        if (reason === null || !reason.trim()) return;
+        update(prev => {
+            const loans = prev.loans.map(l => l.id === loan.id ? Object.assign({}, l, { voided: true, voidReason: reason.trim(), voidDate: todayISO() }) : l);
+            const transactions = prev.transactions.map(t => t.loanId === loan.id ? Object.assign({}, t, { voided: true, voidReason: "Voided with loan: " + reason.trim(), voidDate: todayISO() }) : t);
+            return logAudit(Object.assign({}, prev, { loans, transactions }), "Voided loan", `${fmt(loan.loanAmount)} loan to ${loan.memberName} (${loan.memberId}) and ${linked} linked transactions — reason: ${reason.trim()}`);
+        }, true);
+    };
+    const withStatus = db.loans.map(l => (l.status === "Active" && !l.voided && todayISO() > l.dueDate) ? Object.assign(Object.assign({}, l), { status: "Overdue" }) : l);
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 260px" } },
+            React.createElement("h3", { style: { margin: "0 0 14px 0", fontSize: "16px" } }, "Issue loan"),
+            React.createElement(Field, { label: "Member" },
+                React.createElement("select", { style: inputStyle, value: newLoan.memberId, onChange: e => setNewLoan(Object.assign(Object.assign({}, newLoan), { memberId: e.target.value })) },
+                    React.createElement("option", { value: "", style: { background: "#161A24", color: "#F1F0EA" } }, "Select member\u2026"),
+                    db.members.map(m => React.createElement("option", { key: m.id, value: m.id, style: { background: "#161A24", color: "#F1F0EA" } }, `${m.id} — ${m.name}`)))),
+            React.createElement(Field, { label: "Loan Amount (UGX)" },
+                React.createElement("input", { style: inputStyle, type: "number", value: newLoan.loanAmount, onChange: e => setNewLoan(Object.assign(Object.assign({}, newLoan), { loanAmount: e.target.value })) })),
+            React.createElement(Field, { label: "Monthly Interest Amount (UGX) \u2014 charged flat each month for 3 months, then reviewed" },
+                React.createElement("input", { style: inputStyle, type: "number", value: newLoan.monthlyInterestAmount, onChange: e => setNewLoan(Object.assign(Object.assign({}, newLoan), { monthlyInterestAmount: e.target.value })), placeholder: newLoan.loanAmount ? "e.g. " + Math.round(Number(newLoan.loanAmount) * 0.03) + " (3% of loan)" : "e.g. 60000" })),
+            React.createElement(Field, { label: "Grace Period (Months)" },
+                React.createElement("input", { style: inputStyle, type: "number", value: newLoan.graceMonths, onChange: e => setNewLoan(Object.assign(Object.assign({}, newLoan), { graceMonths: e.target.value })) })),
+            React.createElement(Field, { label: "Remarks (optional)" },
+                React.createElement("input", { style: inputStyle, value: newLoan.remarks, onChange: e => setNewLoan(Object.assign(Object.assign({}, newLoan), { remarks: e.target.value })) })),
+            React.createElement(Btn, { onClick: issueLoan, kind: "gold" }, "Issue Loan")),
+        React.createElement(Card, { style: { flex: "2 1 400px" } },
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } },
+                "Loans & interest (",
+                db.loans.length,
+                ")"),
+            db.loans.length === 0 ? React.createElement(Empty, { text: "No loans issued yet." }) :
+                React.createElement(Table, { cols: ["Date", "Member", "Loan", "Rate", "Grace", "Payable", "Paid", "Outstanding", "Due", "Status", "Repay", "Interest", "Penalty", ""], rows: withStatus.map(l => {
+                        const outstanding = Number(l.totalPayable) - Number(l.amountPaid || 0);
+                        const suggestedInterest = Math.round(outstanding * interestRate(outstanding, currentSavings(db, l.memberId)) / 100);
+                        const actionable = l.status !== "Fully Paid" && !l.voided;
+                        return [
+                        l.date, `${l.memberName} (${l.memberId})`, fmt(l.loanAmount), l.interestRate + "%", (l.graceMonths||3) + " Months", fmt(l.totalPayable),
+                        fmt(l.amountPaid || 0), fmt(outstanding), l.dueDate,
+                        l.voided ? React.createElement("span", { style: { color: "var(--rust)", fontSize: "11px", fontWeight: 700 } }, "VOIDED") : React.createElement(Pill, { status: l.status }),
+                        actionable ?
+                            React.createElement("div", { style: { display: "flex", gap: "6px" } },
+                                React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { width: "90px", padding: "5px 8px" }), type: "number", placeholder: "amt", value: repay[l.id] || "", onChange: e => setRepay(Object.assign(Object.assign({}, repay), { [l.id]: e.target.value })) }),
+                                React.createElement(Btn, { style: { padding: "5px 10px", fontSize: "12px" }, onClick: () => markRepay(l) }, "Record")) : "—",
+                        actionable ?
+                            React.createElement("div", { style: { display: "flex", gap: "6px" } },
+                                React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { width: "90px", padding: "5px 8px" }), type: "number", placeholder: "e.g. " + suggestedInterest, value: interestAdd[l.id] || "", onChange: e => setInterestAdd(Object.assign(Object.assign({}, interestAdd), { [l.id]: e.target.value })) }),
+                                React.createElement(Btn, { kind: "gold", style: { padding: "5px 10px", fontSize: "12px" }, onClick: () => markInterest(l) }, "Add")) : "—",
+                        actionable ?
+                            React.createElement("div", { style: { display: "flex", gap: "6px" } },
+                                React.createElement("input", { style: Object.assign(Object.assign({}, inputStyle), { width: "90px", padding: "5px 8px" }), type: "number", placeholder: "amt", value: penalty[l.id] || "", onChange: e => setPenalty(Object.assign(Object.assign({}, penalty), { [l.id]: e.target.value })) }),
+                                React.createElement(Btn, { kind: "danger", style: { padding: "5px 10px", fontSize: "12px" }, onClick: () => markPenalty(l) }, "Charge")) : "—",
+                        l.voided ? "—" : React.createElement(Btn, { kind: "danger", style: { padding: "4px 10px", fontSize: "12px" }, onClick: () => deleteLoan(l) }, "Delete")
+                    ]; }) }))));
+}
+function SummaryTab({ db }) {
+    const months = {};
+    activeTransactions(db).forEach(t => {
+        const m = t.date.slice(0, 7);
+        const key = t.memberId + "|" + m;
+        if (!months[key])
+            months[key] = { memberId: t.memberId, memberName: t.memberName, month: m, savings: 0, loanMovement: 0, profit: 0 };
+        if (t.type === "Savings")
+            months[key].savings += Number(t.amount);
+        if (t.type === "Withdraw")
+            months[key].savings -= Number(t.amount);
+        if (t.type === "Bank Charge")
+            months[key].savings -= Number(t.amount);
+        if (t.type === "Profit") {
+            months[key].savings += Number(t.amount);
+            months[key].profit += Number(t.amount);
+        }
+        if (t.type === "Loan Disbursement")
+            months[key].loanMovement += Number(t.amount);
+        if (t.type === "Loan Repayment")
+            months[key].loanMovement -= Number(t.amount);
+    });
+    const rows = Object.values(months).map(r => [
+        r.memberName, r.month, fmt(r.savings), fmt(r.loanMovement), fmt(r.profit), fmt(r.savings - r.loanMovement)
+    ]);
+    return (React.createElement(Card, null,
+        React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Monthly summary"),
+        rows.length === 0 ? React.createElement(Empty, { text: "No activity recorded yet." }) :
+            React.createElement(Table, { cols: ["Member", "Month", "Savings", "Loan Movement", "Profit", "Net Position"], rows: rows })));
+}
+function AuditLogTab({ db }) {
+    const log = db.auditLog || [];
+    return (React.createElement(Card, null,
+        React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Audit log"),
+        React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "A permanent record of loan issuance, repayments, airtime decisions, voided records, and backup restores. Since this app uses a single shared Admin PIN, every entry is recorded as \u201CAdmin\u201D rather than a named individual \u2014 this shows what happened and when, not who specifically among Admin users did it."),
+        log.length === 0 ? React.createElement(Empty, { text: "No audit entries yet." }) :
+            React.createElement(Table, { cols: ["Date", "Action", "Details"], rows: log.map(e => [e.date, e.action, e.details]) })));
+}
+function ReconciliationTab({ db, update }) {
+    const [amount, setAmount] = useState("");
+    const [note, setNote] = useState("");
+    const computedBalance = activeTransactions(db).reduce((a, t) => {
+        if (t.type === "Savings" || t.type === "Loan Repayment" || t.type === "Profit") return a + Number(t.amount);
+        if (t.type === "Withdraw" || t.type === "Loan Disbursement" || t.type === "Bank Charge") return a - Number(t.amount);
+        return a;
+    }, 0);
+    const records = (db.reconciliations || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+    const addReconciliation = () => {
+        const observed = Number(amount);
+        if (!amount || isNaN(observed)) return;
+        const variance = observed - computedBalance;
+        const rec = { id: uid("REC"), date: todayISO(), observedBalance: observed, computedBalance, variance, note: note.trim() };
+        update(prev => logAudit(Object.assign({}, prev, { reconciliations: [rec, ...(prev.reconciliations || [])] }), "Reconciliation logged", `Observed ${fmt(observed)} vs computed ${fmt(computedBalance)} (variance ${fmt(variance)})`));
+        setAmount(""); setNote("");
+    };
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 300px" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Log a reconciliation"),
+            React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "Nothing in this app checks itself against real cash or a real mobile money/bank balance. Periodically count or check the actual balance and log it here \u2014 the app will show the difference against what it calculated, so any gap gets caught early rather than compounding silently."),
+            React.createElement("div", { style: { background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", borderRadius: "8px", padding: "12px 14px", fontSize: "13px", marginBottom: "14px" } },
+                "App's computed balance right now: ", React.createElement("strong", null, fmt(computedBalance))),
+            React.createElement(Field, { label: "Actual observed balance (UGX)" },
+                React.createElement("input", { style: inputStyle, type: "number", value: amount, onChange: e => setAmount(e.target.value), placeholder: "e.g. from bank/mobile money statement or cash count" })),
+            React.createElement(Field, { label: "Note (optional)" },
+                React.createElement("input", { style: inputStyle, value: note, onChange: e => setNote(e.target.value), placeholder: "e.g. counted cash box 24 Jul" })),
+            amount && !isNaN(Number(amount)) && React.createElement("div", { style: { fontSize: "13px", marginBottom: "12px", color: Math.abs(Number(amount) - computedBalance) < 1 ? "var(--green)" : "var(--rust)" } },
+                `Variance: ${fmt(Number(amount) - computedBalance)} ${Math.abs(Number(amount) - computedBalance) < 1 ? "(matches)" : "(does not match \u2014 worth investigating)"}`),
+            React.createElement(Btn, { onClick: addReconciliation, kind: "gold" }, "Log Reconciliation")),
+        React.createElement(Card, { style: { flex: "1 1 300px" } },
+            React.createElement("h3", { style: { margin: "0 0 12px 0", fontSize: "16px" } }, "Reconciliation history"),
+            records.length === 0 ? React.createElement(Empty, { text: "No reconciliations logged yet." }) :
+                React.createElement(Table, { cols: ["Date", "Observed", "Computed", "Variance", "Note"], rows: records.map(r => [
+                        r.date, fmt(r.observedBalance), fmt(r.computedBalance),
+                        React.createElement("span", { style: { color: Math.abs(r.variance) < 1 ? "var(--green)" : "var(--rust)" } }, fmt(r.variance)),
+                        r.note || "—"
+                    ]) }))));
+}
+function BackupTab({ db, setDB }) {
+    const [msg, setMsg] = useState("");
+    const [confirming, setConfirming] = useState(false);
+    const exportSpreadsheet = () => {
+        const wb = XLSX.utils.book_new();
+        const membersSheet = db.members.map(m => ({
+            "Registration Date": m.regDate, "Member ID": m.id, "Full Name": m.name, "Login Name": m.loginName || "",
+            "Phone Number": m.phone, "Email Address": m.email, "Location": m.location
+        }));
+        const transactionsSheet = db.transactions.map(t => ({
+            "Transaction Date": t.date, "Member ID": t.memberId, "Member Name": t.memberName,
+            "Amount": t.amount, "Purpose": t.purpose, "Type": t.type, "Loan ID": t.loanId || ""
+        }));
+        const loansSheet = db.loans.map(l => ({
+            "Loan ID": l.id, "Loan Date": l.date, "Member ID": l.memberId, "Member Name": l.memberName,
+            "Loan Amount": l.loanAmount, "Interest Rate (%)": l.interestRate, "Monthly Interest": l.monthlyInterestAmount,
+            "Grace Period (Months)": l.graceMonths, "Total Payable": l.totalPayable, "Amount Paid": l.amountPaid,
+            "Outstanding": Number(l.totalPayable) - Number(l.amountPaid || 0), "Due Date": l.dueDate,
+            "Status": l.status, "Date Fully Paid": l.datePaidFull, "Remarks": l.remarks
+        }));
+        const ledgerSheet = db.ledger.map(x => ({
+            "Date": x.date, "Amount": x.amount, "Banked By": x.bankedBy, "Received By": x.receivedBy,
+            "Receipt Number": x.receiptNumber, "Type": x.type, "Purpose": x.purpose, "Member ID": x.memberId,
+            "Running Balance": x.runningBalance
+        }));
+        const airtimeSheet = (db.airtimeRequests || []).map(r => ({
+            "Date": r.date, "Member ID": r.memberId, "Member Name": r.memberName, "Phone": r.phone,
+            "Airtime Amount": r.airtimeAmount, "Fee": r.fee, "Total": r.total, "Status": r.status, "Fulfilled Date": r.fulfilledDate || ""
+        }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(membersSheet), "Member Registration");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(transactionsSheet), "Member Transactions");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(loansSheet), "Loans and Interest");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ledgerSheet), "Administration");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(airtimeSheet), "Airtime Requests");
+        XLSX.writeFile(wb, `SOB_Savings_Backup_${todayISO()}.xlsx`);
+        const nx = Object.assign({}, db, { lastBackupDate: todayISO() });
+        setDB(nx); saveDB(nx);
+        setMsg(`Spreadsheet downloaded: SOB_Savings_Backup_${todayISO()}.xlsx — open it in Excel or upload it to Google Sheets to review.`);
+    };
+    const exportBackup = () => {
+        const payload = JSON.stringify(db, null, 2);
+        const blob = new Blob([payload], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `sob-savings-backup-${todayISO()}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        const nx = Object.assign({}, db, { lastBackupDate: todayISO() });
+        setDB(nx); saveDB(nx);
+        setMsg(`Backup downloaded: sob-savings-backup-${todayISO()}.json (${db.members.length} members, ${db.transactions.length} transactions, ${db.loans.length} loans).`);
+    };
+    const [verifyResult, setVerifyResult] = useState(null);
+    const handleVerifyFile = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const parsed = JSON.parse(ev.target.result);
+                const okShape = Array.isArray(parsed.members) && Array.isArray(parsed.transactions) && Array.isArray(parsed.loans);
+                if (!okShape) {
+                    setVerifyResult({ ok: false, message: "This file's structure doesn't match a valid SOB backup (missing members/transactions/loans arrays)." });
+                }
+                else {
+                    setVerifyResult({
+                        ok: true,
+                        message: `Looks valid: ${parsed.members.length} members, ${parsed.transactions.length} transactions, ${parsed.loans.length} loans, ${(parsed.airtimeRequests || []).length} airtime requests, ${(parsed.auditLog || []).length} audit entries. This file was only read, not applied — nothing in the live system was changed.`
+                    });
+                }
+            }
+            catch (err) {
+                setVerifyResult({ ok: false, message: "Could not parse this file as JSON — it may be corrupted or not a real backup file." });
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+    };
+    const handleFile = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const parsed = JSON.parse(ev.target.result);
+                if (!Array.isArray(parsed.members) || !Array.isArray(parsed.transactions)) {
+                    setMsg("This file doesn't look like a valid SOB backup — restore cancelled.");
+                    return;
+                }
+                setConfirming(parsed);
+                setMsg("");
+            }
+            catch (err) {
+                setMsg("Could not read that file — make sure it's an unmodified backup JSON file.");
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+    };
+    const doRestore = () => {
+        if (!confirming) return;
+        const restored = logAudit(confirming, "Backup restored", `Replaced ${db.members.length} members/${db.transactions.length} transactions with a backup containing ${confirming.members.length} members/${confirming.transactions.length} transactions`);
+        setDB(restored);
+        saveDB(restored);
+        forceAutoBackup(restored);
+        setMsg(`Restored: ${confirming.members.length} members, ${confirming.transactions.length} transactions, ${confirming.loans.length} loans. This REPLACED everything that was here before.`);
+        setConfirming(null);
+    };
+    return (React.createElement("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+        React.createElement(Card, { style: { flex: "1 1 100%", background: AUTO_BACKUP_URL ? "rgba(47,191,113,0.06)" : "rgba(255,255,255,0.03)", border: AUTO_BACKUP_URL ? "1px solid rgba(47,191,113,0.3)" : "1px solid var(--line)" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Automatic safety-net backup"),
+            AUTO_BACKUP_URL
+                ? React.createElement("p", { style: { margin: 0, fontSize: "13px", color: "var(--green)" } }, "\u2713 Configured — a snapshot is sent automatically to a separate Google Drive folder at most once per hour, in the background. This is a one-way safety copy only; nothing reads from it and nothing depends on it being available.")
+                : React.createElement("p", { style: { margin: 0, fontSize: "13px", color: "var(--ink-soft)" } }, "Not yet configured — right now, protection against data loss depends entirely on the manual downloads below. See Code_Backup.gs for how to set up automatic Drive backups (separate from this app's own storage, one-way only).")),
+        React.createElement(Card, { style: { flex: "1 1 280px" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Export backup"),
+            React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "Downloads everything — members, transactions, loans, ledger, airtime requests — as a single file to your device. Do this regularly, and keep the file somewhere safe (email it to yourself, save to Google Drive, etc.)."),
+            React.createElement("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+                React.createElement(Btn, { onClick: exportSpreadsheet, kind: "gold" }, "Download as Spreadsheet (.xlsx)"),
+                React.createElement(Btn, { onClick: exportBackup, kind: "ghost" }, "Download Full Backup (.json)")),
+            React.createElement("p", { style: { margin: "14px 0 0 0", fontSize: "12px", color: "var(--ink-soft)" } }, "The spreadsheet is for reviewing and sharing — open it in Excel or Google Sheets like the master file. The JSON file is what \u201CRestore\u201D below actually uses, since it preserves everything exactly."),
+            React.createElement("p", { style: { margin: "10px 0 0 0", fontSize: "12px", color: "var(--ink-soft)" } },
+                `Current data: ${db.members.length} members, ${db.transactions.length} transactions, ${db.loans.length} loans, ${(db.airtimeRequests || []).length} airtime requests.`)),
+        React.createElement(Card, { style: { flex: "1 1 280px" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Verify a backup file"),
+            React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "Checks that a backup file is readable and looks structurally valid, WITHOUT applying it — nothing in the live system changes. Use this periodically to confirm your backups can actually be recovered, not just that a download happened."),
+            React.createElement("input", { type: "file", accept: "application/json", onChange: handleVerifyFile, style: Object.assign({}, inputStyle, { padding: "8px" }) }),
+            verifyResult && React.createElement("div", { style: { marginTop: "12px", fontSize: "13px", background: verifyResult.ok ? "rgba(47,191,113,0.08)" : "#F9D3D3", border: "1px solid " + (verifyResult.ok ? "rgba(47,191,113,0.3)" : "#E8A3A3"), color: verifyResult.ok ? "var(--green)" : "#8A1414", borderRadius: "8px", padding: "10px 12px" } }, (verifyResult.ok ? "\u2713 " : "\u2717 ") + verifyResult.message)),
+        React.createElement(Card, { style: { flex: "1 1 280px" } },
+            React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "16px" } }, "Restore from backup"),
+            React.createElement("p", { style: { margin: "0 0 14px 0", fontSize: "13px", color: "var(--ink-soft)" } }, "Upload a previously downloaded backup file to restore it. This REPLACES all current data — use this to recover from a mistake or after moving to a new link."),
+            React.createElement("input", { type: "file", accept: "application/json", onChange: handleFile, style: Object.assign({}, inputStyle, { padding: "8px" }) }),
+            confirming && (React.createElement("div", { style: { marginTop: "14px", background: "#F9D3D3", border: "1px solid #E8A3A3", color: "#8A1414", borderRadius: "8px", padding: "12px 14px", fontSize: "13px" } },
+                React.createElement("div", { style: { marginBottom: "10px" } },
+                    `This file contains ${confirming.members.length} members, ${confirming.transactions.length} transactions, ${confirming.loans.length} loans. Restoring will PERMANENTLY REPLACE everything currently in the system (${db.members.length} members, ${db.transactions.length} transactions right now). This cannot be undone.`),
+                React.createElement("div", { style: { display: "flex", gap: "8px" } },
+                    React.createElement(Btn, { kind: "danger", style: { padding: "6px 12px", fontSize: "12px" }, onClick: doRestore }, "Yes, Replace Everything"),
+                    React.createElement(Btn, { kind: "ghost", style: { padding: "6px 12px", fontSize: "12px" }, onClick: () => setConfirming(null) }, "Cancel")))),
+            msg && React.createElement("div", { style: { marginTop: "12px", fontSize: "13px", color: confirming ? "var(--ink-soft)" : "var(--green)" } }, msg))));
+}
+/* ============ GENERIC TABLE / EMPTY / SHELL ============ */
+function Table({ cols, rows }) {
+    return (React.createElement("div", { style: { overflowX: "auto" } },
+        React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "13px" } },
+            React.createElement("thead", null,
+                React.createElement("tr", null, cols.map((c, i) => React.createElement("th", { key: i, style: { textAlign: "left", padding: "8px 10px", color: "var(--ink-soft)", fontWeight: 600, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" } }, c)))),
+            React.createElement("tbody", null, rows.map((r, i) => (React.createElement("tr", { key: i }, r.map((c, j) => React.createElement("td", { key: j, style: { padding: "8px 10px", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" } }, c)))))))));
+}
+function Empty({ text }) {
+    return React.createElement("div", { style: { padding: "24px", textAlign: "center", color: "var(--ink-soft)", fontSize: "13px", border: "1px dashed var(--line)", borderRadius: "10px" } }, text);
+}
+function SaveStatusBanner() {
+    const [status, setStatus] = useState(null);
+    useEffect(() => {
+        const off = onSaveStatus(s => {
+            setStatus(s);
+            if (s.ok) {
+                setTimeout(() => setStatus(prev => (prev === s ? null : prev)), 2500);
+            }
+        });
+        return off;
+    }, []);
+    if (!status) return null;
+    if (status.ok) {
+        return React.createElement("div", { style: { position: "fixed", bottom: "16px", right: "16px", background: "var(--green)", color: "#fff", padding: "8px 14px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, zIndex: 999, boxShadow: "0 4px 12px rgba(0,0,0,0.15)" } }, "\u2713 Saved");
+    }
+    return React.createElement("div", { style: { position: "fixed", bottom: "16px", right: "16px", left: "16px", maxWidth: "420px", marginLeft: "auto", background: "var(--rust)", color: "#fff", padding: "12px 16px", borderRadius: "10px", fontSize: "13px", fontWeight: 600, zIndex: 999, boxShadow: "0 4px 12px rgba(0,0,0,0.2)" } }, "\u26A0\uFE0F " + status.error);
+}
+function Shell({ title, subtitle, onLogout, children }) {
+    return (React.createElement("div", { style: { minHeight: "100vh" } },
+        React.createElement("div", { style: { background: "rgba(22,26,36,0.85)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", borderBottom: "1px solid var(--line)", color: "var(--text)", padding: "18px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+            React.createElement("div", null,
+                React.createElement("div", { style: { fontSize: "11px", letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--gold-dim)" } }, subtitle),
+                React.createElement("div", { className: "display", style: { fontSize: "20px", fontWeight: 600 } }, title)),
+            React.createElement("button", { onClick: onLogout, style: { background: "rgba(255,255,255,0.03)", border: "1px solid var(--line)", color: "var(--text)", padding: "7px 14px", borderRadius: "8px", fontSize: "13px" } }, "Sign out")),
+        React.createElement("div", { style: { padding: "20px", maxWidth: "1100px", margin: "0 auto" } }, children),
+        React.createElement(SaveStatusBanner, null)));
+}
+/* ============ ROOT APP ============ */
+const KNOWN_DEFAULT_PINS = { admin: "2026" };
+function ForcePinChange({ role, oldPin, onDone, onSkip }) {
+    const [newPin, setNewPin] = useState("");
+    const [confirm, setConfirm] = useState("");
+    const [error, setError] = useState("");
+    const [busy, setBusy] = useState(false);
+    const submit = async () => {
+        if (newPin.length < 4) { setError("New PIN must be at least 4 characters."); return; }
+        if (newPin === oldPin) { setError("New PIN must be different from the default."); return; }
+        if (newPin !== confirm) { setError("The two entries don't match."); return; }
+        setBusy(true);
+        const result = await changePin(role.toUpperCase(), oldPin, newPin);
+        setBusy(false);
+        if (result.ok) onDone();
+        else setError(result.error || "Could not change the PIN. Please try again.");
+    };
+    return React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" } },
+        React.createElement("div", { style: { width: "100%", maxWidth: "380px" } },
+            React.createElement(Card, null,
+                React.createElement("h3", { style: { margin: "0 0 8px 0", fontSize: "17px" } }, "Set a new PIN"),
+                React.createElement("p", { style: { margin: "0 0 16px 0", fontSize: "13px", color: "var(--ink-soft)" } }, `You're still using the default ${role} PIN. Please set a private one before continuing.`),
+                React.createElement(Field, { label: "New PIN" },
+                    React.createElement("input", { style: inputStyle, type: "password", value: newPin, onChange: e => setNewPin(e.target.value) })),
+                React.createElement(Field, { label: "Confirm New PIN" },
+                    React.createElement("input", { style: inputStyle, type: "password", value: confirm, onChange: e => setConfirm(e.target.value) })),
+                error && React.createElement("div", { style: { color: "var(--rust)", fontSize: "13px", marginBottom: "10px" } }, error),
+                React.createElement(Btn, { onClick: submit, kind: "gold", style: { width: "100%", opacity: busy ? 0.6 : 1, marginBottom: "10px" } }, busy ? "Saving\u2026" : "Set New PIN"),
+                React.createElement(Btn, { onClick: onSkip, kind: "ghost", style: { width: "100%" } }, "Skip for now"))));
+}
+function App() {
+    const [db, setDB] = useState(emptyDB());
+    const [loading, setLoading] = useState(true);
+    const [session, setSession] = useState(null);
+    const [pinChangeDone, setPinChangeDone] = useState(false);
+    useEffect(() => { loadDB().then(d => {
+        const aged = applyLoanAging(d);
+        if (aged !== d) { saveDB(aged); }
+        setDB(aged); setLoading(false);
+    }); }, []);
+    if (loading) {
+        return React.createElement("div", { style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-soft)" } }, "Loading\u2026");
+    }
+    if (!session) {
+        return React.createElement(Login, { db: db, onLogin: setSession });
+    }
+    const isStaff = session.role === "admin" || session.role === "treasurer" || session.role === "oversight";
+    const usingDefaultPin = isStaff && AUTH_SERVER_URL && !pinChangeDone && session._rawPin && KNOWN_DEFAULT_PINS[session.role] && session._rawPin === KNOWN_DEFAULT_PINS[session.role];
+    if (usingDefaultPin) {
+        return React.createElement(ForcePinChange, {
+            role: session.role, oldPin: session._rawPin,
+            onDone: () => setPinChangeDone(true),
+            onSkip: () => setPinChangeDone(true)
+        });
+    }
+    if (isStaff) {
+        return React.createElement(AdminPortal, { db: db, setDB: setDB, logout: () => setSession(null), role: session.role });
+    }
+    return React.createElement(MemberPortal, { member: session.member, db: db, setDB: setDB, logout: () => setSession(null) });
+}
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App, null));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</script>
+</body>
+</html>
