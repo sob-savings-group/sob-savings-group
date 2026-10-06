@@ -1,1 +1,1 @@
-{ "name": "sob-lifetime-platform", "private": true, "scripts": { "build": "node build/build-gs.js", "test": "node tests/core.test.js && node tests/workflow.test.js && node tests/backend.test.js" } }
+{ "name": "sob-lifetime-platform", "private": true, "scripts": { "build": "node build/build-gs.js", "test": "node tests/core.test.js && node tests/workflow.test.js && node tests/backend.test.js && node tests/client_reports.test.js" } }
