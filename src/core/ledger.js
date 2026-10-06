@@ -18,8 +18,12 @@
     interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
   };
 
-  const activeTransactions = (db) => (db.transactions || []).filter((t) => !t.voided);
-  const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided);
+  // Entries awaiting/failed second-person approval never count toward any figure.
+  const isCounted = (t) => !t.voided && (t.approvalStatus === undefined || t.approvalStatus === "Approved");
+  const activeTransactions = (db) => (db.transactions || []).filter(isCounted);
+  // Loans that are not (yet / any longer) booked never count toward outstanding or exposure.
+  const NOT_BOOKED = ["Pending", "Approved", "Declined", "Reversed"];
+  const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided && !NOT_BOOKED.includes(l.status));
 
   function classifyTransaction(t) {
     const amt = Number(t.amount) || 0;
@@ -30,6 +34,12 @@
       case "Profit": return { savings: amt, loan: 0, profit: amt, cashflow: amt };
       case "Loan Disbursement": return { savings: 0, loan: -amt, profit: 0, cashflow: -amt };
       case "Loan Repayment": return { savings: 0, loan: amt, profit: 0, cashflow: amt };
+      // Group-level movements: they change cash, never a member's savings.
+      // (Subscription treated as group income, not a deduction from savings: ASSUMPTION, see Open Q8.)
+      case "Subscription":
+      case "Income": return { savings: 0, loan: 0, profit: 0, cashflow: amt };
+      case "Expense": return { savings: 0, loan: 0, profit: 0, cashflow: -amt };
+      case "Share-Out": return { savings: -amt, loan: 0, profit: 0, cashflow: -amt };
       case "Interest":
       case "Penalty": return { savings: 0, loan: -amt, profit: 0, cashflow: 0 };
       default: return { savings: 0, loan: 0, profit: 0, cashflow: 0 };
@@ -45,9 +55,12 @@
   }
 
   /* --- Loans: assignedMonthlyInterest is set per loan by Admin; SOB has no standard rate. --- */
+  // A cleared loan stops accruing on the day it was cleared (otherwise "months to today" would revive its balance).
+  const effectiveAsOf = (loan, asOf) =>
+    (loan.status === "Cleared" && dates.isISO(loan.datePaidFull)) ? loan.datePaidFull : (asOf || dates.todayISO());
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
-    const elapsed = dates.monthsBetween(loan.date, asOf || dates.todayISO());
+    const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
     return Math.max(0, elapsed - (Number(loan.graceMonths) || 0));
   }
   const loanAccumulatedInterest = (loan, asOf) =>
@@ -109,7 +122,7 @@
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, CONFIG_PENDING, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, CONFIG_PENDING, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
