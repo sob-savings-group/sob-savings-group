@@ -37,12 +37,13 @@
     if (!body || typeof body !== "object") return fail("INVALID_REQUEST");
     try {
       if (body.action === "ping") return { ok: true, pong: true };
-      if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users") }, body.id, body.pin);
+      if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
       const usersDb = { users: S.readCollection(env.ss, "users") };
       const user = A.session(env, usersDb, body.token);
       if (!user) return fail("UNAUTHENTICATED");
       const asOf = D.todayISO();
 
+      if (user.readOnly && !["whoami", "getLedger", "logout"].includes(body.action)) return fail("READ_ONLY: you signed in with your name, which is view-only. Sign out and use your PIN to do this");
       if (user.mustChangePin && !["setPin", "logout", "whoami"].includes(body.action)) return fail("PIN_CHANGE_REQUIRED: set your own PIN before continuing");
       if (body.action === "logout") { A.logout(env, body.token); return { ok: true }; }
       if (body.action === "whoami") return { ok: true, user };

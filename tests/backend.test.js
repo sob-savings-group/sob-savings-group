@@ -55,6 +55,16 @@ t("login: wrong PIN refused, 5 failures lock the account even for the right PIN"
   assert.match(w.call({ action: "login", id: "COMM", pin: "comm-pin-1" }).error, /LOCKED/);
   assert.equal(w.call({ action: "login", id: "NOBODY", pin: "x" }).error, "BAD_CREDENTIALS");
 });
+t("members can sign in with SOB ID + first OR last name: view-only; staff cannot; wrong names fail and count toward lockout", () => {
+  const w = world(), parts = memberWith.name.split(/[^A-Za-z]+/).filter((x) => x.length >= 3); assert.ok(parts.length >= 1);
+  parts.forEach((p, i) => { const r = w.call({ action: "login", id: memberWith.id.toLowerCase(), pin: i % 2 ? p.toUpperCase() : p.toLowerCase() }); assert.ok(r.ok && r.user.readOnly, "name " + p);
+    const led = w.call({ action: "getLedger", token: r.token }); assert.ok(led.ok, "can view");
+    assert.match(w.call({ action: "command", token: r.token, name: "requestAirtime", args: {} }).error, /READ_ONLY/);
+    assert.match(w.call({ action: "setPin", token: r.token, id: memberWith.id, newPin: "999999" }).error, /READ_ONLY/); });
+  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "Notaname" }).error, "BAD_CREDENTIALS");
+  assert.equal(w.call({ action: "login", id: "ADMIN", pin: "admin" }).error, "BAD_CREDENTIALS");
+  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "1234" }).user.readOnly, undefined, "PIN sign-in stays full access");
+});
 t("PINs are stored hashed+salted, never in plain text, and never sent to any client", () => {
   const w = world(), users = S.readCollection(w.env.ss, "users");
   users.forEach((u) => { assert.ok(u.pinHash && u.salt); assert.ok(!JSON.stringify(u).includes("admin-pin-1") && !JSON.stringify(u).includes("1234")); });

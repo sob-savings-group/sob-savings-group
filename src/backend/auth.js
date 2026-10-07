@@ -23,22 +23,33 @@
     if (o.mustChange) u.mustChange = true;
     return u;
   }
+  const tokens = (n) => String(n || "").toLowerCase().split(/[^a-z\u00c0-\u024f]+/).filter((x) => x.length >= 3);
+  function nameMatches(db, u, given) {
+    const g = String(given || "").trim().toLowerCase(); if (g.length < 3 || !/[a-z]/.test(g)) return false;
+    const m = (db.members || []).find((x) => x.id === u.memberId);
+    return tokens(u.name).concat(tokens(m && m.name)).includes(g);
+  }
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
     const u = findUser(db, id);
     const good = u && u.pinHash && safeEq(stretch(env, u.salt, String(pin || "")), u.pinHash);
-    if (!good) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" }; }
+    /* Members may also sign in with their SOB ID + any ONE of their names (first or last). That is a VIEW-ONLY session (names are not secret):
+       statements and balances yes; guarantee acceptance, airtime, PIN changes etc. need the PIN. Staff roles always need their PIN. */
+    const viaName = !good && u && u.role === "Member" && nameMatches(db, u, pin);
+    if (!good && !viaName) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" }; }
     env.cache.remove(k);
     const token = env.randomToken() + env.randomToken();
     env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
+    if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
   function session(env, db, token) {
     if (!token || typeof token !== "string") return null;
     const id = env.cache.get("sess:" + env.hash(token)); if (!id) return null;
-    const u = findUser(db, id); return u ? publicUser(u) : null;
+    const u = findUser(db, id); if (!u) return null;
+    const ro = !!env.cache.get("ro:" + env.hash(token)); return ro ? Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) : publicUser(u);
   }
   function logout(env, token) { if (token) env.cache.remove("sess:" + env.hash(token)); }
   /* Returns the updated user record (caller persists). Admin may set anyone's PIN; everyone may change their own (old PIN required). */

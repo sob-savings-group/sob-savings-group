@@ -24,10 +24,12 @@
     document.body.append(bg); return { close };
   }
   /* Busy: one global "working" indicator (spinner + message + progress bar) used for sign-in, loading, saving and report generation. */
-  const Busy = (() => { let el = null, n = 0; const msgEl = h("span", { id: "busy-msg" }, "");
+  const Busy = (() => { let el = null, n = 0, tick = null, t0 = 0, base = ""; const msgEl = h("span", { id: "busy-msg" }, "");
     const ensure = () => { if (!el) { el = h("div", { id: "busy", class: "busy", role: "status", "aria-live": "polite" }, h("div", { class: "busy-bar" }), h("div", { class: "busy-box" }, h("span", { class: "spin" }), msgEl)); } if (!el.isConnected) document.body.append(el); };
-    const show = (m) => { ensure(); msgEl.textContent = m || "Working…"; el.style.display = "flex"; document.body.setAttribute("aria-busy", "true"); };
-    const hide = () => { if (el) el.style.display = "none"; document.body.removeAttribute("aria-busy"); };
+    /* After 4 s the message says how long it has been and why (Google's servers can need up to a minute on a cold start) so it never looks frozen. */
+    const paint = () => { const s = Math.round((Date.now() - t0) / 1000); msgEl.textContent = base + (s >= 4 ? " " + s + "s — Google is still working, please wait" : ""); };
+    const show = (m) => { ensure(); base = m || "Working…"; if (!tick) { t0 = Date.now(); tick = setInterval(paint, 1000); } paint(); el.style.display = "flex"; document.body.setAttribute("aria-busy", "true"); };
+    const hide = () => { if (tick) { clearInterval(tick); tick = null; } if (el) el.style.display = "none"; document.body.removeAttribute("aria-busy"); };
     return { set(m) { if (m) show(m); else hide(); },
       async run(m, fn) { n++; show(m); await new Promise((r) => setTimeout(r, 30)); try { return await fn(); } finally { if (--n <= 0) { n = 0; hide(); } } } }; })();
   function toast(msg, bad) { const t = h("div", { class: "toast" + (bad ? " bad" : ""), role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), bad ? 6000 : 3000); }

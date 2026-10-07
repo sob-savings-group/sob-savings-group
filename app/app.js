@@ -29,11 +29,28 @@
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
-      const pin = h("input", { type: "password", id: "pin", placeholder: "PIN", autocomplete: "current-password" }), mid = h("input", { id: "mid", placeholder: "Member ID or staff ID", autocapitalize: "characters" });
-      box.append(h("label", null, "ID"), mid, h("label", null, "PIN"), pin, h("div", { class: "row" }, h("button", { class: "primary", id: "login-go", onclick: async () => {
-        try { await st.store.login(mid.value.trim(), pin.value); st.user = st.store.user; st.view = null; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } render(); }
-        catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "Wrong ID or PIN" : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
-      } }, "Sign in")));
+      let tab = "Member";
+      const mid = h("input", { id: "mid", placeholder: "SOB-015", autocapitalize: "characters", autocomplete: "username" }), nm = h("input", { id: "nm", placeholder: "e.g. Aaron", autocomplete: "off" }), pin = h("input", { type: "password", id: "pin", autocomplete: "current-password" });
+      const go = async () => {
+        try {
+          const secret = tab === "Member" && !pin.value.trim() ? nm.value.trim() : pin.value.trim();
+          await st.store.login(mid.value.trim(), secret); st.user = st.store.user; st.view = null; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } render();
+        } catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "Wrong ID, or the name / PIN does not match" : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+      };
+      [mid, nm, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      const fields = h("div", null), tabs = h("div", { class: "tabs" });
+      const draw = () => {
+        tabs.replaceChildren(...["Member", "Admin"].map((t) => h("button", { type: "button", class: t === tab ? "on" : "", "data-tab": t, onclick: () => { tab = t; draw(); } }, t === "Admin" ? "Admin / Officer" : t)));
+        fields.replaceChildren(...(tab === "Member"
+          ? [h("label", null, "Member ID (e.g. SOB-015)"), mid, h("label", null, "First or last name"), nm, h("label", null, "PIN (needed to request airtime or accept guarantees)"), pin, h("p", { class: "mute", style: "font-size:12px" }, "ID + name = view-only (balances, statements). Add your PIN for full access. Sign-in never depends on your subscription status.")]
+          : [h("label", null, "Staff ID"), mid, h("label", null, "PIN"), pin]));
+      };
+      draw();
+      const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
+      box.className = "card login"; box.removeAttribute("style");
+      box.replaceChildren(h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."), tabs, fields,
+        h("div", { class: "row" }, h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In")),
+        h("p", { class: "mute", style: "font-size:12px;text-align:center" }, "Need help? " + help.map((o) => o[1] + " " + o[0] + " " + o[2]).join(" · ")));
     }
     return box;
   }
@@ -59,8 +76,8 @@
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
     const nav = (isStaff() ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
-    app.append(h("header", null, h("h1", null, "SOB " + (isStaff() ? "Admin" : "Member")), h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV"), h("span", { class: "pill" }, roleLabel(st.user.role) + " · " + st.user.name),
-      st.live ? h("button", { id: "my-pin", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed")) }, "My PIN") : null,
+    app.append(h("header", null, h("h1", null, "SOB " + (isStaff() ? "Admin" : "Member")), h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV"), h("span", { class: "pill" }, roleLabel(st.user.role) + " · " + st.user.name + (st.user.readOnly ? " · VIEW ONLY (signed in by name)" : "")),
+      st.live && !st.user.readOnly ? h("button", { id: "my-pin", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed")) }, "My PIN") : null,
       h("button", { id: "logout", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, "Sign out")),
       h("nav", null, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l, k === "airtime" && isStaff() && pendingAirtime() ? " (" + pendingAirtime() + ")" : "", k === "approvals" && isStaff() && K.dashboard(st.db, today()).awaitingApproval.value ? " (" + K.dashboard(st.db, today()).awaitingApproval.value + ")" : ""))));
     const main = h("main", { id: "main" }); app.append(main);

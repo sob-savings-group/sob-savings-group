@@ -16,8 +16,9 @@
       busy++; busyLabel = { login: "Signing in…", getLedger: "Loading the ledger…", command: "Saving…", whoami: "Checking your session…" }[body.action] || "Working…"; emit();
       let j;
       try {
-        const r = await o.fetch(o.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ token }, body)) });
-        j = await r.json();
+        const TIMEOUT = o.timeoutMs || 120000; let timer;
+        const r = await Promise.race([o.fetch(o.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ token }, body)) }), new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error("TIMEOUT: Google did not answer in 2 minutes. Check your internet and try again."), { code: "TIMEOUT" })), TIMEOUT); })]);
+        clearTimeout(timer); j = await r.json();
       } finally { busy--; emit(); }
       if (!j.ok) { if (j.error === "UNAUTHENTICATED") { token = null; user = null; keep.set(null); status = "signed-out"; emit(); } const e = new Error(j.error || "REQUEST_FAILED"); e.code = String(j.error || "").split(":")[0]; throw e; }
       return j;
