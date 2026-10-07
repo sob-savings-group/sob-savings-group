@@ -32,6 +32,16 @@ function world() {
 }
 const cmd = (w, token, name, args) => w.call({ action: "command", token, name, args });
 
+t("PIN lifecycle: Admin-set PINs must be replaced by the owner; owner-set PINs are private; imported slips are forced to change", () => {
+  const w = world();
+  assert.ok(w.call({ action: "setPin", token: w.admin, userId: memberWith.id, newPin: "8642" }).ok);
+  const t1 = w.call({ action: "login", id: memberWith.id, pin: "8642" }); assert.equal(t1.user.mustChangePin, true); assert.match(w.call({ action: "getLedger", token: t1.token }).error, /PIN_CHANGE_REQUIRED/);
+  assert.ok(w.call({ action: "setPin", token: t1.token, oldPin: "8642", newPin: "9753" }).ok); assert.equal(w.call({ action: "whoami", token: t1.token }).user.mustChangePin, false);
+  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "9753" }).user.mustChangePin, false);
+  const env = w.env, u = A.makeUser(env, { id: "X1", role: "Member", memberId: otherMember.id, pin: "4455" });
+  assert.ok(w.call({ action: "importUsers", token: w.admin, users: [{ id: "X1", name: "x", role: "Member", memberId: otherMember.id, salt: u.salt, pinHash: u.pinHash }] }).ok);
+  assert.equal(w.call({ action: "login", id: "X1", pin: "4455" }).user.mustChangePin, true);
+});
 t("no token / garbage token / missing action are all refused", () => {
   const w = world();
   for (const tk of [undefined, "", "abc", "ADMIN", 123, {}]) assert.equal(w.call({ action: "getLedger", token: tk }).error, "UNAUTHENTICATED");
@@ -178,7 +188,11 @@ t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox
   const tk = call({ action: "login", id: "ADMIN", pin: "longpin-1" }).token; assert.ok(tk);
   assert.ok(call({ action: "importSnapshot", token: tk, db: db0 }).ok);
   assert.ok(call({ action: "createUser", token: tk, user: { id: memberWith.id, role: "Member", memberId: memberWith.id, pin: "2468" } }).ok);
-  const mt = call({ action: "login", id: memberWith.id, pin: "2468" }).token;
+  const ml = call({ action: "login", id: memberWith.id, pin: "2468" }), mt = ml.token;
+  assert.equal(ml.user.mustChangePin, true, "an Admin-created sign-in must be changed by its owner");
+  assert.match(call({ action: "getLedger", token: mt }).error, /PIN_CHANGE_REQUIRED/); assert.match(call({ action: "command", token: mt, name: "createEntry", args: {} }).error, /PIN_CHANGE_REQUIRED/);
+  assert.match(call({ action: "setPin", token: mt, oldPin: "2468", newPin: "2468" }).error, /different/);
+  assert.ok(call({ action: "setPin", token: mt, oldPin: "2468", newPin: "1357" }).ok); assert.ok(call({ action: "getLedger", token: mt }).ok);
   assert.match(call({ action: "command", token: mt, name: "createEntry", args: { date: "2026-02-01", memberId: memberWith.id, amount: 1, type: "Savings" } }).error, /FORBIDDEN/);
   assert.ok(call({ action: "command", token: tk, name: "createEntry", args: { date: "2026-02-01", memberId: memberWith.id, amount: 1, type: "Savings" } }).ok);
   assert.equal(JSON.parse(sandbox.doPost({ postData: { contents: "not json" } }).s).error, "INVALID_REQUEST");

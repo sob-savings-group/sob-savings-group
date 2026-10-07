@@ -11,7 +11,7 @@
   const MIN_PIN = { Admin: 6, Committee: 6, Member: 4 };
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
-  const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null });
+  const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });
   const findUser = (db, id) => (db.users || []).find((u) => String(u.id).toUpperCase() === String(id || "").trim().toUpperCase() && u.status !== "Disabled");
 
   function makeUser(env, o) {
@@ -19,7 +19,9 @@
     if (o.role === "Member" && !o.memberId) throw new Error("INVALID: member users need a memberId");
     const pin = String(o.pin || ""); if (pin.length < MIN_PIN[o.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[o.role] + " characters for " + o.role);
     const salt = env.randomToken();
-    return { id: o.id, name: o.name || o.id, role: o.role, memberId: o.memberId || "", phone: o.phone || "", status: "Active", salt, pinHash: stretch(env, salt, pin) };
+    const u = { id: o.id, name: o.name || o.id, role: o.role, memberId: o.memberId || "", phone: o.phone || "", status: "Active", salt, pinHash: stretch(env, salt, pin) };
+    if (o.mustChange) u.mustChange = true;
+    return u;
   }
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
@@ -47,7 +49,10 @@
       if (!safeEq(stretch(env, t.salt, String(oldPin || "")), t.pinHash)) throw new Error("BAD_CREDENTIALS: current PIN is wrong");
     }
     if (String(newPin || "").length < MIN_PIN[t.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[t.role] + " characters for " + t.role);
-    t.salt = env.randomToken(); t.pinHash = stretch(env, t.salt, String(newPin)); return t;
+    if (actor.id === t.id && oldPin !== undefined && String(newPin) === String(oldPin)) throw new Error("WEAK_PIN: choose a PIN different from the current one");
+    t.salt = env.randomToken(); t.pinHash = stretch(env, t.salt, String(newPin));
+    if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
+    return t;
   }
   return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser };
 });

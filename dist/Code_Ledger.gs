@@ -1274,7 +1274,7 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
   const MIN_PIN = { Admin: 6, Committee: 6, Member: 4 };
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
-  const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null });
+  const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });
   const findUser = (db, id) => (db.users || []).find((u) => String(u.id).toUpperCase() === String(id || "").trim().toUpperCase() && u.status !== "Disabled");
 
   function makeUser(env, o) {
@@ -1282,7 +1282,9 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     if (o.role === "Member" && !o.memberId) throw new Error("INVALID: member users need a memberId");
     const pin = String(o.pin || ""); if (pin.length < MIN_PIN[o.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[o.role] + " characters for " + o.role);
     const salt = env.randomToken();
-    return { id: o.id, name: o.name || o.id, role: o.role, memberId: o.memberId || "", phone: o.phone || "", status: "Active", salt, pinHash: stretch(env, salt, pin) };
+    const u = { id: o.id, name: o.name || o.id, role: o.role, memberId: o.memberId || "", phone: o.phone || "", status: "Active", salt, pinHash: stretch(env, salt, pin) };
+    if (o.mustChange) u.mustChange = true;
+    return u;
   }
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
@@ -1310,7 +1312,10 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
       if (!safeEq(stretch(env, t.salt, String(oldPin || "")), t.pinHash)) throw new Error("BAD_CREDENTIALS: current PIN is wrong");
     }
     if (String(newPin || "").length < MIN_PIN[t.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[t.role] + " characters for " + t.role);
-    t.salt = env.randomToken(); t.pinHash = stretch(env, t.salt, String(newPin)); return t;
+    if (actor.id === t.id && oldPin !== undefined && String(newPin) === String(oldPin)) throw new Error("WEAK_PIN: choose a PIN different from the current one");
+    t.salt = env.randomToken(); t.pinHash = stretch(env, t.salt, String(newPin));
+    if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
+    return t;
   }
   return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser };
 });
@@ -1362,6 +1367,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
       if (!user) return fail("UNAUTHENTICATED");
       const asOf = D.todayISO();
 
+      if (user.mustChangePin && !["setPin", "logout", "whoami"].includes(body.action)) return fail("PIN_CHANGE_REQUIRED: set your own PIN before continuing");
       if (body.action === "logout") { A.logout(env, body.token); return { ok: true }; }
       if (body.action === "whoami") return { ok: true, user };
       if (body.action === "getLedger") { const db = S.readAll(env.ss); return { ok: true, user, db: viewFor(db, user, asOf) }; }
@@ -1419,7 +1425,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
           const users = S.readCollection(env.ss, "users"); const o = body.user || {};
           if (A.findUser({ users }, o.id)) return fail("EXISTS: user id already used");
           if (o.role === "Member" && !S.readCollection(env.ss, "members").some((m) => m.id === o.memberId)) return fail("UNKNOWN_MEMBER");
-          users.push(A.makeUser(env, o)); S.writeCollection(env.ss, "users", users); return { ok: true };
+          users.push(A.makeUser(env, Object.assign({}, o, { mustChange: true }))); S.writeCollection(env.ss, "users", users); return { ok: true };
         } finally { env.lock.releaseLock(); }
       }
       if (body.action === "disableUser") {
@@ -1439,7 +1445,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
             if (!/^[0-9a-f]{64}$/.test(String(u.pinHash)) || !u.salt || !A.ROLES.includes(u.role)) throw new Error("INVALID: malformed user " + u.id);
             if (u.role === "Member" && !members.some((m) => m.id === u.memberId)) throw new Error("UNKNOWN_MEMBER: " + u.memberId);
             if (A.findUser({ users }, u.id)) throw new Error("EXISTS: " + u.id);
-            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash }); added.push(u.id);
+            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash, mustChange: u.mustChange !== false }); added.push(u.id);
           });
           S.writeCollection(env.ss, "users", users); return { ok: true, added: added.length };
         } finally { env.lock.releaseLock(); }

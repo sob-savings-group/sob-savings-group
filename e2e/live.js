@@ -4,11 +4,11 @@ const http = require("http"), fs = require("fs"), path = require("path"), crypto
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
 const root = path.join(__dirname, ".."), raw = JSON.parse(fs.readFileSync(process.env.SEED || path.join(root, "app/demo-seed.json"), "utf8"));
-const db0 = M.migrateLegacy(raw, "2026-03-31"), mem = db0.members.find((m) => L.memberSavings(db0, m.id) > 0);
+const db0 = M.migrateLegacy(raw, "2026-03-31"), mem = db0.members.find((m) => L.memberSavings(db0, m.id) > 0), newMem = db0.members.find((m) => m.id !== mem.id && L.memberSavings(db0, m.id) > 0 && m.id !== (db0.members.find((x) => x.id !== mem.id && L.memberSavings(db0, x.id) >= 10000 && !L.memberHasOutstandingLoan(db0, x.id, "2026-03-31")) || {}).id), airMem = db0.members.find((m) => m.id !== mem.id && L.memberSavings(db0, m.id) >= 10000 && !L.memberHasOutstandingLoan(db0, m.id, "2026-03-31"));
 const sheets = {}; const mk = (n) => { const d = []; return { d, getLastRow: () => d.length, getLastColumn: () => d.reduce((a, r) => Math.max(a, r.length), 0), getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (d[r - 1 + i] && d[r - 1 + i][c - 1 + j] !== undefined ? d[r - 1 + i][c - 1 + j] : ""))), setValues: (v) => v.forEach((row, i) => row.forEach((x, j) => { d[r - 1 + i] = d[r - 1 + i] || []; d[r - 1 + i][c - 1 + j] = x; })), clearContent: () => { for (let i = 0; i < nr; i++) if (d[r - 1 + i]) for (let j = 0; j < nc; j++) d[r - 1 + i][c - 1 + j] = ""; } }; } }; };
-const cache = {}, env = { ss: { getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk(n)) }, lock: { waitLock() {}, releaseLock() {} }, now: () => "T",
+const cache = {}, env = { ss: { getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk(n)) }, lock: { waitLock() {}, releaseLock() {} }, now: () => new Date().toISOString(), gateways: { adminPhone: "0772000000", SMS: null },
   hash: (s) => crypto.createHash("sha256").update(s).digest("hex"), randomToken: () => crypto.randomBytes(8).toString("hex"), cache: { get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } } };
-S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" }), A.makeUser(env, { id: mem.id, role: "Member", memberId: mem.id, pin: "1234" })]);
+S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" }), A.makeUser(env, { id: mem.id, role: "Member", memberId: mem.id, pin: "1234" }), A.makeUser(env, { id: airMem.id, role: "Member", memberId: airMem.id, pin: "2468" })]);
 const adminTok = API.handle(env, { action: "login", id: "ADMIN", pin: "admin-pin-1" }).token; API.handle(env, { action: "importSnapshot", token: adminTok, db: db0 });
 API.handle(env, { action: "command", token: adminTok, name: "openDiscrepancy", args: { kind: "SAVINGS_BALANCE", subject: mem.id, summary: "e2e discrepancy", platformValue: 1, sourceValue: 2, source: "e2e" } });
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
@@ -57,6 +57,37 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
   await pg.fill("#mid", mem.id); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "old PIN no longer works after the change");
   await pg.fill("#pin", "7777"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "new PIN works");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go");
+  /* ---- airtime: member requests in the UI, server enforces, Admin fulfils ---- */
+  await pg.fill("#mid", airMem.id); await pg.fill("#pin", "2468"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
+  const before = L.memberSavings(S.readAll(env.ss), airMem.id);
+  await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("20,000"), "member sees the UGX 20,000 monthly allowance");
+  await pg.click("#request-airtime"); await pg.fill('.modal input[name="amount"]', "25000"); await pg.fill('.modal input[name="phone"]', "0772123456"); await pg.click("[data-submit]");
+  await pg.waitForFunction(() => /monthly limit|MONTHLY|limit/i.test((document.querySelector(".modal .err") || {}).textContent || "")); ok(true, "request above the monthly cap is refused by the server with a clear message");
+  await pg.fill('.modal input[name="amount"]', "5000"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForSelector("[data-cancel]");
+  ok(L.memberSavings(S.readAll(env.ss), airMem.id) === before, "no money moves when a request is submitted");
+  ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("15,000"), "remaining allowance updates to UGX 15,000");
+  ok((await pg.locator('[data-nav="messages"]').count()) === 0 && (await pg.locator('[data-nav="system"]').count()) === 0, "member has no Messages/System screens");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go");
+  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("[data-fulfil]"); await pg.click("[data-fulfil]"); await pg.waitForSelector(".toast:not(.bad)");
+  ok(L.memberSavings(S.readAll(env.ss), airMem.id) === before - 5200, "fulfilling debits airtime + UGX 200 fee from the member's savings, once");
+  /* ---- messages: dry-run only ---- */
+  await pg.click('[data-nav="messages"]'); await pg.waitForSelector("#dryrun-banner"); ok(true, "Messages screen states plainly that nothing is sent (dry-run)");
+  await pg.click("#process-outbox"); await pg.waitForSelector(".toast:not(.bad)");
+  const ob = S.readAll(env.ss).outbox; ok(ob.length >= 2 && ob.every((m) => m.status !== "SENT"), "processing without a live gateway never marks anything SENT (" + ob.length + " messages)");
+  ok(ob.some((m) => m.status === "DRY_RUN" && /airtime/i.test(m.body)), "airtime alert to Admin is rendered as DRY_RUN");
+  /* ---- system: backups ---- */
+  await pg.click('[data-nav="system"]'); await pg.waitForSelector("#backup-now"); await pg.click("#backup-now"); await pg.waitForSelector("[data-verify-backup]");
+  await pg.click("[data-verify-backup]"); await pg.waitForSelector(".toast:not(.bad)"); ok(true, "Admin takes a snapshot from the UI and verifies its checksum");
+  ok(S.readAll(env.ss).users.length === 3 && (await pg.locator("[data-disable]").count()) === 2, "sign-ins are listed; Admin cannot disable themselves");
+  /* ---- Admin creates a sign-in; the member is forced to choose their own PIN ---- */
+  await pg.click('[data-nav="members"]'); await pg.locator("#main tbody tr", { hasText: newMem.id }).first().click(); await pg.click('.modal [data-act="create-signin"]'); await pg.fill('.modal input[name="n"]', "3141"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
+  await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click("#logout"); await pg.waitForSelector("#login-go");
+  await pg.fill("#mid", newMem.id); await pg.fill("#pin", "3141"); await pg.click("#login-go"); await pg.waitForSelector("#force-pin"); ok((await pg.locator("[data-nav]").count()) === 0, "a fresh sign-in sees only the choose-your-PIN screen");
+  await pg.fill("#fp-old", "3141"); await pg.fill("#fp-new", "2718"); await pg.fill("#fp-new2", "2719"); await pg.click("#fp-go"); await pg.waitForSelector(".toast.bad"); ok(true, "mismatched new PINs are refused");
+  await pg.fill("#fp-new2", "2718"); await pg.click("#fp-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "after choosing a PIN the member reaches their portal");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs.join("|") : ""));
   await b.close(); srv.close(); console.log(fails ? fails + " FAILED" : "live e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -6,7 +6,7 @@
              backup <out.json> (offline, outside the repo) | backup-verify <file> | restore-backup <file> (into a NEW EMPTY deployment) | backup-now | backup-list */
 const lib = require("./ctl-lib.js");
 const argv = process.argv.slice(2), cmd = argv[0], arg = argv[1], flag = (n) => argv.includes(n), val = (n) => { const i = argv.indexOf(n); return i > 0 ? argv[i + 1] : undefined; };
-const E = process.env, o = { adminId: E.SOB_ADMIN_ID, adminPin: E.SOB_ADMIN_PIN, memberId: E.SOB_MEMBER_ID, memberPin: E.SOB_MEMBER_PIN, asOf: E.SOB_AS_OF };
+const E = process.env, o = { adminId: E.SOB_ADMIN_ID, adminPin: E.SOB_ADMIN_PIN, memberId: E.SOB_MEMBER_ID, memberPin: E.SOB_MEMBER_PIN, memberNewPin: E.SOB_MEMBER_NEW_PIN, asOf: E.SOB_AS_OF };
 async function api(body) {
   if (!E.SOB_URL) throw new Error("Set SOB_URL to the deployed web-app URL");
   let res = await fetch(E.SOB_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), redirect: "follow" });

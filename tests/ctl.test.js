@@ -14,7 +14,7 @@ vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code
 const srv = http.createServer((q, r) => { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(sb.doPost({ postData: { contents: b } }).s); }); });
 const run = (args, env) => new Promise((res) => { const p = spawn("node", [path.join(root, "tools/sobctl.js")].concat(args), { env: Object.assign({}, process.env, env) }); let out = ""; p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d)); p.on("close", (code) => res({ code, out })); });
 const rawLegacy = JSON.parse(fs.readFileSync(legacy, "utf8")), rawTx = rawLegacy.transactions.length, expectedSavings = require("../src/core/ledger.js").computeGroupTotals(require("../src/core/migrate.js").migrateLegacy(rawLegacy, "2026-10-07"), "2026-10-07").groupSavings;
-let f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
+let memberPin = null, f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
 (async () => {
   await new Promise((r) => srv.listen(0, r)); const url = "http://localhost:" + srv.address().port + "/exec"; const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sob-ctl-"));
   const adminPin = "Adm1n-Setup-77", base = { SOB_URL: url, SOB_ADMIN_ID: "ADMIN", SOB_ADMIN_PIN: adminPin, SOB_AS_OF: "2026-10-07" };
@@ -39,7 +39,9 @@ let f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
   });
   const slipFor = (id) => fs.readFileSync(path.join(tmp, "pin-slips.csv"), "utf8").split("\n").slice(1).filter(Boolean).map((l) => l.split(",")).find((s) => s[0] === id);
   t("before the reconciliation register exists, smoke flags the unaccounted data errors (and nothing else)", async () => {
-    const m = slipFor("SOB-002"), r = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: m[3] }));
+    const m = slipFor("SOB-002"), skip = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: m[3] }));
+    assert.match(skip.out, /forced to be changed/); assert.match(skip.out, /SKIPPED/);
+    const r = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: m[3], SOB_MEMBER_NEW_PIN: "Own-Pin-4821" })); memberPin = "Own-Pin-4821";
     assert.notEqual(r.code, 0); const fails = r.out.split("\n").filter((l) => l.startsWith("FAIL")); assert.equal(fails.length, 1, r.out); assert.match(fails[0], /accounted for/);
     assert.match(r.out, /BAD_AMOUNT/); assert.match(r.out, /NEGATIVE_SAVINGS/); assert.match(r.out, /PASS member cannot write ledger entries/);
   });
@@ -52,7 +54,7 @@ let f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
     const before = JSON.parse((await run(["verify"], base)).out).totals; const r = await run(["register-discrepancies", path.join(tmp, "recon/reconciliation.json")], base); assert.equal(r.code, 0, r.out);
     assert.ok(!/"ok": false/.test(r.out), r.out); const after = JSON.parse((await run(["verify"], base)).out); assert.deepEqual(after.totals, before); assert.ok(after.counts.openDiscrepancies >= 4); const rec = JSON.parse(fs.readFileSync(path.join(tmp, "recon/reconciliation.json"), "utf8")); assert.equal(rec.adminUnmatched, 1, "bank-level loan row without a member-ledger match is found"); assert.equal(rec.resolutions.length, 1, "only resolutions matching a real finding are kept");
     const led = JSON.parse((await run(["verify"], base)).out); assert.equal(rec.discrepancies.length - 1, led.counts.openDiscrepancies, "the answered item was closed, the rest stay open");
-    const m = slipFor("SOB-002"); const sm = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: m[3] })); assert.equal(sm.code, 0, sm.out); assert.match(sm.out, /PASS member sees only their own/); assert.match(sm.out, /accounted for in the reconciliation register/);
+    const m = slipFor("SOB-002"); const sm = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: memberPin })); assert.equal(sm.code, 0, sm.out); assert.match(sm.out, /PASS member sees only their own/); assert.match(sm.out, /accounted for in the reconciliation register/);
   });
   t("apply-plan REFUSES without a named approver", async () => { const r = await run(["apply-plan", path.join(tmp, "recon/reconciliation.json")], base); assert.notEqual(r.code, 0); assert.match(r.out, /approved-by/); assert.match((await run(["verify"], base)).out, new RegExp("\"transactions\": " + rawTx)); });
   t("apply-plan with an approver applies the audited corrections; savings unchanged; balances as predicted", async () => {
@@ -71,7 +73,7 @@ let f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
   });
   t("in-sheet backups through the web API: Admin only; list/verify; scheduled dailyBackup; editor-only restore with a pre-restore snapshot", async () => {
     const call = (b) => JSON.parse(sb.doPost({ postData: { contents: JSON.stringify(b) } }).s); const tok = call({ action: "login", id: "ADMIN", pin: adminPin }).token;
-    const m = slipFor("SOB-002"), mt = call({ action: "login", id: m[0], pin: m[3] }).token;
+    const m = slipFor("SOB-002"), mt = call({ action: "login", id: m[0], pin: memberPin }).token;
     for (const a of ["backupNow", "listBackups", "exportBackup", "verifyBackup"]) assert.match(call({ action: a, token: mt }).error, /FORBIDDEN/);
     const b = call({ action: "backupNow", token: tok }); assert.ok(b.ok && b.id, JSON.stringify(b)); assert.ok(call({ action: "backupNow", token: tok }).skipped, "unchanged ledger not duplicated");
     assert.ok(call({ action: "verifyBackup", token: tok, id: b.id }).ok); assert.equal(call({ action: "verifyBackup", token: tok, id: "BK-nope" }).error, "NOT_FOUND");

@@ -43,6 +43,7 @@
       if (!user) return fail("UNAUTHENTICATED");
       const asOf = D.todayISO();
 
+      if (user.mustChangePin && !["setPin", "logout", "whoami"].includes(body.action)) return fail("PIN_CHANGE_REQUIRED: set your own PIN before continuing");
       if (body.action === "logout") { A.logout(env, body.token); return { ok: true }; }
       if (body.action === "whoami") return { ok: true, user };
       if (body.action === "getLedger") { const db = S.readAll(env.ss); return { ok: true, user, db: viewFor(db, user, asOf) }; }
@@ -100,7 +101,7 @@
           const users = S.readCollection(env.ss, "users"); const o = body.user || {};
           if (A.findUser({ users }, o.id)) return fail("EXISTS: user id already used");
           if (o.role === "Member" && !S.readCollection(env.ss, "members").some((m) => m.id === o.memberId)) return fail("UNKNOWN_MEMBER");
-          users.push(A.makeUser(env, o)); S.writeCollection(env.ss, "users", users); return { ok: true };
+          users.push(A.makeUser(env, Object.assign({}, o, { mustChange: true }))); S.writeCollection(env.ss, "users", users); return { ok: true };
         } finally { env.lock.releaseLock(); }
       }
       if (body.action === "disableUser") {
@@ -120,7 +121,7 @@
             if (!/^[0-9a-f]{64}$/.test(String(u.pinHash)) || !u.salt || !A.ROLES.includes(u.role)) throw new Error("INVALID: malformed user " + u.id);
             if (u.role === "Member" && !members.some((m) => m.id === u.memberId)) throw new Error("UNKNOWN_MEMBER: " + u.memberId);
             if (A.findUser({ users }, u.id)) throw new Error("EXISTS: " + u.id);
-            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash }); added.push(u.id);
+            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash, mustChange: u.mustChange !== false }); added.push(u.id);
           });
           S.writeCollection(env.ss, "users", users); return { ok: true, added: added.length };
         } finally { env.lock.releaseLock(); }

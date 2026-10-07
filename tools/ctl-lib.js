@@ -27,15 +27,21 @@ async function smokeReadOnly(api, o) {
   c.add("import is closed once data exists", led.db.transactions.length === 0 || /NOT_EMPTY/.test((await api({ action: "importSnapshot", token: t, db: {} })).error || ""));
   const un = I.unaccounted(led.db, D.todayISO()); c.add("ledger integrity: every error is accounted for in the reconciliation register", un.length === 0, un.map((f) => f.code + " " + f.detail).join("; "));
   if (o.memberId) {
-    const mt = await login(api, o.memberId, o.memberPin), mv = must(await api({ action: "getLedger", token: mt }), "member getLedger").db;
+    const ml = must(await api({ action: "login", id: o.memberId, pin: o.memberPin }), "member login"), mt = ml.token;
+    if (ml.user.mustChangePin) {
+      c.add("fresh slip PIN is forced to be changed: nothing but setPin works until then", (await api({ action: "getLedger", token: mt })).error.startsWith("PIN_CHANGE_REQUIRED") && (await api({ action: "command", token: mt, name: "createEntry", args: {} })).error.startsWith("PIN_CHANGE_REQUIRED"));
+      if (!o.memberNewPin) { c.add("member data checks SKIPPED (this member has not set their own PIN yet; pass SOB_MEMBER_NEW_PIN to let smoke set one, or use a member who has)", true); await api({ action: "logout", token: mt }); return finish(); }
+      must(await api({ action: "setPin", token: mt, oldPin: o.memberPin, newPin: o.memberNewPin }), "member setPin");
+    }
+    const mv = must(await api({ action: "getLedger", token: mt }), "member getLedger").db;
     c.add("member sees only their own transactions", mv.transactions.every((x) => x.memberId === o.memberId));
     c.add("member gets no audit log, users or KPIs", !(mv.auditLog || []).length && !(mv.users || []).length && mv.kpis === undefined);
     c.add("member cannot write ledger entries", /FORBIDDEN/.test((await api({ action: "command", token: mt, name: "createEntry", args: { date: D.todayISO(), memberId: o.memberId, amount: 1, type: "Savings" } })).error || ""));
     c.add("member cannot import or create users", /FORBIDDEN/.test((await api({ action: "createUser", token: mt, user: { id: "X", role: "Admin", pin: "abcdefgh" } })).error || ""));
     await api({ action: "logout", token: mt }); c.add("logged-out member session is dead", (await api({ action: "getLedger", token: mt })).error === "UNAUTHENTICATED");
   }
-  await api({ action: "logout", token: t }); c.add("logged-out admin session is dead", (await api({ action: "getLedger", token: t })).error === "UNAUTHENTICATED");
-  return { ok: c.ok, checks: c.list };
+  return finish();
+  async function finish() { await api({ action: "logout", token: t }); c.add("logged-out admin session is dead", (await api({ action: "getLedger", token: t })).error === "UNAUTHENTICATED"); return { ok: c.ok, checks: c.list }; }
 }
 /* Writes a test entry and voids it: ONLY for a scratch deployment (requires allowWrite). */
 async function smokeWrite(api, o) {

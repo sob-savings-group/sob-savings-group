@@ -24,14 +24,17 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     await pg.waitForSelector(".toast");
     await pg.keyboard.press("Escape"); await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.screenshot({ path: path.join(root, "shots", vp.name + "-admin.png"), fullPage: true });
-    for (const v of ["members", "loans", "ledger", "subs", "shareout", "reports", "recon", "audit"]) { await pg.click('[data-nav="' + v + '"]'); await pg.waitForSelector("#main"); ok((await pg.locator("#main .err").count()) === 0, vp.name + ": admin " + v + " renders"); }
+    for (const v of ["members", "loans", "ledger", "subs", "airtime", "shareout", "reports", "recon", "audit", "messages", "system"]) { await pg.click('[data-nav="' + v + '"]'); await pg.waitForSelector("#main"); ok((await pg.locator("#main .err").count()) === 0, vp.name + ": admin " + v + " renders"); ok(await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": " + v + " has no horizontal page scroll"); }
+    await pg.click('[data-nav="messages"]'); ok((await pg.locator("#dryrun-banner").count()) === 1, vp.name + ": messages screen shows the dry-run banner");
     await pg.click('[data-nav="reports"]'); await pg.click('[data-card="Quarterly distribution"]'); ok((await pg.locator(".modal .blocked").count()) === 1, vp.name + ": quarterly distribution shows blocked state");
     await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.click('[data-nav="shareout"]'); ok((await pg.locator(".blocked").count()) >= 1, vp.name + ": share-out shows blocked profit notice");
     await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Member"); await pg.click("#demo-go"); await pg.waitForSelector('[data-card="My Savings"]');
-    ok((await pg.locator("[data-nav]").count()) === 3, vp.name + ": member sees only member navigation");
+    ok((await pg.locator("[data-nav]").count()) === 4, vp.name + ": member sees only member navigation");
     ok((await pg.locator('[data-nav="ledger"]').count()) === 0, vp.name + ": member has no ledger/admin access in UI");
     await pg.click('[data-nav="savings"]'); await pg.waitForSelector("table"); await pg.click('[data-nav="myloans"]');
+    await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator("#main .err").count()) === 0 && await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": member airtime screen renders without horizontal scroll");
+    await pg.screenshot({ path: path.join(root, "shots", vp.name + "-member-airtime.png"), fullPage: true });
     await pg.screenshot({ path: path.join(root, "shots", vp.name + "-member.png"), fullPage: true });
     ok(errs.length === 0, vp.name + ": no console/page errors" + (errs.length ? " -> " + errs.join(" | ") : ""));
     await pg.close();

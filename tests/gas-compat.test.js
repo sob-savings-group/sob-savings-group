@@ -10,7 +10,9 @@ t("no Node/browser-only globals are used outside the module shim", () => {
 t("bundle size is well under Apps Script file limits", () => { assert.ok(src.length < 600000, "size " + src.length); });
 t("deployment manifest: V8, Kampala time zone, least-privilege scope, public web app (auth is per-user inside the app)", () => {
   const m = JSON.parse(fs.readFileSync(path.join(root, "deploy/appsscript.json"), "utf8"));
-  assert.equal(m.runtimeVersion, "V8"); assert.equal(m.timeZone, "Africa/Kampala"); assert.deepEqual(m.oauthScopes, ["https://www.googleapis.com/auth/spreadsheets.currentonly"]); assert.equal(m.webapp.executeAs, "USER_DEPLOYING");
+  assert.equal(m.runtimeVersion, "V8"); assert.equal(m.timeZone, "Africa/Kampala"); assert.deepEqual(m.oauthScopes.slice().sort(), ["https://www.googleapis.com/auth/script.external_request", "https://www.googleapis.com/auth/script.scriptapp", "https://www.googleapis.com/auth/spreadsheets.currentonly"], "exactly: this spreadsheet, outbound gateway calls, own triggers");
+  const used = ["SpreadsheetApp", "UrlFetchApp", "ScriptApp", "DriveApp", "MailApp", "GmailApp", "DocumentApp", "CalendarApp", "UrlFetch", "Session"].filter((n) => new RegExp("\\b" + n + "\\.").test(src));
+  assert.deepEqual(used.sort(), ["ScriptApp", "SpreadsheetApp", "UrlFetchApp"], "no Apps Script service is used that the manifest does not declare"); assert.equal(m.webapp.executeAs, "USER_DEPLOYING");
 });
 t("SCALE: with 20,000 transactions a command reads each sheet once, writes only changed sheets, and stays within call budgets", () => {
   const M = require("../src/core/migrate.js"), raw = require("./helpers/synth.js").legacyRaw();

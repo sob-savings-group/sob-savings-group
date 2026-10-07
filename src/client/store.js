@@ -29,7 +29,9 @@
       async command(name, args) { status = "saving"; emit(); try { const j = await call({ action: "command", name, args }); db = j.db; status = "synced"; emit(); return j.result; } catch (e) { status = "error"; emit(); throw e; } },
       setPin: (newPin, oldPin, userId) => call({ action: "setPin", newPin, oldPin, userId }),
       createUser: (u) => call({ action: "createUser", user: u }),
-      disableUser: (userId) => call({ action: "disableUser", userId })
+      disableUser: (userId) => call({ action: "disableUser", userId }),
+      /* Generic server action for Admin screens (gatewayStatus, dispatchOutbox, backups). The server still decides who may do what. */
+      call: (body) => call(body)
     };
   }
   return { create };
