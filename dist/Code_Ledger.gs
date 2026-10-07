@@ -1716,8 +1716,8 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
   }
   const CELL_LIMIT = 45000; // Google Sheets hard limit is 50,000 characters per cell
   function writeCollection(ss, k, list) {
-    const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]); const sh = sheetOf(ss, c.sheet, header);
-    const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]); const width = c.cols.length + 1;
+    const c = COLLECTIONS[k]; const header = c.cols.length ? c.cols.concat(["_extra"]) : ["_extra"]; const sh = sheetOf(ss, c.sheet, header);
+    const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o)]); const width = c.cols.length ? c.cols.length + 1 : 1;   // exactly as wide as the range: Sheets rejects ragged data
     rows.forEach((r, i) => r.forEach((v) => { if (typeof v === "string" && v.length > CELL_LIMIT) throw new Error("CELL_TOO_LARGE: " + k + " row " + (i + 1) + " exceeds the Sheets cell limit"); }));
     if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
     sh.getRange(1, 1, 1, width).setValues([header]);

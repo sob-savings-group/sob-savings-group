@@ -5,7 +5,7 @@ function mockSS() {
   const sheets = {};
   const mk = () => { const data = []; return { data, getLastRow: () => data.length, getLastColumn: () => data.reduce((a, r) => Math.max(a, r.length), 0),
     getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (data[r - 1 + i] && data[r - 1 + i][c - 1 + j] !== undefined ? data[r - 1 + i][c - 1 + j] : ""))),
-      setValues: (v) => v.forEach((row, i) => row.forEach((x, j) => { data[r - 1 + i] = data[r - 1 + i] || []; data[r - 1 + i][c - 1 + j] = x; })),
+      setValues: (v) => { if (v.length !== nr || v.some((row) => row.length !== nc)) throw new Error("The number of columns in the data does not match the number of columns in the range. The data has " + (v[0] ? v[0].length : 0) + " but the range has " + nc + "."); v.forEach((row, i) => row.forEach((x, j) => { data[r - 1 + i] = data[r - 1 + i] || []; data[r - 1 + i][c - 1 + j] = x; })); },
       clearContent: () => { for (let i = 0; i < nr; i++) if (data[r - 1 + i]) for (let j = 0; j < nc; j++) data[r - 1 + i][c - 1 + j] = ""; } }; } }; };
   return { sheets, getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk()) };
 }
