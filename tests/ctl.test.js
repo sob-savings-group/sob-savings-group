@@ -62,16 +62,16 @@ let memberPin = null, f = 0; const tests = []; const t = (n, fn) => tests.push([
     const v = JSON.parse((await run(["verify"], base)).out); assert.equal(v.totals.groupSavings, expectedSavings);
   });
   t("import-history: refuses without approver; dry run writes nothing; import preserves dates/refs, moves savings by the exact net, is idempotent", async () => {
-    const pack = path.join(tmp, "history-pack.json"), pk = { batchId: "TEST-HIST", source: "synthetic workbook", entries: [
+    const pack = path.join(tmp, "history-pack.json"), pk = { batchId: "TEST-HIST", source: "synthetic workbook", members: [{ id: "SOB-057", name: "Synthetic Newcomer", regDate: "2024-03-01" }], entries: [{ memberId: "SOB-057", date: "2024-03-01", type: "Savings", amount: 8000, sourceRef: "T|C|r2", originalName: "Newcomer (as written)" },
       { memberId: "SOB-005", date: "2024-02-04", type: "Savings", amount: 30000, sourceRef: "T|A|r3" }, { memberId: "SOB-005", date: "2025-03-31", type: "Profit", amount: 777, sourceRef: "T|A|r8", purpose: "Interest credited (historical)" },
       { memberId: "SOB-005", date: "2025-12-21", type: "Share-Out", amount: 30000, sourceRef: "T|A|r9" }, { memberId: "SOB-008", date: "2024-05-05", type: "Savings", amount: 5000, sourceRef: "T|B|r2" }] };
     fs.writeFileSync(pack, JSON.stringify(pk));
     const no = await run(["import-history", pack], base); assert.notEqual(no.code, 0); assert.match(no.out, /approved-by/);
-    const dry = await run(["import-history", pack, "--approved-by", "Test Approver, Chairperson, 2026-10-07", "--dry-run"], base); assert.equal(dry.code, 0, dry.out); assert.match(dry.out, /4 new/);
+    const dry = await run(["import-history", pack, "--approved-by", "Test Approver, Chairperson, 2026-10-07", "--dry-run"], base); assert.equal(dry.code, 0, dry.out); assert.match(dry.out, /5 new/);
     const v0 = JSON.parse((await run(["verify"], base)).out).totals.groupSavings;
     const r = await run(["import-history", pack, "--approved-by", "Test Approver, Chairperson, 2026-10-07"], base); assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out);
-    assert.equal(JSON.parse((await run(["verify"], base)).out).totals.groupSavings, v0 + 5777);
-    const r2 = await run(["import-history", pack, "--approved-by", "Test Approver, Chairperson, 2026-10-07"], base); assert.equal(r2.code, 0, r2.out); assert.match(r2.out, /0 new, 4 already imported/);
+    assert.equal(JSON.parse((await run(["verify"], base)).out).totals.groupSavings, v0 + 5777 + 8000);
+    const r2 = await run(["import-history", pack, "--approved-by", "Test Approver, Chairperson, 2026-10-07"], base); assert.equal(r2.code, 0, r2.out); assert.match(r2.out, /0 new, 5 already imported/);
   });
   t("offline backup: verified export written outside the repo (mode 600), refused inside it, restorable and tamper-evident", async () => {
     const out = path.join(tmp, "backup.json");

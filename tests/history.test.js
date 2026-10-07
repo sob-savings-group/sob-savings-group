@@ -40,4 +40,10 @@ t("sourceRef survives the Sheet round-trip (idempotency holds after storage)", (
   const back = S.fromRow(S.COLLECTIONS.transactions.cols, S.toRow(S.COLLECTIONS.transactions.cols, db.transactions.find((q) => q.sourceRef === "wb:A!r9")));
   assert.equal(back.sourceRef, "wb:A!r9"); assert.equal(back.historical, true); assert.equal(back.date, "2025-03-31");
 });
+t("addMember accepts only a well-formed, unused confirmed id", () => {
+  const db = mk(); const m = CMD.run(db, admin, "addMember", { id: "SOB-057", name: "Confirmed One", regDate: "2024-01-14" }); assert.equal(m.id, "SOB-057"); assert.equal(m.regDate, "2024-01-14");
+  assert.throws(() => CMD.run(db, admin, "addMember", { id: "SOB-057", name: "Again" }), /DUPLICATE_MEMBER/); assert.throws(() => CMD.run(db, admin, "addMember", { id: "57", name: "Bad" }), /INVALID/);
+  const r = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B6", source: "w", entries: [{ memberId: "SOB-057", date: "2024-01-14", type: "Savings", amount: 100, sourceRef: "n1", originalName: "As Written" }] });
+  assert.equal(db.transactions.find((q) => q.sourceRef === "n1").originalName, "As Written");
+});
 console.log(f ? f + " FAILED" : "history passed");

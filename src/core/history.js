@@ -41,7 +41,7 @@
       if (a.dryRun) return;
       const m = db.members.find((x) => x.id === e.memberId);
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
-        historical: true, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
+        historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
     if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;

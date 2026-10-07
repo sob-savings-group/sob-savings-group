@@ -94,10 +94,14 @@ async function importHistory(api, o) {
   const pack = JSON.parse(fs.readFileSync(o.path, "utf8")), t = await login(api, o.adminId, o.adminPin), c = checks();
   const asOf = o.asOf || D.todayISO(), pre = must(await api({ action: "getLedger", token: t }), "pre-read").db;
   const args = (entries, dryRun) => ({ batchId: pack.batchId, source: pack.source + " | Approved by: " + o.approvedBy, entries, dryRun });
-  const dry = must(await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(pack.entries, true) }), "dry run").result;
+  const newMembers = (pack.members || []).filter((m) => !pre.members.some((x) => x.id === m.id));
+  (pack.members || []).forEach((m) => { const ex = pre.members.find((x) => x.id === m.id); if (ex) c.add("confirmed member " + m.id + " already exists with the same name", ex.name === m.name, ex.name); });
+  const dry = (newMembers.length ? { added: pack.entries.length, alreadyImported: 0, possibleDuplicates: [] } : must(await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(pack.entries, true) }), "dry run").result);
   c.add("dry run: " + dry.added + " new, " + dry.alreadyImported + " already imported, " + dry.possibleDuplicates.length + " possible duplicate(s)", dry.possibleDuplicates.length === 0, JSON.stringify(dry.possibleDuplicates.slice(0, 3)));
   if (o.dryRun || !c.ok) return { ok: c.ok, checks: c.list, dry };
   const bk = await api({ action: "backupNow", token: t, force: true }); c.add("backup snapshot taken before import", !!bk.ok, bk.error);
+  for (const m of newMembers) { const r = await api({ action: "command", token: t, name: "addMember", args: { id: m.id, name: m.name, regDate: m.regDate } }); if (!r.ok) { c.add("add confirmed member " + m.id, false, r.error); return { ok: false, checks: c.list }; } }
+  c.add("confirmed members created: " + (newMembers.map((m) => m.id).join(", ") || "none needed"), true);
   const todo = pack.entries.filter((e) => !pre.transactions.some((x) => x.sourceRef === e.sourceRef));
   for (let i = 0; i < todo.length; i += 150) { const r = await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(todo.slice(i, i + 150), false) }); if (!r.ok) { c.add("chunk " + i, false, r.error); return { ok: false, checks: c.list }; } }
   const post = must(await api({ action: "getLedger", token: t }), "post-read").db;
@@ -107,6 +111,7 @@ async function importHistory(api, o) {
   c.add("each member's savings moved by exactly the imported net", post.members.every((m) => L.memberSavings(post, m.id) - L.memberSavings(pre, m.id) === (net[m.id] || 0)));
   c.add("original dates and source references preserved", todo.every((e) => { const x = post.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === e.date && x.historical === true && x.amount === e.amount; }));
   const a = I.check(pre, asOf), b = I.check(post, asOf); c.add("integrity not worse (" + a.errors + " -> " + b.errors + " error(s))", b.errors <= a.errors);
+  c.add("new members exist with the confirmed IDs and names", newMembers.every((m) => post.members.some((x) => x.id === m.id && x.name === m.name)));
   const again = must(await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(pack.entries, true) }), "re-run").result; c.add("re-running would add nothing", again.added === 0);
   return { ok: c.ok, checks: c.list };
 }

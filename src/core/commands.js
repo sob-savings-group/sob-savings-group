@@ -10,7 +10,7 @@
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
     restoreEntry: (db, ctx, a) => G.restoreEntry(db, ctx, a.id, a.reason),
     approveEntry: (db, ctx, a) => G.approveEntry(db, ctx, a.id, a.decision, a.reason),
-    addMember: (db, ctx, a) => G.addMember(db, ctx, { name: a.name, phone: a.phone, email: a.email, location: a.location }),
+    addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
     applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
     releaseGuarantor: (db, ctx, a) => LN.releaseGuarantor(db, ctx, a.loanId, a.reason),

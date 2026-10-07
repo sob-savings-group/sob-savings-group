@@ -276,6 +276,8 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
   /* --- members --- */
   function addMember(db, ctx, m) {
     require_(ctx, "member.manage");
+    if (m.id !== undefined && !/^SOB-\d{3}$/.test(String(m.id))) throw new Error("INVALID: member id must look like SOB-057");
+    if (m.regDate !== undefined && !dates.isISO(m.regDate)) throw new Error("INVALID: regDate must be YYYY-MM-DD");
     const id = m.id || "SOB-" + String(db.members.length + 1).padStart(3, "0");
     if (db.members.some((x) => x.id === id)) throw new Error("DUPLICATE_MEMBER: " + id);
     const member = { id, name: need(m.name, "name"), phone: m.phone || "", email: m.email || "", location: m.location || "", regDate: m.regDate || ctx.today, status: "Active" };
@@ -883,7 +885,7 @@ __M['core/history'] = (function(){ const module = {exports:{}}; const require = 
       if (a.dryRun) return;
       const m = db.members.find((x) => x.id === e.memberId);
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
-        historical: true, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
+        historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
     if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;
@@ -905,7 +907,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
     restoreEntry: (db, ctx, a) => G.restoreEntry(db, ctx, a.id, a.reason),
     approveEntry: (db, ctx, a) => G.approveEntry(db, ctx, a.id, a.decision, a.reason),
-    addMember: (db, ctx, a) => G.addMember(db, ctx, { name: a.name, phone: a.phone, email: a.email, location: a.location }),
+    addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
     applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
     releaseGuarantor: (db, ctx, a) => LN.releaseGuarantor(db, ctx, a.loanId, a.reason),
