@@ -41,7 +41,9 @@
   const yearOf = (s) => Number(s.slice(0, 4));
   const quarterOf = (s) => Math.floor((Number(s.slice(5, 7)) - 1) / 3) + 1;
 
-  return { EAT_OFFSET_MS, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
+  /* A real calendar day written YYYY-MM-DD (2026-02-30 and 2026-13-01 are refused). */
+  const isRealDate = (s) => { if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  return { EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
 });
 
 /* src/core/ledger.js */
@@ -630,6 +632,7 @@
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     date = date || ctx.today; amount = Number(amount);
     if (!(amount > 0)) throw new Error("INVALID: amount");
+    if (loan.date && date < loan.date) throw new Error("INVALID: a repayment cannot be dated before the loan was disbursed (" + loan.date + ")");
     const owing = L.loanOutstanding(loan, db, date);
     if (amount > owing) throw new Error("OVERPAYMENT: outstanding on " + date + " is " + owing);
     const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Repayment", purpose: "Loan Repayment", loanId });
@@ -1512,9 +1515,21 @@
     if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status); if ((ctx.userId || ctx.by) !== req.requestedById) throw new Error("FORBIDDEN: only the person who made the request can withdraw it");
     Object.assign(req, { status: "Withdrawn", decidedBy: ctx.by, decidedDate: ctx.today }); G.audit(db, ctx, "ApprovalRequest", req.id, "Withdrawn", { status: "Pending" }, { status: "Withdrawn" }, a.reason || ""); return req;
   };
+  /* Every dated entry: blank = today (server clock, East Africa Time); a chosen date must be a real calendar day and not in the future.
+     The date the Admin picks is the date the entry carries, and therefore the date used for interest, allocation and guarantee release. */
+  const isRealDate = (s) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  const DATED = { createEntry: 1, repayLoan: 1, disburseLoan: 1, recordSubscription: 1, recordExistingLoan: 1 };
+  function checkDate(ctx, name, args) {
+    if (!DATED[name] || !args) return args;
+    const d = args.date === undefined || args.date === null || String(args.date).trim() === "" ? ctx.today : String(args.date).trim();
+    if (!isRealDate(d)) throw new Error("INVALID: date must be a real day written YYYY-MM-DD (got " + d + ")");
+    if (d > ctx.today) throw new Error("INVALID: date " + d + " is in the future (today is " + ctx.today + ")");
+    return Object.assign({}, args, { date: d });
+  }
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    args = checkDate(ctx, name, args);
     const gate = GATED[name];
     if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});

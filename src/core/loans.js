@@ -260,6 +260,7 @@
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     date = date || ctx.today; amount = Number(amount);
     if (!(amount > 0)) throw new Error("INVALID: amount");
+    if (loan.date && date < loan.date) throw new Error("INVALID: a repayment cannot be dated before the loan was disbursed (" + loan.date + ")");
     const owing = L.loanOutstanding(loan, db, date);
     if (amount > owing) throw new Error("OVERPAYMENT: outstanding on " + date + " is " + owing);
     const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Repayment", purpose: "Loan Repayment", loanId });

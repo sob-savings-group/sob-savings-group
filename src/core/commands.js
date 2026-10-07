@@ -107,9 +107,21 @@
     if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status); if ((ctx.userId || ctx.by) !== req.requestedById) throw new Error("FORBIDDEN: only the person who made the request can withdraw it");
     Object.assign(req, { status: "Withdrawn", decidedBy: ctx.by, decidedDate: ctx.today }); G.audit(db, ctx, "ApprovalRequest", req.id, "Withdrawn", { status: "Pending" }, { status: "Withdrawn" }, a.reason || ""); return req;
   };
+  /* Every dated entry: blank = today (server clock, East Africa Time); a chosen date must be a real calendar day and not in the future.
+     The date the Admin picks is the date the entry carries, and therefore the date used for interest, allocation and guarantee release. */
+  const isRealDate = (s) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  const DATED = { createEntry: 1, repayLoan: 1, disburseLoan: 1, recordSubscription: 1, recordExistingLoan: 1 };
+  function checkDate(ctx, name, args) {
+    if (!DATED[name] || !args) return args;
+    const d = args.date === undefined || args.date === null || String(args.date).trim() === "" ? ctx.today : String(args.date).trim();
+    if (!isRealDate(d)) throw new Error("INVALID: date must be a real day written YYYY-MM-DD (got " + d + ")");
+    if (d > ctx.today) throw new Error("INVALID: date " + d + " is in the future (today is " + ctx.today + ")");
+    return Object.assign({}, args, { date: d });
+  }
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    args = checkDate(ctx, name, args);
     const gate = GATED[name];
     if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});

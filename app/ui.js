@@ -38,6 +38,7 @@
     const inputs = {};
     const body = h("div", null, fields.map((f) => {
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
+      if (f.max) el.setAttribute("max", f.max); if (f.type === "date") el.required = true;
       if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);
     }));
     const err = h("div", { class: "err", role: "alert" });

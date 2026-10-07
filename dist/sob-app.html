@@ -80,7 +80,9 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
   const yearOf = (s) => Number(s.slice(0, 4));
   const quarterOf = (s) => Math.floor((Number(s.slice(5, 7)) - 1) / 3) + 1;
 
-  return { EAT_OFFSET_MS, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
+  /* A real calendar day written YYYY-MM-DD (2026-02-30 and 2026-13-01 are refused). */
+  const isRealDate = (s) => { if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  return { EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
 });
 
 
@@ -672,6 +674,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     date = date || ctx.today; amount = Number(amount);
     if (!(amount > 0)) throw new Error("INVALID: amount");
+    if (loan.date && date < loan.date) throw new Error("INVALID: a repayment cannot be dated before the loan was disbursed (" + loan.date + ")");
     const owing = L.loanOutstanding(loan, db, date);
     if (amount > owing) throw new Error("OVERPAYMENT: outstanding on " + date + " is " + owing);
     const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Repayment", purpose: "Loan Repayment", loanId });
@@ -1564,9 +1567,21 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
     if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status); if ((ctx.userId || ctx.by) !== req.requestedById) throw new Error("FORBIDDEN: only the person who made the request can withdraw it");
     Object.assign(req, { status: "Withdrawn", decidedBy: ctx.by, decidedDate: ctx.today }); G.audit(db, ctx, "ApprovalRequest", req.id, "Withdrawn", { status: "Pending" }, { status: "Withdrawn" }, a.reason || ""); return req;
   };
+  /* Every dated entry: blank = today (server clock, East Africa Time); a chosen date must be a real calendar day and not in the future.
+     The date the Admin picks is the date the entry carries, and therefore the date used for interest, allocation and guarantee release. */
+  const isRealDate = (s) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  const DATED = { createEntry: 1, repayLoan: 1, disburseLoan: 1, recordSubscription: 1, recordExistingLoan: 1 };
+  function checkDate(ctx, name, args) {
+    if (!DATED[name] || !args) return args;
+    const d = args.date === undefined || args.date === null || String(args.date).trim() === "" ? ctx.today : String(args.date).trim();
+    if (!isRealDate(d)) throw new Error("INVALID: date must be a real day written YYYY-MM-DD (got " + d + ")");
+    if (d > ctx.today) throw new Error("INVALID: date " + d + " is in the future (today is " + ctx.today + ")");
+    return Object.assign({}, args, { date: d });
+  }
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    args = checkDate(ctx, name, args);
     const gate = GATED[name];
     if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});
@@ -1869,6 +1884,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
     const inputs = {};
     const body = h("div", null, fields.map((f) => {
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
+      if (f.max) el.setAttribute("max", f.max); if (f.type === "date") el.required = true;
       if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);
     }));
     const err = h("div", { class: "err", role: "alert" });
@@ -1895,6 +1911,8 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
   const today = () => D.todayISO();
+  /* Every dated entry defaults to TODAY (East Africa Time) in a date picker; the Super Admin may pick an earlier real date (a genuine earlier transaction), never a future one. The chosen date is the one used for interest and guarantee release. */
+  const dateF = (name, label) => ({ name: name || "date", label: label || "Date (today unless you change it)", type: "date", value: D.todayISO(), max: D.todayISO() });
   const ctx = () => G.makeCtx(st.user);
   const roleLabel = (r) => (r === "Admin" ? "Super Admin" : r);
   const isStaff = () => st.user && st.user.role !== "Member";
@@ -2067,12 +2085,12 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
     const add = (label, cond, fn, cls) => cond && row.append(h("button", { class: cls || "", "data-act": label, onclick: fn }, label));
     const preDisb = ["Pending", "AwaitingApproval", "Approved"].includes(loan.status);
     add("Request guarantee", G.can(c, "guarantee.manage") && preDisb, () => Form("Request a guarantee (more than one guarantor may back a loan)", [{ name: "g", label: "Guarantor", options: st.db.members.filter((m) => m.id !== loan.memberId).map((m) => ({ value: m.id, label: m.name + " — available " + num(L.memberAvailable(st.db, m.id)) })) }, { name: "amt", label: "Amount guaranteed (UGX)", type: "number" }], act(async (f) => { await commit("addGuarantee", { loanId: id, guarantorId: f.g, amount: Number(f.amt) }); M().remove(); openLoan(id); }, "Requested - it binds only when the guarantor accepts")));
-    add("Propose other security", G.can(c, "security.manage") && preDisb, () => Form("Propose exceptional security (not the normal route)", [{ name: "kind", label: "Kind", options: S.security.KINDS }, { name: "description", label: "Description (what, where, who owns it)" }, { name: "owner", label: "Owner of the security" }, { name: "valuation", label: "Valuation (UGX)", type: "number" }, { name: "valuationDate", label: "Valuation date (YYYY-MM-DD)", value: today() }, { name: "valuedBy", label: "Valued by" }, { name: "doc", label: "Document / evidence title" }, { name: "ref", label: "Document reference" }], act(async (f) => { await commit("proposeSecurity", { loanId: id, kind: f.kind, description: f.description, owner: f.owner, valuation: f.valuation ? Number(f.valuation) : undefined, valuationDate: f.valuationDate, valuedBy: f.valuedBy, documents: [{ name: f.doc, reference: f.ref }] }); M().remove(); openLoan(id); }, "Proposed - the Chairperson must approve it")));
+    add("Propose other security", G.can(c, "security.manage") && preDisb, () => Form("Propose exceptional security (not the normal route)", [{ name: "kind", label: "Kind", options: S.security.KINDS }, { name: "description", label: "Description (what, where, who owns it)" }, { name: "owner", label: "Owner of the security" }, { name: "valuation", label: "Valuation (UGX)", type: "number" }, dateF("valuationDate", "Valuation date"), { name: "valuedBy", label: "Valued by" }, { name: "doc", label: "Document / evidence title" }, { name: "ref", label: "Document reference" }], act(async (f) => { await commit("proposeSecurity", { loanId: id, kind: f.kind, description: f.description, owner: f.owner, valuation: f.valuation ? Number(f.valuation) : undefined, valuationDate: f.valuationDate, valuedBy: f.valuedBy, documents: [{ name: f.doc, reference: f.ref }] }); M().remove(); openLoan(id); }, "Proposed - the Chairperson must approve it")));
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
     add(loan.status === "AwaitingApproval" ? "Approve (second approval)" : "Approve", (G.can(c, "loan.review") && loan.status === "Pending") || (G.can(c, "loan.secondApprove") && loan.status === "AwaitingApproval"), act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Done"), "primary");
     add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [{ name: "reason", label: "Reason" }], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
-    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, { name: "grace", label: "Grace months", type: "number", value: 3 }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, graceMonths: f.grace, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
-    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date", value: today() }], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
+    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, { name: "grace", label: "Grace months", type: "number", value: 3 }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, graceMonths: f.grace, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
+    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     b.append(row); Modal("Loan " + id, b);
@@ -2094,7 +2112,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
   /* ---------- ledger ---------- */
   function ledger() {
     const rows = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 200);
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }, { name: "purpose", label: "Purpose" }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose" }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
       Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id)));
   }
   function openEntry(id) {
@@ -2111,7 +2129,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
   function subs() {
     const y = today().slice(0, 4), c = C.subscriptionCompliance(st.db, y);
     return h("div", null, h("div", { class: "grid" }, Card("Collected", ugx(c.collected), "of " + ugx(c.expected)), Card("Paid", String(c.paid.length)), Card("Unpaid", String(c.unpaid.length))),
-      Table([{ label: "Member", render: (m) => m.name }, { label: "Status", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); act(async () => commit("recordSubscription", { memberId: m.id, year: y }), "Recorded UGX 5,000")(); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
+      Table([{ label: "Member", render: (m) => m.name }, { label: "Status", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); Form("Subscription — " + m.name, [{ name: "year", label: "Subscription year", type: "number", value: y }, dateF("date", "Date paid (today unless you change it)")], act(async (f) => commit("recordSubscription", { memberId: m.id, year: Number(f.year), date: f.date }), "Subscription recorded"), "Record UGX 5,000"); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
   }
   function shareout() {
     const y = Number(today().slice(0, 4)), p = C.previewShareOut(st.db, y, today());
@@ -2130,7 +2148,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
   function profit() {
     const posted = (st.db.profitDistributions || []).filter((d) => d.status === "Posted"), pol = null;
     const cycles = (st.db.policy || []).filter((x) => /^cycle:/.test(x.id));
-    const setCycle = (c) => Form(c ? "Change inputs for " + c.period : "Set the inputs for a distribution cycle", [{ name: "period", label: "Period (e.g. 2026-Q2)", value: c ? c.period : "" }, { name: "pool", label: "Profit pool to distribute (UGX)", type: "number", value: c ? c.pool : "" }, { name: "date", label: "Savings measured at (YYYY-MM-DD)", value: c ? c.measurementDate : "" }, { name: "source", label: "Where this profit came from", value: c ? c.sourceNote : "" }, { name: "reason", label: "Reason / SOB reference for these inputs (required)" }],
+    const setCycle = (c) => Form(c ? "Change inputs for " + c.period : "Set the inputs for a distribution cycle", [{ name: "period", label: "Period (e.g. 2026-Q2)", value: c ? c.period : "" }, { name: "pool", label: "Profit pool to distribute (UGX)", type: "number", value: c ? c.pool : "" }, { name: "date", label: "Savings measured at", type: "date", value: c ? c.measurementDate : "" }, { name: "source", label: "Where this profit came from", value: c ? c.sourceNote : "" }, { name: "reason", label: "Reason / SOB reference for these inputs (required)" }],
       act(async (f) => commit("setProfitCycle", { period: f.period, pool: Number(f.pool), measurementDate: f.date, sourceNote: f.source, reason: f.reason }), "Cycle inputs saved and audited"));
     const run = (preview) => Form(preview ? "Preview profit distribution" : "Submit final profit distribution for Chairperson approval", [{ name: "period", label: "Period (its inputs must already be set)", options: cycles.filter((c) => !posted.some((d) => d.period === c.period)).map((c) => c.period) }],
       act(async (f) => { const args = { period: f.period };
@@ -2185,7 +2203,7 @@ window.SOB_CONFIG={ledgerUrl:u||""};})();</script><script>/* SOB web client - ge
     if (d.status === "Open" && G.can(ctx(), "reconcile.manage")) body.append(h("button", { class: "primary", "data-act": "resolve", onclick: () => Form("Resolve " + d.subject, [
       { name: "decision", label: "Decision", options: [{ value: "ACCEPT_PLATFORM", label: "Platform is right (source is stale/explained)" }, { value: "NO_ACTION_EXPLAINED", label: "Explained, no change needed" }, { value: "ACCEPT_SOURCE_WITH_ENTRY", label: "Source is right: post a correcting entry" }] },
       { name: "reason", label: "Reason (required)" }, { name: "evidence", label: "Evidence, e.g. receipt no. / paper record (required)" },
-      { name: "etype", label: "Correcting entry type (only for 'post a correcting entry')", options: ["Savings", "Withdraw", "Loan Repayment", "Expense", "Income"] }, { name: "eamt", label: "Entry amount", type: "number" }, { name: "edate", label: "Entry date", value: today() }, { name: "emember", label: "Entry member ID", value: /^SOB-\d+/.test(d.subject) ? d.subject : "" }],
+      { name: "etype", label: "Correcting entry type (only for 'post a correcting entry')", options: ["Savings", "Withdraw", "Loan Repayment", "Expense", "Income"] }, { name: "eamt", label: "Entry amount", type: "number" }, dateF("edate", "Entry date"), { name: "emember", label: "Entry member ID", value: /^SOB-\d+/.test(d.subject) ? d.subject : "" }],
       act(async (f) => { await commit("resolveDiscrepancy", { id, decision: f.decision, reason: f.reason, evidence: f.evidence, entry: f.decision === "ACCEPT_SOURCE_WITH_ENTRY" ? { type: f.etype, amount: f.eamt, date: f.edate, memberId: f.emember } : undefined }); document.querySelector(".modal-bg") && document.querySelector(".modal-bg").remove(); }, "Resolved")) }, "Resolve"));
     drill("Discrepancy " + d.subject, null, body);
   }

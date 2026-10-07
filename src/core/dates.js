@@ -31,5 +31,7 @@
   const yearOf = (s) => Number(s.slice(0, 4));
   const quarterOf = (s) => Math.floor((Number(s.slice(5, 7)) - 1) / 3) + 1;
 
-  return { EAT_OFFSET_MS, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
+  /* A real calendar day written YYYY-MM-DD (2026-02-30 and 2026-13-01 are refused). */
+  const isRealDate = (s) => { if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
+  return { EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
 });
