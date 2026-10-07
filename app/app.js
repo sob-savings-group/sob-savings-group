@@ -1,5 +1,5 @@
 (function () {
-  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, Banner, Empty, Confirm } = window.SOBUI;
+  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, Banner, Empty, Confirm, Chips } = window.SOBUI;
   const S = window.SOB, CFG = window.SOB_CONFIG || {}, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports;
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
@@ -34,9 +34,9 @@
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
       const mid = h("input", { id: "mid", placeholder: "e.g. SOB-015", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const pin = h("input", { type: "password", id: "pin", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
-      let working = false;
+      let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const go = async () => {
-        if (working) return; working = true;
+        if (working) return; working = true; problem.replaceChildren();
         try {
           /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
           const typed = mid.value.trim(), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
@@ -47,7 +47,12 @@
           st.user = u; st.view = null;
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
-        } catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "We could not match that. Check your SOB ID, and your PIN or name." : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+        } catch (e) {
+          const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || "");
+          problem.replaceChildren();
+          if (conn) connBanner(problem, e);   /* a connection/deployment problem is never hidden in a disappearing toast: it stays on screen with the exact cause and who to call */
+          else toast(e.code === "BAD_CREDENTIALS" ? "We could not match that. Check your SOB ID, and your PIN or name." : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true);
+        }
         finally { working = false; }
       };
       [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
@@ -56,7 +61,7 @@
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
         h("label", { for: "mid" }, "SOB ID / Name"), mid, h("div", { class: "hint" }, "Enter your SOB ID or registered name."),
         h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint" }, "Enter your PIN where required."),
-        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"),
+        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"), problem,
         h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }
     return box;
@@ -87,7 +92,7 @@
   const go = (v) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); };
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
   function navBadge(k) {
-    if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.dashboard(st.db, today()).awaitingApproval.value : 0;
+    if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.awaiting(st.db) : 0;
     return k === "myguar" ? (st.db.guarantees || []).filter((g) => g.guarantorId === st.user.memberId && g.status === "Requested").length : 0;
   }
   function render() {
@@ -113,49 +118,70 @@
   const loanCols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Principal", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "Status", render: (v) => badge(v.status, v.balance > 0 ? "warn" : "ok") }];
   function drill(title, definition, body) { Modal(title, h("div", null, definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); }
 
-  /* ---------- Interest Receivable: every outstanding loan, how the interest arose, what is unpaid ---------- */
-  function openInterestReceivable() {
-    const d = K.interestReceivable(st.db, today());
-    const cols = [{ label: "Member", key: "member" }, { label: "Loan", key: "loanId" }, { label: "Principal", num: 1, render: (r) => num(r.principal) }, { label: "Monthly interest", num: 1, render: (r) => num(r.assignedMonthlyInterest) },
-      { label: "Disbursed", render: (r) => D.toDisplay(r.disbursed) }, { label: "Interest from", render: (r) => D.toDisplay(r.interestStartsAfter) }, { label: "Months elapsed", num: 1, key: "monthsElapsed" }, { label: "Months charged", num: 1, key: "monthsCharged" },
-      { label: "Accumulated interest", num: 1, render: (r) => num(r.accumulatedInterest) }, { label: "Payments made", num: 1, render: (r) => num(r.paymentsMade) }, { label: "Unpaid interest", num: 1, render: (r) => h("strong", null, num(r.unpaidInterest)) }, { label: "Outstanding loan", num: 1, render: (r) => num(r.outstanding) }];
-    drill("Interest Receivable", K.dashboard(st.db, today()).interestReceivable.definition, h("div", null,
-      h("div", { class: "grid" }, Card("Unpaid interest (total)", ugx(d.total), "accrued less paid, interest first"), Card("Accumulated interest", ugx(d.accumulated)), Card("Payments made", ugx(d.paymentsMade)), Card("Outstanding loans", ugx(d.outstanding))),
-      Table(cols, d.rows, (r) => openLoan(r.loanId)), h("p", { class: "mute" }, "Tap a loan for its full history: interest changes, every payment, guarantors and the linked ledger.")));
-  }
-
   /* ---------- Admin: dashboard ---------- */
   /* What needs a human today — the first thing staff see. */
-  function attention(k, p) {
-    const items = [], open = (st.db.discrepancies || []).filter((d) => d.status === "Open").length, aw = k.awaitingApproval.value, role = st.user.role;
+  function attention(aw, p) {
+    const items = [], open = (st.db.discrepancies || []).filter((d) => d.status === "Open").length, role = st.user.role;
+    if (st.live && CFG.build && st.store.serverBuild !== CFG.build && role === "Admin") items.push(["warn", "The Google backend is " + (st.store.serverBuild ? "a different version (" + st.store.serverBuild + ")" : "an older version") + " than this app (" + CFG.build + "). In Apps Script paste the latest Code.gs, run authorizeSOB, then Deploy > Manage deployments > Edit > New version.", "system", "Open"]);
     if (aw) items.push(["warn", aw + (aw === 1 ? " item is" : " items are") + " waiting for the Chairperson's approval" + (role === "Chairperson" ? " — your decision is needed." : "."), "approvals", "Open"]);
     if (p.Pending) items.push(["info", p.Pending + (p.Pending === 1 ? " loan application needs" : " loan applications need") + " review.", "loans", "Open"]);
     if (pendingAirtime() && (role === "Admin")) items.push(["info", pendingAirtime() + " airtime " + (pendingAirtime() === 1 ? "request is" : "requests are") + " waiting.", "airtime", "Open"]);
     if (open) items.push(["warn", open + " reconciliation " + (open === 1 ? "difference is" : "differences are") + " still open.", "recon", "Open"]);
     return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
   }
+  /* ---- the reporting period: ONE selector for the whole dashboard and the Reports page. Balances are read as at its last day; activity covers first to last day. ---- */
+  const periodNow = () => { if (!st.period) { try { const v = JSON.parse(sessionStorage.getItem("sob.period") || "null"); if (v && v.key) st.period = v.key === "custom" ? D.customPeriod(v.from, v.to, today()) : D.presetPeriod(v.key, today()); } catch (e) { /* fall through to the default */ } } if (!st.period || st.period.to > today()) st.period = D.presetPeriod("year", today()); else if (st.period.key !== "custom") st.period = D.presetPeriod(st.period.key, today()); return st.period; };
+  const setPeriod = (p) => { st.period = p; st.customOpen = false; try { sessionStorage.setItem("sob.period", JSON.stringify({ key: p.key, from: p.from, to: p.to })); } catch (e) { /* optional */ } render(); };
+  function periodBar() {
+    const p = periodNow(), custom = p.key === "custom" || st.customOpen;
+    const from = h("input", { type: "date", id: "p-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "p-to", value: p.to, max: today(), "aria-label": "To date" });
+    return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Reporting period"),
+      Chips(D.PERIOD_PRESETS, custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today())); }),
+      custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
+      h("div", { class: "pb-note", id: "period-note" }, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
+  }
+  const kpiShow = (d) => d.unit === "%" ? (d.value == null ? "—" : d.value + "%") : d.unit === "count" ? String(d.value) : ugx(d.value);
+  const download = (name, type, data) => { const a = h("a", { href: URL.createObjectURL(new Blob([data], { type })), download: name }); document.body.append(a); a.click(); a.remove(); };
+  const heading = (c) => String(c).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (x) => x.toUpperCase());
+  /* a report on screen: friendly headings, numbers right-aligned with thousands separators, rows open the record behind them */
+  const tableFromReport = (rep, onRow) => {
+    const numCol = (c) => rep.rows.length > 0 && rep.rows.every((r) => r[c] === "" || r[c] == null || typeof r[c] === "number");
+    return Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+  };
+  function openRow(o, asAt) { if (!o || !o.id) return; if (o.kind === "member") openMember(o.id, asAt); else if (o.kind === "loan") openLoan(o.id, asAt); else if (o.kind === "entry") openEntry(o.id); }
+  /* KPI -> drill-down -> entries -> PDF: the table, the totals and the PDF are all the same K.report() for the chosen period. */
+  function openKpi(key) {
+    const p = periodNow(), rep = K.report(st.db, key, p, { open: true }), k = rep.kpi, shown = k.unit === "UGX" ? ugx(k.value) : k.unit === "%" ? (k.value == null ? "—" : k.value + "%") : String(k.value);
+    const tie = k.tied ? h("p", { class: "ok", "data-tie": "ok" }, "✓ The entries below add up to the figure on the dashboard: " + shown) : h("div", { class: "blocked", "data-tie": "bad" }, "The entries below do not add up to the dashboard figure. Please tell the Super Admin before relying on it.");
+    Modal(rep.title, h("div", null, h("p", { class: "mute" }, rep.definition),
+      rep.summary.length ? h("div", { class: "grid two" }, rep.summary.map(([l, v]) => Card(l, typeof v === "number" ? (/%/.test(l) ? v + "%" : ugx(v)) : String(v)))) : null,
+      h("div", { class: "row" }, printButton(rep, rep.period), h("button", { "data-csv": 1, onclick: () => download(key + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV")),
+      tableFromReport(rep, (r) => openRow(r._open, p.to)), tie));
+  }
+  const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
   function dashboard() {
-    const k = K.dashboard(st.db, today(), { year: Number(today().slice(0, 4)) }), p = K.pipeline(st.db);
-    const savingsRows = () => Table([{ label: "Member", render: (r) => r.name }, { label: "Savings", num: 1, render: (r) => num(r.savings) }], R.savings(st.db).rows.filter((r) => r.savings !== 0), (r) => openMember(r.memberId));
-    const wrap = h("div", null, attention(k, p),
+    const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
+    const c = (key, label, tone, sub) => Card(label, kpiShow(o[key]), sub || o[key].period, () => openKpi(key), tone);
+    const wrap = h("div", null, periodBar(),
+      h("h2", { class: "sec" }, "Where the group stands · as at " + D.longDate(p.to)),
       h("div", { class: "grid", id: "kpis" },
-        Card("Total Savings", ugx(k.totalSavings.value), "Group, lifetime", () => drill("Total Savings", k.totalSavings.definition, savingsRows()), "avail"),
-        Card("Available Cash", ugx(k.availableCash.value), "Net cash movement", () => drill("Available Cash", k.availableCash.definition, Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).slice(-25).reverse()))),
-        Card("Outstanding Loans", ugx(k.outstandingLoans.value), k.outstandingLoans.count + " active loans", () => drill("Outstanding Loans", k.outstandingLoans.definition, Table(loanCols, loanRows((v) => v.balance > 0), (v) => openLoan(v.id))), "loan"),
-        Card("Interest Receivable", ugx(k.interestReceivable.value), k.interestReceivable.loans + " loans · unpaid interest", () => openInterestReceivable(), "interest"),
-        Card("Profit (this year)", ugx(k.profit.value), "Recorded profit entries", () => drill("Profit", k.profit.definition, h("div", null, h("p", { class: "mute" }, "Profit is shared in proportion to eligible savings; members with an outstanding loan are not eligible. Open Profit to see every member's calculation."), h("button", { onclick: () => { const m = document.querySelector(".modal-bg"); if (m) m.remove(); st.view = "profit"; render(); } }, "Open Profit"))), "profit"),
-        Card("Expenses (this year)", ugx(k.expenses.value), "", () => drill("Expenses", k.expenses.definition, tableFromReport(R.incomeExpenses(st.db, { year: Number(today().slice(0, 4)) })))),
-        Card("Members", String(k.members.value), "Active", () => { st.view = "members"; render(); }),
-        Card("Awaiting approval", String(k.awaitingApproval.value), "Chairperson second approval", () => { st.view = "approvals"; render(); }),
-        Card("Loan Exposure", k.loanExposure.pct == null ? "—" : k.loanExposure.pct + "%", "Guaranteed " + ugx(k.loanExposure.guaranteed), () => drill("Loan Exposure", k.loanExposure.definition, tableFromReport(R.guarantors(st.db))))),
-      h("h2", { class: "sec" }, "Loan pipeline"),
-      h("div", { class: "grid", id: "pipeline" }, Object.keys(p).map((s) => Card(s, String(p[s]), "", () => drill(s + " loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))),
-      h("h2", { class: "sec" }, "Guarantor exposure"), Table([{ label: "Guarantor", render: (r) => r.name }, { label: "Committed", num: 1, render: (r) => num(r.committed) }, { label: "Loans", num: 1, key: "guarantees" }], LN.exposureReport(st.db), (r) => openMember(r.memberId)),
-      h("h2", { class: "sec" }, "Subscription compliance " + today().slice(0, 4)));
-    const c = C.subscriptionCompliance(st.db, today().slice(0, 4));
-    wrap.append(h("div", { class: "grid" }, Card("Collected", ugx(c.collected), "of " + ugx(c.expected), () => { st.view = "subs"; render(); }), Card("Unpaid members", String(c.unpaid.length), "", () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], c.unpaid, null)))));
+        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Opening " + num(o.availableCash.opening) + " → closing"),
+        c("outstandingLoans", "Outstanding Loans", "loan", o.outstandingLoans.count + " loans owed"), c("interestReceivable", "Interest Receivable", "interest", o.interestReceivable.loans + " loans · unpaid interest"),
+        c("loanExposure", "Loan Exposure", null, "Guaranteed " + ugx(o.loanExposure.guaranteed)), c("members", "Members", null, "Active")),
+      h("h2", { class: "sec" }, "What happened · " + (p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to))),
+      h("div", { class: "grid", id: "activity" },
+        c("savingsReceived", "Savings Received", "avail", o.savingsReceived.count + " deposits"), c("withdrawals", "Withdrawals & Share-Out", null, o.withdrawals.count + " payments"), c("loansDisbursed", "Loans Paid Out", "loan", o.loansDisbursed.count + " loans"),
+        c("repaymentsReceived", "Loan Repayments", "loan", o.repaymentsReceived.count + " payments"), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
+        c("otherIncome", "Other Income", null, o.otherIncome.count + " entries"), c("profit", "Profit Recorded", "profit", "Profit entries in the period"), c("expenses", "Expenses", null, o.expenses.count + " entries")),
+      h("h2", { class: "sec" }, "Needs attention · right now"), attention(o.awaitingApproval, pipe),
+      h("div", { class: "grid", id: "pipeline" }, Card("Awaiting approval", String(o.awaitingApproval), "Chairperson second approval", () => { st.view = "approvals"; render(); }), Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))),
+      h("h2", { class: "sec" }, "Subscription compliance " + p.to.slice(0, 4)));
+    const cm = C.subscriptionCompliance(asAtDb(p.to), p.to.slice(0, 4));
+    wrap.append(h("div", { class: "grid" }, Card("Collected", ugx(cm.collected), "of " + ugx(cm.expected) + " · as at " + D.longDate(p.to), () => { st.view = "subs"; render(); }), Card("Unpaid members", String(cm.unpaid.length), "as at " + D.longDate(p.to), () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)))));
     return wrap;
   }
+  /* the ledger as it stood on a past day (entries after it removed) */
+  const asAtDb = (asOf) => Object.assign({}, st.db, { transactions: (st.db.transactions || []).filter((t) => t.date <= asOf) });
   /* Every PDF/print goes through here -> R.toPrintHTML -> mandatory SOB header + footer (repeats on every page). Printed from a hidden frame (no pop-up blocking). */
   function printReport(rep, period) {
     return Busy.run("Preparing your PDF…", () => new Promise((res) => {
@@ -170,19 +196,19 @@
     }));
   }
   const printButton = (rep, period) => h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF");
-  const tableFromReport = (rep) => Table(rep.columns.map((c) => ({ label: c, render: (r) => r[c] })), rep.rows);
 
   /* ---------- members ---------- */
-  function openMember(id) {
+  function openMember(id, asAt0) {
     const m = st.db.members.find((x) => x.id === id); if (!m) return;
-    const hist = L.memberLifetimeHistory(st.db, id).slice().reverse(), loans = st.db.loans.filter((l) => l.memberId === id && !l.voided);
-    drill(m.id + " — " + m.name, null, h("div", null,
-      h("div", { class: "grid" }, Card("Savings", ugx(L.memberSavings(st.db, id)), "Lifetime ledger"), Card("Guarantee committed", ugx(LN.committed(st.db, id))), Card("Outstanding loan", ugx(loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, st.db, today())), 0)))),
-      st.live && st.user.role === "Admin" ? h("div", { class: "row" }, (st.db.users || []).some((u) => u.id === m.id)
+    const asAt = asAt0 || today(), hist = asAt < today(), dd = asAtDb(asAt), pos = L.memberPositionAsAt(st.db, id, asAt), stmt = R.memberStatementPrint(st.db, id, { to: asAt });
+    const loans = L.activeLoansAsAt(dd, asAt).filter((l) => l.memberId === id), owed = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, dd, asAt)), 0);
+    drill(m.id + " — " + m.name, null, h("div", null, hist ? Banner("info", "Showing this member as at " + D.longDate(asAt) + ". Open them from the Members page for today's position.") : null,
+      h("div", { class: "grid" }, Card("Savings" + (hist ? " (as at " + D.longDate(asAt) + ")" : ""), ugx(pos.savings), "From the ledger"), Card("Guarantee committed", ugx(pos.committed)), Card("Available", ugx(pos.available)), Card("Outstanding loan", ugx(owed))),
+      st.live && st.user.role === "Admin" && !hist ? h("div", { class: "row" }, (st.db.users || []).some((u) => u.id === m.id)
         ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset PIN for " + m.name, [{ name: "n", label: "New PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
         : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
-      h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(st.db, today()).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id)),
-      h("h2", { class: "sec" }, "Lifetime history"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "Savings after", num: 1, render: (t) => num(t.runningSavings) }], hist.slice(0, 50))));
+      h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(dd, asAt).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id, asAt)),
+      h("h2", { class: "sec" }, "Savings statement"), h("div", { class: "row" }, printButton(stmt, stmt.period)), tableFromReport({ columns: stmt.columns, rows: stmt.rows.slice().reverse().slice(0, 100) }, (r) => openEntry(r._open.id)), stmt.rows.length > 100 ? h("p", { class: "mute" }, "Showing the latest 100 of " + stmt.rows.length + " entries — the PDF has all of them.") : null));
   }
   /* live search: only the result area is redrawn, so typing never loses focus */
   const Searchable = (placeholder, build) => { let q = ""; const box = h("div"); const paint = () => box.replaceChildren(build(q.trim().toLowerCase())); const inp = h("input", { type: "search", class: "search", placeholder, "aria-label": placeholder, oninput: (e) => { q = e.target.value; paint(); } }); paint(); return h("div", null, inp, box); };
@@ -192,7 +218,17 @@
   }
 
   /* ---------- loans ---------- */
-  function openLoan(id) {
+  /* A loan looked at on a past date (from a dashboard figure): its position that day, read-only. Actions belong to today's view. */
+  function openLoanAsAt(loan, asAt) {
+    const dd = asAtDb(asAt), paid = loan.date <= asAt, v = LN.loanView(dd, loan, asAt), w = L.loanInterestPosition(loan, dd, asAt);
+    drill("Loan " + loan.id + " — as at " + D.longDate(asAt), null, h("div", null, Banner("info", "Showing this loan as it stood on " + D.longDate(asAt) + ". Open it from the Loans page for today's position and actions."),
+      h("p", null, "Member: ", nameOf(loan.memberId), " · paid out ", D.toDisplay(loan.date), paid ? "" : " (after this date, so nothing was owed yet)"),
+      paid ? h("div", null, h("div", { class: "grid" }, Card("Loan amount", ugx(v.principal)), Card("Monthly interest", ugx(v.assignedMonthlyInterest)), Card("Interest charged to date", ugx(v.accumulatedInterest)), Card("Repaid to date", ugx(v.repaid)), Card("Unpaid interest", ugx(w.unpaidInterest)), Card("Loan (principal) left", ugx(w.principalOutstanding)), Card("Still owed", ugx(v.balance))),
+        h("h2", { class: "sec" }, "Repayments up to this date"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(dd).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment"), (t) => openEntry(t.id)),
+        h("h2", { class: "sec" }, "Guarantors on this date"), Table([{ label: "Guarantor", render: (g) => nameOf(g.guarantorId) }, { label: "Guaranteed", num: 1, render: (g) => num(g.amount) }, { label: "Still committed", num: 1, render: (g) => num(L.guaranteeRemainingAsOf(g, asAt)) }], (st.db.guarantees || []).filter((g) => g.loanId === loan.id && (g.status === "Active" || g.status === "Released") && !(g.dateCommitted && g.dateCommitted > asAt)))) : null));
+  }
+  function openLoan(id, asAt0) {
+    const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
     const b = h("div", null,
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " months after grace"), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
@@ -307,13 +343,18 @@
         { k: "Does not need it (fully audited)", v: "Savings deposits and normal loan repayments" }, { k: "Extra entry types needing the Chairperson", v: pol.requiredTypes.length ? pol.requiredTypes.join(", ") : "none beyond the list above" },
         { k: "Backing for a loan beyond the 3× guideline", v: "Only the shortfall beyond the borrower's own qualification" }, { k: "Repayments are applied", v: "Accumulated unpaid interest first, the remainder reduces principal; guarantee is released only by principal actually reduced" }]));
   }
-  const REPORTS = { "Interest Receivable": () => R.interestReceivable(st.db, today()), "Awaiting approval": () => R.approvals(st.db), "Exceptional security": () => R.securities(st.db), "Profit distribution": () => R.quarterlyDistribution(st.db), "Savings by member": () => R.savings(st.db), "Loan book": () => R.loans(st.db, today()), "Loan repayments": () => R.repayments(st.db, null), "Guarantor exposure": () => R.guarantors(st.db), "Subscriptions": () => R.subscriptions(st.db, today().slice(0, 4)), "Income & expenses": () => R.incomeExpenses(st.db, null), "December share-out": () => R.shareOut(st.db, today().slice(0, 4), today()), "Airtime requests": () => R.airtime(st.db), "Notification log": () => R.notificationLog(st.db), "Reconciliation register": () => R.reconciliationRegister(st.db), "Annual summary": () => R.annualSummary(st.db, today().slice(0, 4)), "Interest vs principal received": () => R.repaymentAllocation(st.db), "Quarterly distribution": () => R.quarterlyDistribution(st.db, { year: Number(today().slice(0, 4)), quarter: 1 }) };
+  const withPeriod = (rep) => Object.assign(rep, { period: rep.period || periodNow().text || D.describePeriod(periodNow()) });
+  const REPORTS = { "Interest Receivable": () => R.interestReceivable(st.db, today()), "Awaiting approval": () => R.approvals(st.db), "Exceptional security": () => R.securities(st.db), "Profit distribution": () => R.quarterlyDistribution(st.db), "Savings by member": () => R.savings(st.db), "Loan book": () => R.loans(st.db, today()), "Loan repayments": () => withPeriod(R.repayments(st.db, { from: periodNow().from, to: periodNow().to })), "Guarantor exposure": () => R.guarantors(st.db), "Subscriptions": () => R.subscriptions(st.db, today().slice(0, 4)), "Income & expenses": () => withPeriod(R.incomeExpenses(st.db, { from: periodNow().from, to: periodNow().to })), "December share-out": () => R.shareOut(st.db, today().slice(0, 4), today()), "Airtime requests": () => R.airtime(st.db), "Notification log": () => R.notificationLog(st.db), "Reconciliation register": () => R.reconciliationRegister(st.db), "Annual summary": () => R.annualSummary(st.db, periodNow().to.slice(0, 4)), "Interest vs principal received": () => R.repaymentAllocation(st.db), "Quarterly distribution": () => R.quarterlyDistribution(st.db, { year: Number(today().slice(0, 4)), quarter: 1 }) };
+  const PERIOD_AWARE = ["Loan repayments", "Income & expenses", "Annual summary"];
   function reports() {
-    return h("div", { class: "grid" }, Object.keys(REPORTS).map((n) => Card(n, "Open", "", () => {
-      const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
-      const dl = (name, type, data) => { const a = h("a", { href: URL.createObjectURL(new Blob([data], { type })), download: name }); document.body.append(a); a.click(); a.remove(); };
-      drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => dl(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
-    })));
+    const p = periodNow();
+    return h("div", null, periodBar(),
+      h("h2", { class: "sec" }, "Dashboard figures · follow the period above"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, "Open", d.period, () => openKpi(k)); })),
+      h("h2", { class: "sec" }, "Registers, statements and schedules"), h("p", { class: "mute" }, "These show today's position, except " + PERIOD_AWARE.join(", ") + ", which follow the period above."),
+      h("div", { class: "grid" }, Object.keys(REPORTS).map((n) => Card(n, "Open", PERIOD_AWARE.includes(n) ? "Follows the period" : "Today", () => {
+        const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
+        drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+      }))));
   }
   function recon() {
     const list = (st.db.discrepancies || []).slice().sort((a, b) => (a.status === b.status ? 0 : a.status === "Open" ? -1 : 1)), integ = S.integrity.check(st.db, today()), un = S.integrity.unaccounted(st.db, today());
@@ -408,14 +449,16 @@
   const VIEWS = { profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
+  const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or PIN."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
-    if (CFG.notConfigured) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
+    if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
     app.append(State("loading"));
     try {
       if (st.live) {
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
         st.store.onChange((e) => { Busy.set(e.busy ? e.busyLabel : null); if (e.status === "synced") st.lastLoad = Date.now(); if (e.status === "signed-out" && st.user) { st.user = null; st.view = null; render(); toast("Your session ended. Please sign in again.", "warn"); } });
         st.db = { members: [], transactions: [], loans: [] };
+        st.store.check().then((r) => { st.conn = r; const host = document.getElementById("login-problem"); if (host && !r.ok && !host.children.length) connBanner(host, r.error); });   // tell people BEFORE they type if the endpoint is unreachable/misconfigured
         if (await st.store.resume()) { st.user = st.store.user; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } }
       }
       else { const raw = await (await fetch("demo-seed.json")).json(); st.db = S.migrate.migrateLegacy(raw, today()); }

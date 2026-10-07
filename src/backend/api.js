@@ -18,7 +18,7 @@
       if (user.role !== "Admin") full.outbox = [];
       full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
       if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
-      full.kpis = K.dashboard(db, asOf); full.pipeline = K.pipeline(db); return full;
+      return full;   // KPIs are NOT precomputed here: the app derives every figure for the chosen date/period from this ledger (core/kpis), so there is one calculation
     }
     const me = user.memberId;
     const mine = (db.loans || []).filter((l) => l.memberId === me);

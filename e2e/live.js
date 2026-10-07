@@ -15,7 +15,7 @@ API.handle(env, { action: "command", token: adminTok, name: "openDiscrepancy", a
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const srv = http.createServer((q, r) => {
   const u = decodeURIComponent(q.url.split("?")[0]);
-  if (u === "/api") { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(JSON.stringify(API.handle(env, JSON.parse(b)))); }); return; }
+  if (u === "/api") { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(JSON.stringify(q.method === "GET" ? { ok: true, service: "SOB Ledger" } : API.handle(env, JSON.parse(b)))); }); return; }
   if (u === "/app/config.js") { r.writeHead(200, { "Content-Type": "text/javascript" }); return r.end('window.SOB_CONFIG={ledgerUrl:"/api"};'); }
   const site = process.env.SITE ? path.join(root, process.env.SITE) : null; const f = site && u.startsWith("/app/") ? path.join(site, u.slice(5)) : path.join(root, u); if (!(f.startsWith(root)) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); return r.end(); }
   r.writeHead(200, { "Content-Type": mime[path.extname(f)] || "text/plain" }); r.end(fs.readFileSync(f));
@@ -28,7 +28,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
   ok((await pg.locator("#demo-go").count()) === 0, "live mode shows a real sign-in, not the demo role picker");
   await signin(pg, "ADMIN", "wrong"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "wrong PIN is refused");
-  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 9, "admin signs in and sees the 9 KPI cards (server-computed ledger view)");
+  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, "admin signs in and sees the balance and activity KPI cards (computed from the server ledger view)");
   await pg.click('[data-nav="ledger"]'); await pg.click("#add-entry"); await pg.selectOption('.modal select[name="m"]', mem.id); await pg.fill('.modal input[name="amount"]', "3000"); await pg.click("[data-submit]");
   await pg.waitForSelector(".toast:not(.bad)"); ok(L.memberSavings(S.readAll(env.ss), mem.id) === L.memberSavings(db0, mem.id) + 3000, "an entry made in the UI is persisted by the server");
   

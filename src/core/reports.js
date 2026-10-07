@@ -12,7 +12,7 @@
   function memberStatement(db, memberId, period) {
     const h = L.memberLifetimeHistory(db, memberId, period);
     const rows = h.map((r) => ({ date: dates.toDisplay(r.date), type: r.type, purpose: r.purpose || "", amount: r.amount, savingsEffect: L.classifyTransaction(r).savings, balance: r.runningSavings }));
-    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0, ...L.memberPosition(db, memberId) });
+    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0, ...(period && period.to ? L.memberPositionAsAt(db, memberId, period.to) : L.memberPosition(db, memberId)) });
   }
   /* What a member has committed as guarantor, with the borrower side linked: commitments reduce AVAILABLE savings and return as the borrower repays. */
   function guaranteeStatement(db, memberId) {
@@ -87,14 +87,14 @@
     return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
   function annualSummary(db, year) {
-    const d = K.dashboard(db, year + "-12-31", { year: Number(year) });
+    const end = year + "-12-31", d = K.dashboard(db, end < dates.todayISO() ? end : dates.todayISO(), { year: Number(year) });   // a year still running is summarised to today, never into the future
     return R("Annual summary " + year, ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
   }
   const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   function toCSV(rep) {
     if (rep.blocked) throw new Error("BLOCKED: " + rep.reason);
     const q = (v) => { v = v === undefined || v === null ? "" : String(v); if (/^[=+\-@]/.test(v) && isNaN(Number(v))) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    return [rep.columns.join(",")].concat(rep.rows.map((r) => rep.columns.map((c) => q(r[c])).join(","))).join("\n");
+    return [rep.columns.map((c) => q((rep.labels && rep.labels[c]) || c)).join(",")].concat(rep.rows.map((r) => rep.columns.map((c) => q(r[c])).join(","))).join("\n");
   }
   /* ---- Mandatory SOB letterhead: EVERY printable/PDF report goes through brandedPage(), so none can be produced without it. ---- */
   const GROUP = "Sons of Bethel (SOB) Savings Group";
@@ -130,13 +130,15 @@
   const TYPE_LABEL = { Savings: "Savings deposit", Withdraw: "Withdrawal", Profit: "Profit share", "Loan Disbursement": "Loan paid out", "Loan Repayment": "Loan repayment", Subscription: "Annual subscription", "Share-Out": "December share-out", "Bank Charge": "Bank charge", Penalty: "Penalty" };
   /* A member-friendly, filing-quality statement: plain wording, running savings balance, and the three positions at the top. */
   function memberStatementPrint(db, memberId, period) {
-    const h = L.memberLifetimeHistory(db, memberId, period), pos = L.memberPosition(db, memberId), asOf = dates.todayISO();
-    const owed = db.loans.filter((l) => l.memberId === memberId && l.status === "Active" && !l.voided).reduce((a, l) => a + L.loanOutstanding(l, db, asOf), 0);
+    const asOf = (period && period.to) || dates.todayISO(), from = (period && period.from) || "", h = L.memberLifetimeHistory(db, memberId, period && (period.from || period.to) ? { from, to: asOf } : null).filter((t) => t.date <= asOf), pos = L.memberPositionAsAt(db, memberId, asOf);
+    const dd = Object.assign({}, db, { transactions: (db.transactions || []).filter((t) => t.date <= asOf) });
+    const owed = L.activeLoansAsAt(dd, asOf).filter((l) => l.memberId === memberId).reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, dd, asOf)), 0);
     const cols = ["Date", "Transaction", "Details", "Amount", "Effect on savings", "Savings balance"];
-    const rows = h.map((t) => ({ Date: dates.toDisplay(t.date), Transaction: TYPE_LABEL[t.type] || t.type, Details: t.purpose && t.purpose !== t.type ? t.purpose : "", Amount: Number(t.amount), "Effect on savings": L.classifyTransaction(t).savings, "Savings balance": t.runningSavings }));
+    const rows = h.map((t) => ({ Date: dates.toDisplay(t.date), Transaction: TYPE_LABEL[t.type] || t.type, Details: t.purpose && t.purpose !== t.type ? t.purpose : "", Amount: Number(t.amount), "Effect on savings": L.classifyTransaction(t).savings, "Savings balance": t.runningSavings, _open: { kind: "entry", id: t.id } }));
     const rep = R("Savings statement — " + name(db, memberId) + " (" + memberId + ")", cols, rows, {});
-    rep.summary = [["Total savings", pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]].concat(owed ? [["Loan owed", owed]] : []);
-    rep.hideTotals = true; return rep;
+    rep.period = from ? dates.longDate(from) + " – " + dates.longDate(asOf) : (period && period.to ? "As at " + dates.longDate(asOf) : undefined);
+    rep.summary = (from ? [["Savings brought forward on " + dates.longDate(from), L.memberSavingsAsOf(db, memberId, dates.addDays(from, -1))]] : []).concat([["Total savings" + (period && period.to ? " (as at " + dates.longDate(asOf) + ")" : ""), pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]]).concat(owed ? [["Loan owed", owed]] : []);
+    rep.position = pos; rep.hideTotals = true; return rep;
   }
   /* One loan, in plain words: what was paid out, each repayment split into interest and loan, and who guarantees it. */
   function loanMemberStatement(db, loanId, asOf) {

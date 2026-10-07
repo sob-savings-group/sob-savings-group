@@ -10,7 +10,10 @@ window.SOBMember = function (E) {
   const typeInfo = (t) => TYPE[t] || [t, "book", ""];
   const LOAN_STATUS = { Pending: ["Under review", "warn"], AwaitingApproval: ["Awaiting Chairperson approval", "warn"], Approved: ["Approved — awaiting payout", "ok"], Active: ["Active", "ok"], Cleared: ["Fully repaid", "mute"], Declined: ["Declined", "bad"] };
   const myLoans = () => (st.db.loans || []).filter((l) => l.memberId === me() && !l.voided).sort((a, b) => ((a.applicationDate || a.date || "") < (b.applicationDate || b.date || "") ? 1 : -1));
-  const history = () => L.memberLifetimeHistory(st.db, me()).slice().reverse();
+  /* the statement period the member chose: the list, the opening/closing balances and the PDF all use it */
+  const MP = [["all", "All time"], ["year", "This year"], ["lastYear", "Last year"], ["lastMonth", "Last month"], ["custom", "Custom"]];
+  const stmtPeriod = () => { const p = st.stmtPeriod; if (!p || p.key === "all") return D.presetPeriod("all", today()); return p.key === "custom" ? p : D.presetPeriod(p.key, today()); };
+  const history = () => { const p = stmtPeriod(); return L.memberLifetimeHistory(st.db, me(), { from: p.from, to: p.to }).slice().reverse(); };
   const first = () => String(myName() || "").split(/\s+/)[0];
   const viewOnly = () => !!st.user.readOnly;
 
@@ -35,7 +38,7 @@ window.SOBMember = function (E) {
     return ["*Sons of Bethel (SOB) Savings Group*", "Statement for " + myName() + " (" + me() + ")", "As at " + fdate(today()), "", "Total savings: " + ugx(p.savings), "Held for guarantees: " + ugx(p.committed), "Available: " + ugx(p.available), "", "Latest activity:"]
       .concat(last.map((t) => "• " + fdate(t.date) + " " + typeInfo(t.type)[0] + " " + num(t.amount))).concat(["", "Issued from the SOB platform."]).join("\n");
   }
-  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "print-statement", "data-print": 1, onclick: () => printReport(R.memberStatementPrint(st.db, me(), { year: null }), "Lifetime statement to " + fdate(today())) }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "share-statement", onclick: () => waShare(statementText()) }, Icon("share", 18), " Share on WhatsApp"));
+  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "print-statement", "data-print": 1, onclick: () => { const p = stmtPeriod(); printReport(R.memberStatementPrint(st.db, me(), { from: p.from, to: p.to }), p.key === "all" ? "Lifetime statement to " + fdate(today()) : p.text); } }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "share-statement", onclick: () => waShare(statementText()) }, Icon("share", 18), " Share on WhatsApp"));
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
   const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name, so you can view your balances and statements. To request a loan, accept a guarantee or change your PIN, sign in with your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
@@ -76,6 +79,13 @@ window.SOBMember = function (E) {
   const quick = (icon, title, sub, fn) => h("div", { class: "card click", role: "button", tabindex: 0, onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } }, h("div", { class: "lic", style: "margin-bottom:8px" }, Icon(icon)), h("div", { style: "font-weight:700" }, title), h("div", { class: "sub" }, sub));
 
   /* ---------- SAVINGS ---------- */
+  function periodControl() {
+    const p = stmtPeriod(), custom = st.stmtPeriod && st.stmtPeriod.key === "custom" || st.stmtCustom, from = h("input", { type: "date", id: "sp-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "sp-to", value: p.to, max: today(), "aria-label": "To date" });
+    const opening = p.from ? L.memberSavingsAsOf(st.db, me(), D.addDays(p.from, -1)) : 0, closing = L.memberSavingsAsOf(st.db, me(), p.to);
+    return h("div", { id: "stmt-period" }, Chips(MP, custom ? "custom" : (st.stmtPeriod ? st.stmtPeriod.key : "all"), (k) => { if (k === "custom") { st.stmtCustom = true; render(); } else { st.stmtCustom = false; st.stmtPeriod = k === "all" ? null : D.presetPeriod(k, today()); render(); } }),
+      custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "sp-apply", onclick: () => { try { st.stmtPeriod = D.customPeriod(from.value, to.value, today()); st.stmtCustom = false; render(); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
+      h("div", { class: "mute", style: "font-size:13px;margin:0 0 8px", id: "stmt-note" }, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) + " · brought forward " + ugx(opening) + " · closing " + ugx(closing) : "Everything up to " + D.longDate(p.to) + " · closing balance " + ugx(closing)));
+  }
   function savings() {
     const pos = L.memberPosition(st.db, me()), all = history();
     const f = st.savFilter || "all", sets = { all: () => true, dep: (t) => t.type === "Savings", wd: (t) => ["Withdraw", "Share-Out", "Bank Charge"].includes(t.type), loan: (t) => ["Loan Repayment", "Loan Disbursement"].includes(t.type), sub: (t) => t.type === "Subscription", profit: (t) => t.type === "Profit" };
@@ -83,7 +93,7 @@ window.SOBMember = function (E) {
     const paint = () => { box.replaceChildren(rows.length ? List(grouped(rows)) : Empty({ icon: "book", title: "Nothing here yet", text: f === "all" ? "Your transactions will appear as they are recorded." : "No transactions of this kind." })); };
     paint();
     return h("div", null, signInfo(), Hero({ hook: "My Savings", label: "Total savings", value: ugx(pos.savings), sub: "Lifetime balance — never reset at share-out", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }, { label: "Held for guarantees", value: pos.committed, cls: "c-commit" }]) }), statementButtons(),
-      Section("Statement"), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"], ["loan", "Loan"], ["sub", "Subscription"], ["profit", "Profit"]], f, (k) => { st.savFilter = k; render(); }), box);
+      Section("Statement"), periodControl(), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"], ["loan", "Loan"], ["sub", "Subscription"], ["profit", "Profit"]], f, (k) => { st.savFilter = k; render(); }), box);
   }
 
   /* ---------- LOANS ---------- */
@@ -142,7 +152,7 @@ window.SOBMember = function (E) {
   function more() {
     const m = st.db.members.find((x) => x.id === me()) || {}, off = !!m.notifyOptOut;
     return h("div", null, signInfo(), List([
-      Row({ icon: "receipt", title: "Annual subscription", sub: "UGX 5,000 a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
+      Row({ icon: "receipt", title: "Annual subscription", sub: ugx(S.cycle.SUBSCRIPTION_AMOUNT) + " a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
       viewOnly() ? null : Row({ icon: "bell", title: "SMS / WhatsApp notices", sub: off ? "Off — tap to switch on" : "On — tap to switch off", onOpen: act(async () => commit("setNotifyOptOut", { memberId: me(), optOut: !off }), off ? "Notices switched on" : "Notices switched off") }),
       viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my PIN", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
       Section("Need help?"), List(help().map((o) => h("a", { class: "li click", href: "tel:" + o[2].replace(/\s/g, ""), style: "text-decoration:none;color:inherit" }, h("div", { class: "lic" }, Icon("phone")), h("div", { class: "lm" }, h("div", { class: "lt" }, o[0]), h("div", { class: "ls" }, o[1])), h("div", { class: "lr" }, h("b", null, o[2]))))));
@@ -150,7 +160,7 @@ window.SOBMember = function (E) {
   function subs() {
     const year = today().slice(0, 4), mine = (st.db.transactions || []).filter((t) => t.memberId === me() && t.type === "Subscription" && !t.voided).sort((a, b) => (a.date < b.date ? 1 : -1));
     const paid = mine.some((t) => Number(t.forYear) === Number(year) || (!t.forYear && t.date.slice(0, 4) === year));
-    return h("div", null, h("div", { class: "card" }, h("div", { class: "lbl" }, "Annual subscription " + year), h("div", { class: "val " + (paid ? "t-avail" : "t-commit") }, paid ? "Paid" : "Not yet paid"), h("div", { class: "sub" }, "UGX 5,000 a year. It is group income and is kept separate from your savings.")),
+    return h("div", null, h("div", { class: "card" }, h("div", { class: "lbl" }, "Annual subscription " + year), h("div", { class: "val " + (paid ? "t-avail" : "t-commit") }, paid ? "Paid" : "Not yet paid"), h("div", { class: "sub" }, "" + ugx(S.cycle.SUBSCRIPTION_AMOUNT) + " a year. It is group income and is kept separate from your savings.")),
       paid ? null : Banner("info", "Please pay your subscription to the Treasurer: " + help()[0].join(" · ")), Section("Payment history"),
       mine.length ? List(mine.map((t) => Row({ icon: "receipt", title: "Subscription " + (t.forYear || t.date.slice(0, 4)), sub: "Paid " + fdate(t.date), right: ugx(t.amount) }))) : Empty({ icon: "receipt", title: "No subscription payments yet", text: "Your payments will show here once recorded." }));
   }

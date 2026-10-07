@@ -38,11 +38,26 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
+var SOB_BUILD = "__BUILD__";
+function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+/* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
-  var body; try { body = JSON.parse(e.postData.contents); } catch (x) { body = null; }
-  return ContentService.createTextOutput(JSON.stringify(__M['backend/api'].handle(__env(), body))).setMimeType(ContentService.MimeType.JSON);
+  try {
+    var body = null; try { body = JSON.parse(e.postData.contents); } catch (x) { body = null; }
+    var r = __M['backend/api'].handle(__env(), body);
+    if (r && typeof r === "object") r.build = SOB_BUILD;
+    return __json(r);
+  } catch (err) { return __json({ ok: false, error: "SERVER_ERROR: " + String((err && err.message) || err), build: SOB_BUILD }); }
 }
-function doGet(){ return ContentService.createTextOutput(JSON.stringify({ ok: true, service: "SOB Ledger" })).setMimeType(ContentService.MimeType.JSON); }
+function doGet(){ return __json({ ok: true, service: "SOB Ledger", build: SOB_BUILD }); }
+/* Run ONCE from the Apps Script editor after pasting a new Code.gs (Run > authorizeSOB), then Deploy > Manage deployments > Edit > New version.
+   It touches every Google service the platform uses so Google asks for the permissions up front; otherwise the web app can answer with an HTML
+   "authorization required" page instead of data. */
+function authorizeSOB(){
+  SpreadsheetApp.getActiveSpreadsheet().getName(); CacheService.getScriptCache().get("x"); PropertiesService.getScriptProperties().getKeys();
+  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/");
+  return "SOB is authorised. Build " + SOB_BUILD + ". Now deploy it as a New version.";
+}
 /* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
    and SOB_INITIAL_ADMIN_PIN (6+ characters). The PIN property is deleted as soon as the Admin exists. */
 function setupAdmin(){

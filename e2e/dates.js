@@ -20,7 +20,7 @@ S.writeCollection(env.ss, "users", S.readCollection(env.ss, "users").concat([A.m
 const ledger = () => API.handle(env, { action: "getLedger", token: tok }).db;
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const srv = http.createServer((q, r) => { const u = q.url.split("?")[0];
-  if (u === "/api") { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(JSON.stringify(API.handle(env, JSON.parse(b)))); }); return; }
+  if (u === "/api") { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(JSON.stringify(q.method === "GET" ? { ok: true, service: "SOB Ledger" } : API.handle(env, JSON.parse(b)))); }); return; }
   if (u === "/app/config.js") { r.writeHead(200, { "Content-Type": "text/javascript" }); return r.end('window.SOB_CONFIG={ledgerUrl:"/api"};'); }
   const f = path.join(root, u); if (!f.startsWith(root) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); return r.end(); } r.writeHead(200, { "Content-Type": mime[path.extname(f)] || "text/plain" }); r.end(fs.readFileSync(f)); });
 let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m); if (!c) { fails++; process.exitCode = 1; } };

@@ -88,3 +88,15 @@ This environment cannot reach Google, so the following is run from your own acco
 2. In the scratch deployment run through once: record a savings entry (Admin), apply for a loan, approve it as Admin (it moves to the Chairperson) and as Chairperson, disburse with two guarantors (accept as each guarantor), record an interest-only payment (nothing released) and a larger payment (only the principal part released), check Interest Receivable and the loan statement; void a test entry as Admin (it waits) and approve as Chairperson; set a profit cycle, preview, submit and approve as Chairperson; preview the share-out and confirm committed savings stay; check statements/PDF reports, an audit-trail entry for each step, then backup and restore into a second scratch deployment. Delete the scratch deployment.
 3. Production (section B) -> `smoke` -> `import-ledger` -> `import-users` -> `import-history` -> `register-discrepancies` -> `backup-now` and an offline `backup` -> `verify`.
 4. SMS/WhatsApp stays in DRY-RUN until credentials exist and the `testSms` / `testWhatsApp` live tests pass (section F).
+
+
+## If sign-in shows a connection problem (HTML instead of data)
+The app now says which of these it is (the message appears on the sign-in screen, before anyone types a PIN):
+1. **"Google asked for a sign-in / not open to everyone"** - Apps Script > Deploy > Manage deployments > pencil (Edit) > *Execute as:* **Me**, *Who has access:* **Anyone** > Version: **New version** > Deploy.
+2. **"needs the script owner to grant permissions"** - paste the latest `Code.gs`, choose the function **authorizeSOB** and press Run once (accept the Google permissions screen), then deploy as a New version.
+3. **"older than this app" / different build** - paste the latest `Code.gs` over the old one, run `authorizeSOB`, then Deploy > Manage deployments > Edit > New version. (Editing a deployment keeps the same /exec address; "New deployment" makes a different address.)
+4. **"ends in /dev"** - use the address ending in `/exec` (Deploy > Manage deployments > Web app URL).
+5. **"could not find that web app"** - the deployment was deleted or the address was mistyped.
+6. **"The Google script stopped with an error: ..."** - the message quotes Google's own error text.
+Quick check without the app: open the `/exec` address in a browser tab. A healthy backend shows `{"ok":true,"service":"SOB Ledger","build":"..."}`; the Admin dashboard warns if that build is not the one this app was made with.
+Whatever goes wrong inside the script, the web app now answers with JSON (`SERVER_ERROR: ...`) rather than Google's HTML error page.

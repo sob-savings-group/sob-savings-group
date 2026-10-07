@@ -63,8 +63,11 @@
 
   /* --- Loans: assignedMonthlyInterest is set per loan by Admin; SOB has no standard rate. --- */
   // A cleared loan stops accruing on the day it was cleared (otherwise "months to today" would revive its balance).
-  const effectiveAsOf = (loan, asOf) =>
-    (loan.status === "Cleared" && dates.isISO(loan.datePaidFull)) ? loan.datePaidFull : (asOf || dates.todayISO());
+  /* ...but only from that day on: looked at as-at an EARLIER date the loan was still running, so interest runs to the as-at date. */
+  const effectiveAsOf = (loan, asOf) => {
+    const a = asOf || dates.todayISO();
+    return (loan.status === "Cleared" && dates.isISO(loan.datePaidFull) && loan.datePaidFull < a) ? loan.datePaidFull : a;
+  };
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
@@ -90,6 +93,19 @@
   const liveGuarantee = (g) => g.status === "Active";
   const memberCommitted = (db, memberId) => (db.guarantees || []).filter((g) => g.guarantorId === memberId && liveGuarantee(g)).reduce((a, g) => a + guaranteeRemaining(g), 0);
   const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
+  /* AS-AT views: what was true on a past date. A loan counts only from its disbursement day; a guarantee only from its commitment day and
+     only for what repayments up to that day had not yet released (release rows carry the repayment's own date). */
+  const activeLoansAsAt = (db, asOf) => activeLoans(db).filter((l) => !dates.isISO(l.date) || l.date <= asOf);
+  function guaranteeRemainingAsOf(g, asOf) {
+    if (g.status !== "Active" && g.status !== "Released") return 0;
+    const from = g.dateCommitted || g.dateRequested || ""; if (from && from > asOf) return 0;
+    const rel = (g.releases || []).filter((r) => !r.reversed);
+    if (!rel.length) return g.status === "Active" ? guaranteeRemaining(g) : (g.dateReleased && g.dateReleased > asOf ? Number(g.amount) : 0);
+    return Math.max(0, Number(g.amount) - rel.filter((r) => !r.date || r.date <= asOf).reduce((a, r) => a + Number(r.amount), 0));
+  }
+  const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
+  const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  const memberPositionAsAt = (db, memberId, asOf) => { const savings = memberSavingsAsOf(db, memberId, asOf), committed = memberCommittedAsOf(db, memberId, asOf); return { savings, committed, available: savings - committed }; };
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
   /* --- FINAL SOB RULE for a partial repayment: accumulated UNPAID INTEREST is cleared first (then penalties), and ONLY THE REMAINDER reduces principal.
@@ -168,7 +184,7 @@
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
-    memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
+    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
   };
 });

@@ -5,7 +5,7 @@ const AS_OF = "2026-03-31"; const db0 = M.migrateLegacy(raw, AS_OF);
 const tests = []; const t = (n, f) => tests.push([n, f]);
 const memStorage = () => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = v; }, removeItem: (k) => { delete m[k]; }, m }; };
 function fakeServer() { const s = { calls: [], auth: false, fail: null };
-  s.fetch = async (url, o) => { const b = JSON.parse(o.body); s.calls.push(b); const J = (x) => ({ json: async () => x });
+  s.fetch = async (url, o) => { const b = JSON.parse(o.body); s.calls.push(b); const J = (x) => ({ status: 200, text: async () => JSON.stringify(x) });
     if (b.action === "login") return b.pin === "good" ? J({ ok: true, token: "TOK", user: { id: "A", role: "Admin" } }) : J({ ok: false, error: "BAD_CREDENTIALS" });
     if (b.token !== "TOK") return J({ ok: false, error: "UNAUTHENTICATED" });
     if (b.action === "whoami") return J({ ok: true, user: { id: "A", role: "Admin" } });
@@ -29,12 +29,12 @@ t("a refused command surfaces the server's error and leaves the local ledger unc
 });
 t("expired/invalid session signs the client out and clears the stored token", async () => {
   const sv = fakeServer(), ss = memStorage(), c = C.create({ url: "u", fetch: sv.fetch, session: ss }); await c.login("A", "good");
-  ss.m["sob.session"] = "TOK"; const c2 = C.create({ url: "u", fetch: async (u, o) => ({ json: async () => ({ ok: false, error: "UNAUTHENTICATED" }) }), session: ss });
+  ss.m["sob.session"] = "TOK"; const c2 = C.create({ url: "u", fetch: async (u, o) => ({ status: 200, text: async () => JSON.stringify({ ok: false, error: "UNAUTHENTICATED" }) }), session: ss });
   assert.equal(await c2.resume(), null); assert.equal(ss.m["sob.session"], undefined);
   await c.logout(); assert.equal(c.signedIn, false); assert.equal(ss.m["sob.session"], undefined);
 });
 t("sign-in contract: a response without a user falls back to whoami; a response without a session is a clear error, never a crash", async () => {
-  const mk = (loginRes, whoRes) => C.create({ url: "u", session: memStorage(), fetch: async (u, o) => { const b = JSON.parse(o.body); return { json: async () => (b.action === "login" ? loginRes : whoRes) }; } });
+  const mk = (loginRes, whoRes) => C.create({ url: "u", session: memStorage(), fetch: async (u, o) => { const b = JSON.parse(o.body); return { status: 200, text: async () => JSON.stringify(b.action === "login" ? loginRes : whoRes) }; } });
   const u = { id: "ADMIN", name: "ADMIN", role: "Admin", mustChangePin: false };
   assert.deepEqual(await mk({ ok: true, token: "t", user: u }, {}).login("ADMIN", "x"), u);
   assert.equal((await mk({ ok: true, token: "t" }, { ok: true, user: u }).login("ADMIN", "x")).role, "Admin");

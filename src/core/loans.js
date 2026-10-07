@@ -94,12 +94,13 @@
     (db.guarantees || []).filter((g) => g.loanId === loanId && (!guaranteeId || g.id === guaranteeId)).forEach((g) => { g.preRelease = true; });
     releaseGuarantees(db, ctx, loanId, reason, guaranteeId);
   }
-  function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry) {
+  function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry, onDate) {
+    const day = onDate || ctx.today;
     (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g) && (!onlyId || g.id === onlyId)).forEach((g) => {
       const left = L.guaranteeRemaining(g), was = g.status;
-      if (was === "Active" && left > 0) (g.releases = g.releases || []).push({ date: ctx.today, entryId: viaEntry || null, amount: left, reason: why });
+      if (was === "Active" && left > 0) (g.releases = g.releases || []).push({ date: day, entryId: viaEntry || null, amount: left, reason: why });
       g.releasedAmount = Number(g.releasedAmount || 0) + (was === "Active" ? left : 0);
-      g.status = "Released"; g.dateReleased = ctx.today; g.releaseReason = why;
+      g.status = "Released"; g.dateReleased = day; g.releaseReason = why;
       G.audit(db, ctx, "Guarantee", g.id, "Released", { status: was, committed: was === "Active" ? left : 0 }, { status: "Released", committed: 0 }, why);
     });
     // approved security on the loan ends with the loan
@@ -154,7 +155,7 @@
   function clearIfRepaid(db, ctx, loan, entry) {
     if (loan.status === "Active" && L.loanOutstanding(loan, db, entry.date) <= 0) {
       Object.assign(loan, { status: "Cleared", datePaidFull: entry.date, clearedBy: ctx.by });
-      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);      // fully repaid: principal is zero under any allocation rule
+      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id, entry.date);      // fully repaid: principal is zero under any allocation rule
       G.audit(db, ctx, "Loan", loan.id, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
     }
   }

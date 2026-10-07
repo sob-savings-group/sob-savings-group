@@ -37,7 +37,38 @@ __M['core/dates'] = (function(){ const module = {exports:{}}; const require = __
 
   /* A real calendar day written YYYY-MM-DD (2026-02-30 and 2026-13-01 are refused). */
   const isRealDate = (s) => { if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const [y, m, d] = s.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d; };
-  return { EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
+
+  /* ---- Reporting periods. Balances are "as at" the period's last day; activity is what happened from the first day to the last. A period never ends in the future. ---- */
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const longDate = (s) => (isISO(s) ? Number(s.slice(8, 10)) + " " + MONTHS[Number(s.slice(5, 7)) - 1] + " " + s.slice(0, 4) : "");
+  const lastDayOfMonth = (y, m) => fmt(new Date(Date.UTC(y, m, 0)));
+  const PERIOD_PRESETS = [["month", "This month"], ["lastMonth", "Last month"], ["quarter", "This quarter"], ["year", "This year"], ["lastYear", "Last year"], ["all", "All time"], ["custom", "Custom"]];
+  function describePeriod(p) {
+    if (p.key === "all" || !p.from) return "Start of records – " + longDate(p.to);
+    return p.from === p.to ? longDate(p.to) : longDate(p.from) + " – " + longDate(p.to);
+  }
+  function makePeriod(key, from, to, today) {
+    const p = { key, from, to }; p.label = (PERIOD_PRESETS.find((x) => x[0] === key) || [0, "Custom"])[1]; p.text = describePeriod(p); p.toDate = to >= today; return p;
+  }
+  function presetPeriod(key, today) {
+    today = today || todayISO(); const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), pad = (n) => String(n).padStart(2, "0");
+    if (key === "month") return makePeriod(key, y + "-" + pad(m) + "-01", today, today);
+    if (key === "lastMonth") { const ly = m === 1 ? y - 1 : y, lm = m === 1 ? 12 : m - 1; return makePeriod(key, ly + "-" + pad(lm) + "-01", lastDayOfMonth(ly, lm), today); }
+    if (key === "quarter") { const qm = Math.floor((m - 1) / 3) * 3 + 1; return makePeriod(key, y + "-" + pad(qm) + "-01", today, today); }
+    if (key === "year") return makePeriod(key, y + "-01-01", today, today);
+    if (key === "lastYear") return makePeriod(key, (y - 1) + "-01-01", (y - 1) + "-12-31", today);
+    if (key === "all") return makePeriod(key, "", today, today);
+    throw new RangeError("Unknown period: " + key);
+  }
+  /* A custom period must be two real days, in order, and not in the future. */
+  function customPeriod(from, to, today) {
+    today = today || todayISO();
+    if (!isRealDate(from) || !isRealDate(to)) throw new RangeError("Choose two real dates");
+    if (from > to) throw new RangeError("The start date must not be after the end date");
+    if (to > today) throw new RangeError("The end date cannot be in the future");
+    return makePeriod("custom", from, to, today);
+  }
+  return { longDate, presetPeriod, customPeriod, describePeriod, PERIOD_PRESETS, EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
 });
 
 return module.exports; })();
@@ -107,8 +138,11 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
 
   /* --- Loans: assignedMonthlyInterest is set per loan by Admin; SOB has no standard rate. --- */
   // A cleared loan stops accruing on the day it was cleared (otherwise "months to today" would revive its balance).
-  const effectiveAsOf = (loan, asOf) =>
-    (loan.status === "Cleared" && dates.isISO(loan.datePaidFull)) ? loan.datePaidFull : (asOf || dates.todayISO());
+  /* ...but only from that day on: looked at as-at an EARLIER date the loan was still running, so interest runs to the as-at date. */
+  const effectiveAsOf = (loan, asOf) => {
+    const a = asOf || dates.todayISO();
+    return (loan.status === "Cleared" && dates.isISO(loan.datePaidFull) && loan.datePaidFull < a) ? loan.datePaidFull : a;
+  };
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
@@ -134,6 +168,19 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   const liveGuarantee = (g) => g.status === "Active";
   const memberCommitted = (db, memberId) => (db.guarantees || []).filter((g) => g.guarantorId === memberId && liveGuarantee(g)).reduce((a, g) => a + guaranteeRemaining(g), 0);
   const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
+  /* AS-AT views: what was true on a past date. A loan counts only from its disbursement day; a guarantee only from its commitment day and
+     only for what repayments up to that day had not yet released (release rows carry the repayment's own date). */
+  const activeLoansAsAt = (db, asOf) => activeLoans(db).filter((l) => !dates.isISO(l.date) || l.date <= asOf);
+  function guaranteeRemainingAsOf(g, asOf) {
+    if (g.status !== "Active" && g.status !== "Released") return 0;
+    const from = g.dateCommitted || g.dateRequested || ""; if (from && from > asOf) return 0;
+    const rel = (g.releases || []).filter((r) => !r.reversed);
+    if (!rel.length) return g.status === "Active" ? guaranteeRemaining(g) : (g.dateReleased && g.dateReleased > asOf ? Number(g.amount) : 0);
+    return Math.max(0, Number(g.amount) - rel.filter((r) => !r.date || r.date <= asOf).reduce((a, r) => a + Number(r.amount), 0));
+  }
+  const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
+  const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  const memberPositionAsAt = (db, memberId, asOf) => { const savings = memberSavingsAsOf(db, memberId, asOf), committed = memberCommittedAsOf(db, memberId, asOf); return { savings, committed, available: savings - committed }; };
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
   /* --- FINAL SOB RULE for a partial repayment: accumulated UNPAID INTEREST is cleared first (then penalties), and ONLY THE REMAINDER reduces principal.
@@ -212,7 +259,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
-    memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
+    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
   };
 });
@@ -463,12 +510,13 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     (db.guarantees || []).filter((g) => g.loanId === loanId && (!guaranteeId || g.id === guaranteeId)).forEach((g) => { g.preRelease = true; });
     releaseGuarantees(db, ctx, loanId, reason, guaranteeId);
   }
-  function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry) {
+  function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry, onDate) {
+    const day = onDate || ctx.today;
     (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g) && (!onlyId || g.id === onlyId)).forEach((g) => {
       const left = L.guaranteeRemaining(g), was = g.status;
-      if (was === "Active" && left > 0) (g.releases = g.releases || []).push({ date: ctx.today, entryId: viaEntry || null, amount: left, reason: why });
+      if (was === "Active" && left > 0) (g.releases = g.releases || []).push({ date: day, entryId: viaEntry || null, amount: left, reason: why });
       g.releasedAmount = Number(g.releasedAmount || 0) + (was === "Active" ? left : 0);
-      g.status = "Released"; g.dateReleased = ctx.today; g.releaseReason = why;
+      g.status = "Released"; g.dateReleased = day; g.releaseReason = why;
       G.audit(db, ctx, "Guarantee", g.id, "Released", { status: was, committed: was === "Active" ? left : 0 }, { status: "Released", committed: 0 }, why);
     });
     // approved security on the loan ends with the loan
@@ -523,7 +571,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   function clearIfRepaid(db, ctx, loan, entry) {
     if (loan.status === "Active" && L.loanOutstanding(loan, db, entry.date) <= 0) {
       Object.assign(loan, { status: "Cleared", datePaidFull: entry.date, clearedBy: ctx.by });
-      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);      // fully repaid: principal is zero under any allocation rule
+      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id, entry.date);      // fully repaid: principal is zero under any allocation rule
       G.audit(db, ctx, "Loan", loan.id, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
     }
   }
@@ -1434,37 +1482,119 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.kpis = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, L, LN, C) {
   const upTo = (db, asOf) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= asOf) });
+  const cls = L.classifyTransaction, sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+  /* ======================================================================================================================
+     ONE calculation per KPI, used by the dashboard card, its drill-down table AND its report/PDF, so they cannot disagree.
+     A KPI has a BASIS that decides which date selector is financially correct:
+       asAt   a balance or position (savings, loans owed, interest owed, guarantees): the figure on the period's LAST day.
+       cash   a balance with movement: opening balance on the first day + money in - money out = closing balance on the last day.
+       period an activity total (deposits, repayments, expenses...): what happened from the first day to the last day.
+       now    a live queue (awaiting approval, loan pipeline): not a date question, always the present position.
+     period = {from, to}; from "" means "since the start of the records". Nothing dated after `to` is ever counted.
+     ====================================================================================================================== */
+  function frame(db, period) {
+    const to = (period && period.to) || dates.todayISO(), from = (period && period.from) || "";
+    const d = upTo(db, to), live = L.activeTransactions(d), names = {}; (db.members || []).forEach((m) => { names[m.id] = m.name; });
+    const f = { db, d, to, from, live, loans: L.activeLoansAsAt(d, to), name: (id) => (id ? names[id] || id : "Group"), inP: (t) => (!from || t.date >= from) && t.date <= to, cache: {} };
+    f.pos = (l) => (f.cache[l.id] = f.cache[l.id] || L.loanInterestPosition(l, d, to));
+    f.owed = (l) => L.loanOutstanding(l, d, to);
+    f.loanOf = (id) => f.loans.find((l) => l.id === id);
+    return f;
+  }
+  const kd = dates.toDisplay;
+  const basisText = (f, basis) => basis === "now" ? "Right now" : basis === "asAt" ? "As at " + dates.longDate(f.to) : basis === "cash" ? (f.from ? dates.longDate(f.from) + " – " + dates.longDate(f.to) : "Start of records – " + dates.longDate(f.to)) : (f.from ? dates.longDate(f.from) + " – " + dates.longDate(f.to) : "Start of records – " + dates.longDate(f.to));
+  const mk = (f, key, o) => Object.assign({ key, basis: o.basis, unit: "UGX", period: basisText(f, o.basis), asAt: f.to, from: f.from, to: f.to, labels: {}, summary: [], totals: {} }, o);
+
+  const BUILD = {
+    totalSavings(f) {
+      const per = {}; let value = 0; f.live.forEach((t) => { const e = cls(t).savings; if (e) { value += e; per[t.memberId] = (per[t.memberId] || 0) + e; } });
+      const rows = (f.db.members || []).map((m) => ({ memberId: m.id, name: m.name, savings: per[m.id] || 0, _open: { kind: "member", id: m.id } })).filter((r) => r.savings !== 0);
+      const rest = value - sum(rows, "savings"); if (rest !== 0) rows.push({ memberId: "—", name: "Not linked to a member", savings: rest });
+      return mk(f, "totalSavings", { basis: "asAt", title: "Total Savings", value, columns: ["memberId", "name", "savings"], labels: { memberId: "Member ID", name: "Member", savings: "Savings (UGX)" }, rows, totals: { totalSavings: value },
+        definition: "Every member's savings as at the date: deposits and profit shares less withdrawals, bank charges and share-outs. Entries after the date, voided entries and entries awaiting approval are not counted." });
+    },
+    availableCash(f) {
+      const cash = f.live.filter((t) => cls(t).cashflow !== 0).sort(byDate); let opening = 0, value = 0, inn = 0, out = 0;
+      cash.forEach((t) => { const c = cls(t).cashflow; value += c; if (f.from && t.date < f.from) opening += c; });
+      let run = opening; const rows = cash.filter(f.inP).map((t) => { const c = cls(t).cashflow; run += c; if (c > 0) inn += c; else out -= c;
+        return { date: kd(t.date), member: t.memberId ? f.name(t.memberId) : "Group", type: t.type, details: t.purpose || "", moneyIn: c > 0 ? c : 0, moneyOut: c < 0 ? -c : 0, balance: run, _open: { kind: "entry", id: t.id } }; });
+      return mk(f, "availableCash", { basis: "cash", title: "Available Cash", value, columns: ["date", "member", "type", "details", "moneyIn", "moneyOut", "balance"], labels: { date: "Date", member: "Member", type: "Type", details: "Details", moneyIn: "Money in", moneyOut: "Money out", balance: "Balance" }, rows,
+        summary: [["Opening balance", opening], ["Money in", inn], ["Money out", out], ["Closing balance", value]], totals: { openingBalance: opening, moneyIn: inn, moneyOut: out, closingBalance: value }, opening, moneyIn: inn, moneyOut: out,
+        definition: "Opening balance on the first day, plus every deposit, repayment, subscription and income, less every withdrawal, loan paid out and expense, equals the closing balance on the last day." });
+    },
+    outstandingLoans(f) {
+      const all = f.loans.map((l) => ({ l, bal: f.owed(l) })), rows = all.filter((x) => x.bal > 0).map(({ l, bal }) => ({ loanId: l.id, member: f.name(l.memberId), disbursed: kd(l.date), principal: Number(l.loanAmount), interestCharged: L.loanAccumulatedInterest(l, f.to), penalties: L.loanTotalPenalties(l, f.d), repaid: L.loanTotalRepaid(l, f.d), balance: bal, _open: { kind: "loan", id: l.id } }));
+      const value = all.reduce((a, x) => a + Math.max(0, x.bal), 0);
+      return mk(f, "outstandingLoans", { basis: "asAt", title: "Outstanding Loans", value, count: rows.length, columns: ["loanId", "member", "disbursed", "principal", "interestCharged", "penalties", "repaid", "balance"], labels: { loanId: "Loan", member: "Member", disbursed: "Paid out", principal: "Loan amount", interestCharged: "Interest charged", penalties: "Penalties", repaid: "Repaid", balance: "Still owed" }, rows,
+        totals: { stillOwed: value, loans: rows.length }, definition: "For each loan paid out on or before the date: loan amount plus interest charged to the date (after its grace period) plus penalties, less every repayment up to the date." });
+    },
+    interestReceivable(f) {
+      const ir = interestReceivable(f.db, f.to), rows = ir.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: kd(r.disbursed), interestFrom: kd(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding, _open: { kind: "loan", id: r.loanId } }));
+      return mk(f, "interestReceivable", { basis: "asAt", title: "Interest Receivable", value: ir.total, count: rows.length, loans: rows.length, columns: ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"],
+        labels: { member: "Member", loanId: "Loan", principal: "Loan amount", monthlyInterest: "Monthly interest", disbursed: "Paid out", interestFrom: "Interest from", monthsElapsed: "Months elapsed", monthsCharged: "Months charged", accumulatedInterest: "Interest charged", paymentsMade: "Payments made", unpaidInterest: "Unpaid interest", outstanding: "Loan still owed" }, rows,
+        totals: { unpaidInterest: ir.total, accumulatedInterest: ir.accumulated, paymentsMade: ir.paymentsMade, outstanding: ir.outstanding }, definition: "Interest charged to the date on loans still owed, less the part of repayments applied to interest. SOB rule: a repayment clears accumulated unpaid interest first; only the remainder reduces the loan." });
+    },
+    loanExposure(f) {
+      const out = BUILD.outstandingLoans(f).value, sav = BUILD.totalSavings(f).value, gs = (f.db.guarantees || []).filter((g) => (g.status === "Active" || g.status === "Released") && !(g.dateCommitted && g.dateCommitted > f.to));
+      const rows = gs.map((g) => { const l = (f.db.loans || []).find((x) => x.id === g.loanId) || {}, left = L.guaranteeRemainingAsOf(g, f.to); return { guarantor: f.name(g.guarantorId), borrower: f.name(l.memberId), loanId: g.loanId, guaranteed: Number(g.amount), released: Number(g.amount) - left, committed: left, _open: { kind: "loan", id: g.loanId } }; }).filter((r) => r.committed > 0 || r.released > 0);
+      const committed = sum(rows, "committed"), pct = sav > 0 ? Math.round((out / sav) * 1000) / 10 : null;
+      return mk(f, "loanExposure", { basis: "asAt", title: "Loan Exposure", unit: "%", value: pct, pct, guaranteed: committed, outstanding: out, savings: sav, columns: ["guarantor", "borrower", "loanId", "guaranteed", "released", "committed"], labels: { guarantor: "Guarantor", borrower: "Borrower", loanId: "Loan", guaranteed: "Guaranteed", released: "Released so far", committed: "Still committed" }, rows,
+        summary: [["Loans still owed", out], ["Total savings", sav], ["Exposure (loans owed ÷ savings, %)", pct == null ? "n/a" : pct], ["Guarantees still committed", committed]], totals: { loansStillOwed: out, totalSavings: sav, exposurePercent: pct == null ? 0 : pct, guaranteesCommitted: committed },
+        definition: "Loans still owed divided by total savings, both as at the date. 'Still committed' is what guarantors have pledged and repayments (principal reduced) have not yet released." });
+    },
+    members(f) {
+      const rows = (f.db.members || []).filter((m) => m.status !== "Inactive" && !(dates.isISO(m.regDate) && m.regDate > f.to)).map((m) => ({ memberId: m.id, name: m.name, registered: dates.isISO(m.regDate) ? kd(m.regDate) : "", phone: m.phone || "", _open: { kind: "member", id: m.id } }));
+      return mk(f, "members", { basis: "asAt", title: "Active Members", unit: "count", value: rows.length, columns: ["memberId", "name", "registered", "phone"], labels: { memberId: "Member ID", name: "Member", registered: "Registered", phone: "Phone" }, rows, totals: { members: rows.length }, definition: "Registered members who are not marked inactive, registered on or before the date." });
+    },
+    savingsReceived: (f) => flow(f, "savingsReceived", "Savings Received", ["Savings"], "Savings deposits recorded in the period.", true),
+    withdrawals: (f) => flow(f, "withdrawals", "Withdrawals & Share-Out", ["Withdraw", "Share-Out"], "Savings withdrawn or shared out in the period.", true),
+    subscriptions: (f) => flow(f, "subscriptions", "Subscriptions", ["Subscription"], "Annual subscriptions received in the period (group income, not savings).", true),
+    otherIncome: (f) => flow(f, "otherIncome", "Other Income", ["Income"], "Other group income recorded in the period.", false),
+    profit: (f) => flow(f, "profit", "Profit Recorded", ["Profit"], "Profit entries recorded in the period.", true),
+    expenses: (f) => flow(f, "expenses", "Expenses", ["Expense"], "Expense entries recorded in the period.", false),
+    loansDisbursed(f) {
+      const rows = f.loans.filter((l) => dates.isISO(l.date) && (!f.from || l.date >= f.from) && l.date <= f.to).sort(byDate).map((l) => ({ date: kd(l.date), loanId: l.id, member: f.name(l.memberId), amount: Number(l.loanAmount), monthlyInterest: Number(l.assignedMonthlyInterest) || 0, graceMonths: Number(l.graceMonths) || 0, _open: { kind: "loan", id: l.id } })), value = sum(rows, "amount");
+      return mk(f, "loansDisbursed", { basis: "period", title: "Loans Paid Out", value, count: rows.length, columns: ["date", "loanId", "member", "amount", "monthlyInterest", "graceMonths"], labels: { date: "Date", loanId: "Loan", member: "Member", amount: "Loan amount", monthlyInterest: "Monthly interest", graceMonths: "Grace months" }, rows, totals: { loansPaidOut: value, loans: rows.length }, definition: "Loans paid out to members in the period." });
+    },
+    repaymentsReceived: (f) => repay(f, "repaymentsReceived", "Loan Repayments Received", false),
+    interestReceived: (f) => repay(f, "interestReceived", "Interest Received", true)
+  };
+  function flow(f, key, title, types, definition, plus) {
+    const rows = f.live.filter((t) => types.includes(t.type) && f.inP(t)).sort(byDate).map((t) => ({ date: kd(t.date), member: t.memberId ? f.name(t.memberId) : "Group", type: t.type, details: t.purpose || "", amount: Number(t.amount), _open: { kind: "entry", id: t.id } })), value = sum(rows, "amount");
+    return mk(f, key, { basis: "period", title, value, count: rows.length, columns: ["date", "member", "type", "details", "amount"], labels: { date: "Date", member: "Member", type: "Type", details: "Details", amount: "Amount" }, rows, totals: { [key]: value, entries: rows.length }, definition });
+  }
+  /* Each repayment is split exactly as the SOB rule applies it (interest first, then penalties, then principal) - the same walk that releases guarantees. */
+  function repay(f, key, title, interestOnly) {
+    const step = {}; f.loans.forEach((l) => { if (f.live.some((t) => t.loanId === l.id && t.type === "Loan Repayment" && f.inP(t))) f.pos(l).steps.forEach((x) => { step[x.entryId] = x; }); });
+    const rows = f.live.filter((t) => t.type === "Loan Repayment" && f.inP(t)).sort(byDate).map((t) => { const x = step[t.id], amt = Number(t.amount), i = x ? x.interest : 0, pe = x ? x.penalties : 0, p = x ? x.principal : 0, loan = (f.db.loans || []).find((l) => l.id === t.loanId) || {};
+      return { date: kd(t.date), member: f.name(t.memberId || loan.memberId), loanId: t.loanId || "", payment: amt, interest: i, penalties: pe, loanReduced: p, unallocated: amt - i - pe - p, _open: { kind: "loan", id: t.loanId } }; }).filter((r) => !interestOnly || r.interest > 0);
+    const value = interestOnly ? sum(rows, "interest") : sum(rows, "payment"), tot = { [key]: value, interest: sum(rows, "interest"), penalties: sum(rows, "penalties"), loanReduced: sum(rows, "loanReduced") }; const un = sum(rows, "unallocated"); if (un) tot.notSplit = un;
+    return mk(f, key, { basis: "period", title, value, count: rows.length, columns: ["date", "member", "loanId", "payment", "interest", "penalties", "loanReduced"].concat(rows.some((r) => r.unallocated) ? ["unallocated"] : []), labels: { date: "Date", member: "Member", loanId: "Loan", payment: "Payment", interest: "Interest part", penalties: "Penalty part", loanReduced: "Loan reduced", unallocated: "Not split" }, rows, totals: tot,
+      definition: interestOnly ? "The interest part of repayments received in the period. SOB rule: each repayment clears accumulated unpaid interest first." : "Loan repayments received in the period, each split into interest and the amount that reduced the loan (SOB rule: interest first)." });
+  }
+  const KEYS = Object.keys(BUILD);
+  /* The total of the entries listed in the drill-down, computed independently of the card; the screen shows both and says whether they tie. */
+  const TIE = { totalSavings: (d) => sum(d.rows, "savings"), availableCash: (d) => (d.rows.length ? d.rows[d.rows.length - 1].balance : d.opening), outstandingLoans: (d) => sum(d.rows, "balance"), interestReceivable: (d) => sum(d.rows, "unpaidInterest"), loanExposure: (d) => sum(d.rows, "committed"), members: (d) => d.rows.length,
+    loansDisbursed: (d) => sum(d.rows, "amount"), repaymentsReceived: (d) => sum(d.rows, "payment"), interestReceived: (d) => sum(d.rows, "interest") };
+  const detail = (db, key, period) => { if (!BUILD[key]) throw new Error("Unknown KPI: " + key); const d = BUILD[key](frame(db, period)); d.rowsTotal = (TIE[key] || ((x) => sum(x.rows, "amount")))(d); d.tied = key === "loanExposure" ? d.rowsTotal === d.guaranteed : d.rowsTotal === d.value; return d; };
+  /* The dashboard: every KPI computed once for the chosen period (a card shows value + basis; a click opens report(key) for the same period). */
+  function overview(db, period) { const f = frame(db, period), o = {}; KEYS.forEach((k) => { o[k] = BUILD[k](f); }); o.awaitingApproval = awaiting(db); o.period = { from: f.from, to: f.to }; return o; }
+  /* The report/PDF behind a KPI: the very same detail, in the shape every printable report uses. */
+  function report(db, key, period, opt) {
+    const d = detail(db, key, period), clean = (r) => { const o = {}; Object.keys(r).forEach((k) => { if (k !== "_open") o[k] = r[k]; }); return o; };
+    return { title: d.title + " — " + d.period, columns: d.columns, labels: d.labels, rows: opt && opt.open ? d.rows : d.rows.map(clean), totals: d.totals, summary: d.summary, period: d.period, kpi: { key, value: d.value, basis: d.basis, unit: d.unit, rowsTotal: d.rowsTotal, tied: d.tied }, definition: d.definition, hideTotals: d.summary.length > 0 };
+  }
+  const awaiting = (db) => (db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).length + (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).length + (db.securities || []).filter((x) => x.status === "Proposed").length + (db.approvalRequests || []).filter((x) => x.status === "Pending").length;
+  /* Older call shape kept for callers that only know an as-at date and an optional year/quarter/from/to filter. */
   function dashboard(db, asOf, period) {
-    asOf = asOf || dates.todayISO();
-    const d = upTo(db, asOf);
-    const live = L.activeTransactions(d);
-    let savings = 0, cash = 0;
-    live.forEach((t) => { const e = L.classifyTransaction(t); savings += e.savings; cash += e.cashflow; });
-    const flow = live.filter((t) => L.inPeriod(t, period));
-    const profit = flow.reduce((a, t) => a + L.classifyTransaction(t).profit, 0);
-    const expenses = flow.filter((t) => t.type === "Expense").reduce((a, t) => a + Number(t.amount), 0);
-    const loans = L.activeLoans(d);
-    const outstanding = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, d, asOf)), 0);
-    const positions = loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => L.loanInterestPosition(l, d, asOf));
-    const unpaidInterest = positions.reduce((a, p) => a + p.unpaidInterest, 0);     // interest accrued less the part of payments applied to interest (interest first)
-    const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + L.guaranteeRemaining(g), 0);
-    const pol = L.getPolicy(db, "loan");
-    return {
-      asOf, period: period || null,
-      totalSavings: { value: savings, definition: "Net of all member savings, withdrawals, charges and share-outs, up to the as-of date." },
-      availableCash: { value: cash, definition: "Net cash movement in the ledger (deposits, repayments, subscriptions, income minus withdrawals, disbursements, expenses)." },
-      outstandingLoans: { value: outstanding, count: loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).length, definition: "Sum of Loan Payable minus repayments across booked loans." },
-      interestReceivable: { value: unpaidInterest, loans: positions.length,
-        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (SOB rule: accumulated unpaid interest is cleared first, the remainder reduces principal). Tap for every member and loan." },
-      profit: { value: profit, definition: "Profit entries recorded in the selected period." },
-      expenses: { value: expenses, definition: "Expense entries recorded in the selected period." },
-      members: { value: db.members.filter((m) => m.status !== "Inactive").length, definition: "Active registered members." },
-      loanExposure: { pct: savings > 0 ? Math.round((outstanding / savings) * 1000) / 10 : null, guaranteed,
-        definition: "Outstanding Loans / Total Savings; 'guaranteed' is the total still committed by guarantors (released progressively as borrowers repay)." },
-      awaitingApproval: { value: (db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).length + (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).length + (db.securities || []).filter((x) => x.status === "Proposed").length + (db.approvalRequests || []).filter((x) => x.status === "Pending").length,
-        definition: "Items waiting for the Chairperson's second approval (loans, exceptional security, voids/adjustments, profit distribution, share-out)." }
-    };
+    asOf = asOf || dates.todayISO(); const p = period || {}; let from = p.from || "", to = asOf;
+    if (p.year) { const a = p.year + "-" + (p.quarter ? String((p.quarter - 1) * 3 + 1).padStart(2, "0") : "01") + "-01"; if (!from || a > from) from = a; if (p.quarter) { const e = dates.addDays(dates.addMonths(a, 3), -1); if (e < to) to = e; } else if (p.year + "-12-31" < to) to = p.year + "-12-31"; }
+    if (p.to && p.to < to) to = p.to;
+    const o = overview(db, { from, to });
+    return { asOf, period: period || null, totalSavings: o.totalSavings, availableCash: o.availableCash, outstandingLoans: o.outstandingLoans, interestReceivable: o.interestReceivable, profit: o.profit, expenses: o.expenses, members: o.members,
+      loanExposure: o.loanExposure, awaitingApproval: { value: o.awaitingApproval, definition: "Items waiting for the Chairperson's second approval (loans, exceptional security, voids/adjustments, profit distribution, share-out)." } };
   }
   function loanBook(db, asOf) {
     asOf = asOf || dates.todayISO();
@@ -1478,7 +1608,7 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
   /* Interest Receivable drill-down: every outstanding loan, how its interest arose and what is still unpaid. */
   function interestReceivable(db, asOf) {
     asOf = asOf || dates.todayISO(); const d = upTo(db, asOf);
-    const rows = L.activeLoans(d).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
+    const rows = L.activeLoansAsAt(d, asOf).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
       return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
         monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
@@ -1488,7 +1618,7 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     return { asOf, rows, total: rows.reduce((a, r) => a + r.unpaidInterest, 0), accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
       allocation: "INTEREST_FIRST", allocationConfirmed: true };
   }
-  return { dashboard, loanBook, pipeline, interestReceivable };
+  return { dashboard, overview, detail, report, awaiting, KEYS, loanBook, pipeline, interestReceivable };
 });
 
 return module.exports; })();
@@ -1563,7 +1693,7 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   function memberStatement(db, memberId, period) {
     const h = L.memberLifetimeHistory(db, memberId, period);
     const rows = h.map((r) => ({ date: dates.toDisplay(r.date), type: r.type, purpose: r.purpose || "", amount: r.amount, savingsEffect: L.classifyTransaction(r).savings, balance: r.runningSavings }));
-    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0, ...L.memberPosition(db, memberId) });
+    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0, ...(period && period.to ? L.memberPositionAsAt(db, memberId, period.to) : L.memberPosition(db, memberId)) });
   }
   /* What a member has committed as guarantor, with the borrower side linked: commitments reduce AVAILABLE savings and return as the borrower repays. */
   function guaranteeStatement(db, memberId) {
@@ -1638,14 +1768,14 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
     return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
   function annualSummary(db, year) {
-    const d = K.dashboard(db, year + "-12-31", { year: Number(year) });
+    const end = year + "-12-31", d = K.dashboard(db, end < dates.todayISO() ? end : dates.todayISO(), { year: Number(year) });   // a year still running is summarised to today, never into the future
     return R("Annual summary " + year, ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
   }
   const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   function toCSV(rep) {
     if (rep.blocked) throw new Error("BLOCKED: " + rep.reason);
     const q = (v) => { v = v === undefined || v === null ? "" : String(v); if (/^[=+\-@]/.test(v) && isNaN(Number(v))) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    return [rep.columns.join(",")].concat(rep.rows.map((r) => rep.columns.map((c) => q(r[c])).join(","))).join("\n");
+    return [rep.columns.map((c) => q((rep.labels && rep.labels[c]) || c)).join(",")].concat(rep.rows.map((r) => rep.columns.map((c) => q(r[c])).join(","))).join("\n");
   }
   /* ---- Mandatory SOB letterhead: EVERY printable/PDF report goes through brandedPage(), so none can be produced without it. ---- */
   const GROUP = "Sons of Bethel (SOB) Savings Group";
@@ -1681,13 +1811,15 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   const TYPE_LABEL = { Savings: "Savings deposit", Withdraw: "Withdrawal", Profit: "Profit share", "Loan Disbursement": "Loan paid out", "Loan Repayment": "Loan repayment", Subscription: "Annual subscription", "Share-Out": "December share-out", "Bank Charge": "Bank charge", Penalty: "Penalty" };
   /* A member-friendly, filing-quality statement: plain wording, running savings balance, and the three positions at the top. */
   function memberStatementPrint(db, memberId, period) {
-    const h = L.memberLifetimeHistory(db, memberId, period), pos = L.memberPosition(db, memberId), asOf = dates.todayISO();
-    const owed = db.loans.filter((l) => l.memberId === memberId && l.status === "Active" && !l.voided).reduce((a, l) => a + L.loanOutstanding(l, db, asOf), 0);
+    const asOf = (period && period.to) || dates.todayISO(), from = (period && period.from) || "", h = L.memberLifetimeHistory(db, memberId, period && (period.from || period.to) ? { from, to: asOf } : null).filter((t) => t.date <= asOf), pos = L.memberPositionAsAt(db, memberId, asOf);
+    const dd = Object.assign({}, db, { transactions: (db.transactions || []).filter((t) => t.date <= asOf) });
+    const owed = L.activeLoansAsAt(dd, asOf).filter((l) => l.memberId === memberId).reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, dd, asOf)), 0);
     const cols = ["Date", "Transaction", "Details", "Amount", "Effect on savings", "Savings balance"];
-    const rows = h.map((t) => ({ Date: dates.toDisplay(t.date), Transaction: TYPE_LABEL[t.type] || t.type, Details: t.purpose && t.purpose !== t.type ? t.purpose : "", Amount: Number(t.amount), "Effect on savings": L.classifyTransaction(t).savings, "Savings balance": t.runningSavings }));
+    const rows = h.map((t) => ({ Date: dates.toDisplay(t.date), Transaction: TYPE_LABEL[t.type] || t.type, Details: t.purpose && t.purpose !== t.type ? t.purpose : "", Amount: Number(t.amount), "Effect on savings": L.classifyTransaction(t).savings, "Savings balance": t.runningSavings, _open: { kind: "entry", id: t.id } }));
     const rep = R("Savings statement — " + name(db, memberId) + " (" + memberId + ")", cols, rows, {});
-    rep.summary = [["Total savings", pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]].concat(owed ? [["Loan owed", owed]] : []);
-    rep.hideTotals = true; return rep;
+    rep.period = from ? dates.longDate(from) + " – " + dates.longDate(asOf) : (period && period.to ? "As at " + dates.longDate(asOf) : undefined);
+    rep.summary = (from ? [["Savings brought forward on " + dates.longDate(from), L.memberSavingsAsOf(db, memberId, dates.addDays(from, -1))]] : []).concat([["Total savings" + (period && period.to ? " (as at " + dates.longDate(asOf) + ")" : ""), pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]]).concat(owed ? [["Loan owed", owed]] : []);
+    rep.position = pos; rep.hideTotals = true; return rep;
   }
   /* One loan, in plain words: what was paid out, each repayment split into interest and loan, and who guarantees it. */
   function loanMemberStatement(db, loanId, asOf) {
@@ -2013,7 +2145,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
       if (user.role !== "Admin") full.outbox = [];
       full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
       if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
-      full.kpis = K.dashboard(db, asOf); full.pipeline = K.pipeline(db); return full;
+      return full;   // KPIs are NOT precomputed here: the app derives every figure for the chosen date/period from this ledger (core/kpis), so there is one calculation
     }
     const me = user.memberId;
     const mine = (db.loans || []).filter((l) => l.memberId === me);
@@ -2181,11 +2313,26 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
+var SOB_BUILD = "db1e11c229";
+function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
+/* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
-  var body; try { body = JSON.parse(e.postData.contents); } catch (x) { body = null; }
-  return ContentService.createTextOutput(JSON.stringify(__M['backend/api'].handle(__env(), body))).setMimeType(ContentService.MimeType.JSON);
+  try {
+    var body = null; try { body = JSON.parse(e.postData.contents); } catch (x) { body = null; }
+    var r = __M['backend/api'].handle(__env(), body);
+    if (r && typeof r === "object") r.build = SOB_BUILD;
+    return __json(r);
+  } catch (err) { return __json({ ok: false, error: "SERVER_ERROR: " + String((err && err.message) || err), build: SOB_BUILD }); }
 }
-function doGet(){ return ContentService.createTextOutput(JSON.stringify({ ok: true, service: "SOB Ledger" })).setMimeType(ContentService.MimeType.JSON); }
+function doGet(){ return __json({ ok: true, service: "SOB Ledger", build: SOB_BUILD }); }
+/* Run ONCE from the Apps Script editor after pasting a new Code.gs (Run > authorizeSOB), then Deploy > Manage deployments > Edit > New version.
+   It touches every Google service the platform uses so Google asks for the permissions up front; otherwise the web app can answer with an HTML
+   "authorization required" page instead of data. */
+function authorizeSOB(){
+  SpreadsheetApp.getActiveSpreadsheet().getName(); CacheService.getScriptCache().get("x"); PropertiesService.getScriptProperties().getKeys();
+  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/");
+  return "SOB is authorised. Build " + SOB_BUILD + ". Now deploy it as a New version.";
+}
 /* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
    and SOB_INITIAL_ADMIN_PIN (6+ characters). The PIN property is deleted as soon as the Admin exists. */
 function setupAdmin(){

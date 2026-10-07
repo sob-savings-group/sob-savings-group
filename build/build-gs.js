@@ -8,7 +8,7 @@ order.forEach((m) => {
   const src = fs.readFileSync(path.join(root, "src", m + ".js"), "utf8");
   out += "__M['" + m + "'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;\n" + src + "\nreturn module.exports; })();\n";
 });
-out += fs.readFileSync(path.join(root, "src/backend/gas-entry.js"), "utf8");
+out += fs.readFileSync(path.join(root, "src/backend/gas-entry.js"), "utf8").replace("__BUILD__", require("./common.js").buildId());
 fs.mkdirSync(path.join(root, "dist"), { recursive: true });
 fs.writeFileSync(path.join(root, "dist/Code_Ledger.gs"), out);
 console.log("built dist/Code_Ledger.gs", out.length, "bytes");

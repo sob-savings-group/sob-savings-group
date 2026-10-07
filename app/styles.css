@@ -129,3 +129,11 @@ td.wrap{white-space:normal}
 @media(max-width:600px){.grid{grid-template-columns:1fr}.card .val{font-size:24px}}
 @media print{header.top,nav,.toast,.busy{display:none!important}}
 .search{margin:0 0 12px}
+/* reporting period selector */
+.periodbar{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px 10px;margin:0 0 14px}
+.pb-t{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);font-weight:700;margin-bottom:6px}
+.pb-custom{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:2px 0 10px}.pb-custom label{display:flex;flex-direction:column;font-size:12px;color:var(--mute);gap:4px;flex:1 1 140px}.pb-custom input{min-height:44px}
+.pb-note{font-size:13px;color:var(--mute);display:flex;flex-wrap:wrap;gap:2px 0}.pb-note b{color:var(--text)}
+.periodbar .chips{flex-wrap:wrap;overflow:visible;margin:0 0 6px}.periodbar .chip{min-height:38px;padding:7px 13px}
+.grid.two{grid-template-columns:1fr 1fr}.grid.two .card{padding:12px}.grid.two .card .val{font-size:18px}
+.pb-note span+span{margin-left:.45em}
