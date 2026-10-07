@@ -7,3 +7,8 @@ dist/site/
 reports/
 backups/
 *.backup.json
+
+# historical import packs & reports (real data; built privately)
+history-pack*.json
+REPORT_private*
+hist-*/

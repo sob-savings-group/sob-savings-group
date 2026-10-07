@@ -8,7 +8,7 @@
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
   const ALL = ["ledger.create", "ledger.void", "ledger.restore", "ledger.approve", "loan.apply", "loan.review", "loan.disburse",
     "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage", "subscription.record", "shareout.preview",
-    "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "report.view", "audit.view", "system.admin"];
+    "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "report.view", "audit.view", "system.admin"];
 
   // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions.
   const config = {

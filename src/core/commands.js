@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
@@ -34,6 +34,7 @@
     cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
     sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
     cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
+    importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries, dryRun: a.dryRun }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
   };
   function run(db, ctx, name, args) {

@@ -87,6 +87,29 @@ async function registerDiscrepancies(api, o) {
   return out;
 }
 /* Applies SOB-approved correction steps through the normal audited commands. Refuses without a named approver. */
+/* Imports VERIFIED historical records (built privately, outside the repo) through the audited bulk command. Dry run first, backup snapshot,
+   chunked writes, then read-back proof: no existing record changed, each member's savings moved by exactly the imported net, integrity not worse. */
+async function importHistory(api, o) {
+  if (!o.approvedBy || String(o.approvedBy).trim().length < 5) throw new Error("REFUSED: --approved-by \"<name, role, date>\" is required");
+  const pack = JSON.parse(fs.readFileSync(o.path, "utf8")), t = await login(api, o.adminId, o.adminPin), c = checks();
+  const asOf = o.asOf || D.todayISO(), pre = must(await api({ action: "getLedger", token: t }), "pre-read").db;
+  const args = (entries, dryRun) => ({ batchId: pack.batchId, source: pack.source + " | Approved by: " + o.approvedBy, entries, dryRun });
+  const dry = must(await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(pack.entries, true) }), "dry run").result;
+  c.add("dry run: " + dry.added + " new, " + dry.alreadyImported + " already imported, " + dry.possibleDuplicates.length + " possible duplicate(s)", dry.possibleDuplicates.length === 0, JSON.stringify(dry.possibleDuplicates.slice(0, 3)));
+  if (o.dryRun || !c.ok) return { ok: c.ok, checks: c.list, dry };
+  const bk = await api({ action: "backupNow", token: t, force: true }); c.add("backup snapshot taken before import", !!bk.ok, bk.error);
+  const todo = pack.entries.filter((e) => !pre.transactions.some((x) => x.sourceRef === e.sourceRef));
+  for (let i = 0; i < todo.length; i += 150) { const r = await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(todo.slice(i, i + 150), false) }); if (!r.ok) { c.add("chunk " + i, false, r.error); return { ok: false, checks: c.list }; } }
+  const post = must(await api({ action: "getLedger", token: t }), "post-read").db;
+  c.add("existing records untouched", pre.transactions.every((x) => JSON.stringify(post.transactions.find((y) => y.id === x.id)) === JSON.stringify(x)));
+  c.add("transaction count rose by exactly the imported rows", post.transactions.length === pre.transactions.length + todo.length, post.transactions.length + " vs " + (pre.transactions.length + todo.length));
+  const net = {}; todo.forEach((e) => { net[e.memberId] = (net[e.memberId] || 0) + (["Savings", "Profit"].includes(e.type) ? e.amount : -e.amount); });
+  c.add("each member's savings moved by exactly the imported net", post.members.every((m) => L.memberSavings(post, m.id) - L.memberSavings(pre, m.id) === (net[m.id] || 0)));
+  c.add("original dates and source references preserved", todo.every((e) => { const x = post.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === e.date && x.historical === true && x.amount === e.amount; }));
+  const a = I.check(pre, asOf), b = I.check(post, asOf); c.add("integrity not worse (" + a.errors + " -> " + b.errors + " error(s))", b.errors <= a.errors);
+  const again = must(await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(pack.entries, true) }), "re-run").result; c.add("re-running would add nothing", again.added === 0);
+  return { ok: c.ok, checks: c.list };
+}
 async function applyPlan(api, o) {
   if (!o.approvedBy || String(o.approvedBy).trim().length < 5) throw new Error("REFUSED: --approved-by \"<name, role, date>\" is required");
   const rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), t = await login(api, o.adminId, o.adminPin), c = checks();
@@ -138,4 +161,4 @@ async function restoreBackup(api, o) {
   c.add("every loan balance identical", db.loans.every((l) => L.loanOutstanding(back.loans.find((x) => x.id === l.id), back, asOf) === L.loanOutstanding(l, db, asOf)));
   return { ok: c.ok, checks: c.list };
 }
-module.exports = { backupToFile, backupVerifyFile, restoreBackup, login, smokeReadOnly, smokeWrite, importLedger, importUsers, registerDiscrepancies, applyPlan, verify };
+module.exports = { backupToFile, backupVerifyFile, restoreBackup, login, smokeReadOnly, smokeWrite, importLedger, importUsers, registerDiscrepancies, applyPlan, importHistory, verify };

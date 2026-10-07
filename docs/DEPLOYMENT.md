@@ -51,3 +51,11 @@ To go live (needs your own credentials; nothing here is invented):
 
 ## D. Limits to know
 Each request reads the whole Sheet once (≈17 sheets) and writes only the sheets that changed. Rehearsed at 20,000 transactions. Apps Script allows 6 minutes per request and ~90 minutes of total script time per day on free accounts, ample for a 55-member group.
+
+## G. Historical records (2024–2025 workbook) → lifetime histories
+The earlier Excel records are loaded through the audited bulk command `importHistoricalEntries` (Admin only; types Savings / Profit / Withdraw / Share-Out).
+- Every row keeps its **original date** and a **source reference** (`workbook | sheet | row`); ids are deterministic, so re-running a batch adds nothing.
+- A row equal to an existing live entry (same member, date, type, amount) is reported as a possible duplicate and is **not** added. No amount is ever adjusted; a bad row rejects the whole batch.
+- The member mapping and the import pack are built **privately** (they contain real names; never commit them: `history-pack*.json` and `REPORT_private*` are git-ignored).
+- Run: `sobctl import-history <history-pack.json> --approved-by "<name, role, date>" --dry-run`, then without `--dry-run`. It takes a backup snapshot first, imports in chunks, then proves: existing records untouched, count rose by exactly the imported rows, each member's savings moved by exactly the imported net, integrity not worse, re-run adds nothing.
+- Members whose history cannot be classified or closed without guessing (loan-involved members, unmatched sheets, overdrawn balances) are held whole until SOB confirms; they are never partially imported.
