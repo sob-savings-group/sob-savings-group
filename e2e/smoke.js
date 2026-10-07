@@ -24,7 +24,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     await pg.waitForSelector(".toast");
     await pg.keyboard.press("Escape"); await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.screenshot({ path: path.join(root, "shots", vp.name + "-admin.png"), fullPage: true });
-    for (const v of ["members", "loans", "ledger", "subs", "shareout", "reports", "audit"]) { await pg.click('[data-nav="' + v + '"]'); await pg.waitForSelector("#main"); ok((await pg.locator("#main .err").count()) === 0, vp.name + ": admin " + v + " renders"); }
+    for (const v of ["members", "loans", "ledger", "subs", "shareout", "reports", "recon", "audit"]) { await pg.click('[data-nav="' + v + '"]'); await pg.waitForSelector("#main"); ok((await pg.locator("#main .err").count()) === 0, vp.name + ": admin " + v + " renders"); }
     await pg.click('[data-nav="reports"]'); await pg.click('[data-card="Quarterly distribution"]'); ok((await pg.locator(".modal .blocked").count()) === 1, vp.name + ": quarterly distribution shows blocked state");
     await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.click('[data-nav="shareout"]'); ok((await pg.locator(".blocked").count()) >= 1, vp.name + ": share-out shows blocked profit notice");

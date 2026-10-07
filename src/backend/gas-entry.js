@@ -18,6 +18,13 @@ function doPost(e){
   return ContentService.createTextOutput(JSON.stringify(__M['backend/api'].handle(__env(), body))).setMimeType(ContentService.MimeType.JSON);
 }
 function doGet(){ return ContentService.createTextOutput(JSON.stringify({ ok: true, service: "SOB Ledger" })).setMimeType(ContentService.MimeType.JSON); }
+/* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
+   and SOB_INITIAL_ADMIN_PIN (6+ characters). The PIN property is deleted as soon as the Admin exists. */
+function setupAdmin(){
+  var props = PropertiesService.getScriptProperties(), pin = props.getProperty("SOB_INITIAL_ADMIN_PIN"), id = props.getProperty("SOB_INITIAL_ADMIN_ID") || "ADMIN";
+  if (!pin) throw new Error("Add Script Property SOB_INITIAL_ADMIN_PIN first");
+  var r = initAdmin(id, pin); props.deleteProperty("SOB_INITIAL_ADMIN_PIN"); return r + " (" + id + "); the PIN property has been removed";
+}
 function initAdmin(id, pin){
   var env = __env(), S = __M['backend/store'], A = __M['backend/auth'];
   var users = S.readCollection(env.ss, "users");

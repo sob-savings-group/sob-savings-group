@@ -1,1 +1,7 @@
 shots/
+provisioned*/
+pin-slips.*
+users.json
+*.local.json
+dist/site/
+reports/

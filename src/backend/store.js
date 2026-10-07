@@ -15,6 +15,7 @@
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
+    discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },
     users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
     airtimeRequests: { sheet: "Airtime", cols: [] },
@@ -47,9 +48,11 @@
     if (!c.cols.length) return rows.map((r) => dec(r[0])).filter((x) => x !== undefined);
     return rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
   }
+  const CELL_LIMIT = 45000; // Google Sheets hard limit is 50,000 characters per cell
   function writeCollection(ss, k, list) {
     const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]); const sh = sheetOf(ss, c.sheet, header);
     const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]); const width = c.cols.length + 1;
+    rows.forEach((r, i) => r.forEach((v) => { if (typeof v === "string" && v.length > CELL_LIMIT) throw new Error("CELL_TOO_LARGE: " + k + " row " + (i + 1) + " exceeds the Sheets cell limit"); }));
     if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
     sh.getRange(1, 1, 1, width).setValues([header]);
     if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
@@ -61,8 +64,7 @@
     return db;
   }
   /* Writes are append-safe by design: a snapshot may never shrink the ledger or audit log (void, never delete). */
-  function guardNoLoss(ss, db) {
-    const cur = readAll(ss);
+  function guardNoLoss(cur, db) {
     ["transactions", "loans", "members", "auditLog"].forEach((k) => {
       const have = new Set(cur[k].map((r) => String(r.id)));
       const sent = new Set((db[k] || []).map((r) => String(r.id)));
@@ -73,6 +75,12 @@
   function writeAll(ss, db) {
     Object.keys(COLLECTIONS).forEach((k) => { if (k !== "users") writeCollection(ss, k, db[k] || []); });
   }
+  /* Persist only the collections a command actually changed (faster, and untouched sheets cannot be damaged). */
+  function writeChanged(ss, before, after) {
+    const changed = [];
+    Object.keys(COLLECTIONS).forEach((k) => { if (k === "users") return; if (JSON.stringify(before[k] || []) !== JSON.stringify(after[k] || [])) { writeCollection(ss, k, after[k] || []); changed.push(k); } });
+    return changed;
+  }
   function readMeta(ss) {
     const sh = ss.getSheetByName(META); const m = {};
     if (sh && sh.getLastRow() >= 1) sh.getRange(1, 1, sh.getLastRow(), 2).getValues().forEach((r) => { if (r[0]) m[r[0]] = r[1]; });
@@ -82,5 +90,5 @@
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+  return { COLLECTIONS, writeChanged, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
 });

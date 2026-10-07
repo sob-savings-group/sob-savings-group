@@ -1,7 +1,7 @@
 const assert = require("assert"), fs = require("fs"), vm = require("vm"), path = require("path"), crypto = require("crypto");
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
 let failed = 0; const tests = []; const t = (n, f) => tests.push([n, f]);
-const raw = JSON.parse(fs.readFileSync(process.env.SEED || "/mnt/user-data/outputs/SOB_FINAL_DATA_V2.json", "utf8"));
+const raw = require("./helpers/synth.js").legacyRaw();
 const AS_OF = "2026-03-31";
 
 function mockSS() {
@@ -158,8 +158,8 @@ t("unknown future fields and nested values survive the Sheet round trip", () => 
 t("a write path can never delete ledger/audit records", () => {
   const env = newEnv(); S.writeAll(env.ss, db0);
   const bad = JSON.parse(JSON.stringify(db0)); bad.transactions.pop();
-  assert.throws(() => S.guardNoLoss(env.ss, bad), /REJECTED/);
-  const bad2 = JSON.parse(JSON.stringify(db0)); bad2.auditLog = []; assert.throws(() => S.guardNoLoss(env.ss, bad2), /REJECTED/);
+  assert.throws(() => S.guardNoLoss(S.readAll(env.ss), bad), /REJECTED/);
+  const bad2 = JSON.parse(JSON.stringify(db0)); bad2.auditLog = []; assert.throws(() => S.guardNoLoss(S.readAll(env.ss), bad2), /REJECTED/);
 });
 t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox", () => {
   require("child_process").execSync("node " + path.join(__dirname, "../build/build-gs.js"));

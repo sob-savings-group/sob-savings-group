@@ -187,7 +187,7 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
   const ALL = ["ledger.create", "ledger.void", "ledger.restore", "ledger.approve", "loan.apply", "loan.review", "loan.disburse",
     "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage", "subscription.record", "shareout.preview",
-    "shareout.execute", "member.manage", "report.view", "audit.view", "system.admin"];
+    "shareout.execute", "reconcile.manage", "member.manage", "report.view", "audit.view", "system.admin"];
 
   // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions.
   const config = {
@@ -548,14 +548,92 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
 });
 
 return module.exports; })();
+__M['core/reconcile'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/reconcile — a register of data discrepancies between the platform and its source records, and an audited way to settle them.
+   Nothing here edits history to make figures balance: a discrepancy is OPENED with its evidence, and RESOLVED only with a written
+   decision, evidence reference and (optionally) a normal, dated, auditable ledger entry that explains the difference. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reconcile = api; }
+})(typeof self !== "undefined" ? self : this, function (dates, L, G) {
+  const KINDS = ["SAVINGS_BALANCE", "LOAN_DATE", "LOAN_BALANCE", "MISSING_ENTRY", "OTHER"];
+  const list = (db) => (db.discrepancies = db.discrepancies || []);
+
+  function openDiscrepancy(db, ctx, d) {
+    G.require(ctx, "reconcile.manage");
+    if (!KINDS.includes(d.kind)) throw new Error("INVALID: kind must be one of " + KINDS.join("/"));
+    G.need(d.subject, "subject"); G.need(d.summary, "summary");
+    const dup = list(db).find((x) => x.status === "Open" && x.kind === d.kind && x.subject === d.subject);
+    if (dup) throw new Error("ALREADY_OPEN: " + dup.id);
+    const rec = { id: G.uid("DSC"), kind: d.kind, subject: String(d.subject), summary: String(d.summary), platformValue: d.platformValue ?? null, sourceValue: d.sourceValue ?? null,
+      source: d.source || "", status: "Open", openedDate: ctx.today, openedBy: ctx.by };
+    list(db).push(rec);
+    G.audit(db, ctx, "Discrepancy", rec.id, "Opened", null, { kind: rec.kind, subject: rec.subject, platformValue: rec.platformValue, sourceValue: rec.sourceValue });
+    return rec;
+  }
+  /* decision: ACCEPT_PLATFORM (platform is right, source stale) | ACCEPT_SOURCE_WITH_ENTRY (post a normal correcting entry) | NO_ACTION_EXPLAINED.
+     The source is never silently adopted: a difference is only closed by a decision with evidence. */
+  function resolveDiscrepancy(db, ctx, id, r) {
+    G.require(ctx, "reconcile.manage"); r = r || {};
+    const d = list(db).find((x) => x.id === id); if (!d) throw new Error("NOT_FOUND: discrepancy " + id);
+    if (d.status !== "Open") throw new Error("BAD_STATE: already " + d.status);
+    if (!["ACCEPT_PLATFORM", "ACCEPT_SOURCE_WITH_ENTRY", "NO_ACTION_EXPLAINED"].includes(r.decision)) throw new Error("INVALID: decision");
+    G.need(r.reason, "reason"); G.need(r.evidence, "evidence");
+    let entry = null;
+    if (r.decision === "ACCEPT_SOURCE_WITH_ENTRY") {
+      if (!r.entry) throw new Error("REQUIRED: entry (the correcting ledger entry to post)");
+      entry = G.createEntry(db, ctx, Object.assign({}, r.entry, { purpose: "Reconciliation correction " + id + (r.entry.purpose ? " - " + r.entry.purpose : "") , reconciliationId: id }));
+    }
+    Object.assign(d, { status: "Resolved", resolvedDate: ctx.today, resolvedBy: ctx.by, decision: r.decision, resolutionReason: r.reason, evidence: r.evidence, correctingEntryId: entry ? entry.id : null });
+    G.audit(db, ctx, "Discrepancy", id, "Resolved", { status: "Open" }, { status: "Resolved", decision: r.decision, correctingEntryId: d.correctingEntryId }, r.reason + " | evidence: " + r.evidence);
+    return d;
+  }
+  /* Audited correction of a loan's start date (interest accrues from it). Keeps the old date and the linked disbursement entry's original date. */
+  function correctLoanDate(db, ctx, loanId, newDate, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    if (!dates.isISO(newDate)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    const loan = db.loans.find((l) => l.id === loanId); if (!loan) throw new Error("NOT_FOUND: loan " + loanId);
+    if (loan.date === newDate) throw new Error("INVALID: date unchanged");
+    const prev = loan.date;
+    (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: prev, newDate, reason, evidence, by: ctx.by, role: ctx.role });
+    loan.date = newDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; });
+    G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
+    return loan;
+  }
+  /* Audited re-dating of one ledger entry (e.g. a placeholder date from the old system). The original date stays on the record. */
+  function correctEntryDate(db, ctx, entryId, newDate, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    if (!dates.isISO(newDate)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    const t = db.transactions.find((x) => x.id === entryId); if (!t) throw new Error("NOT_FOUND: entry " + entryId);
+    if (t.voided) throw new Error("BAD_STATE: entry is voided"); if (t.date === newDate) throw new Error("INVALID: date unchanged");
+    const prev = t.date; t.originalDate = t.originalDate || prev; (t.dateHistory = t.dateHistory || []).push({ previousDate: prev, newDate, reason, evidence, by: ctx.by, at: ctx.now });
+    t.date = newDate;
+    G.audit(db, ctx, "Transaction", entryId, "Date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
+    return t;
+  }
+  /* Pure what-if: loan balances if each loan started on the date a source record shows. Changes nothing. */
+  function loanDateImpact(db, sourceDates, asOf) {
+    return db.loans.filter((l) => !l.voided && sourceDates[l.id]).map((l) => {
+      const alt = Object.assign({}, l, { date: sourceDates[l.id] });
+      return { loanId: l.id, memberId: l.memberId, platformDate: l.date, sourceDate: sourceDates[l.id], balanceNow: L.loanOutstanding(l, db, asOf), balanceIfSourceDate: L.loanOutstanding(alt, db, asOf),
+        difference: L.loanOutstanding(alt, db, asOf) - L.loanOutstanding(l, db, asOf) };
+    });
+  }
+  const summary = (db) => { const l = list(db); return { open: l.filter((x) => x.status === "Open").length, resolved: l.filter((x) => x.status === "Resolved").length, total: l.length }; };
+  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, correctEntryDate, loanDateImpact, summary };
+});
+
+return module.exports; })();
 __M['core/commands'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
 /* SOB core/commands — the ONLY ways to change the ledger. A closed whitelist: the server (and the demo UI) run exactly these,
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
@@ -574,6 +652,10 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
+    openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source }),
+    resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
+    correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
+    correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
     executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason })
   };
   function run(db, ctx, name, args) {
@@ -784,6 +866,7 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
+    discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },
     users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
     airtimeRequests: { sheet: "Airtime", cols: [] },
@@ -816,9 +899,11 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     if (!c.cols.length) return rows.map((r) => dec(r[0])).filter((x) => x !== undefined);
     return rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
   }
+  const CELL_LIMIT = 45000; // Google Sheets hard limit is 50,000 characters per cell
   function writeCollection(ss, k, list) {
     const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]); const sh = sheetOf(ss, c.sheet, header);
     const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]); const width = c.cols.length + 1;
+    rows.forEach((r, i) => r.forEach((v) => { if (typeof v === "string" && v.length > CELL_LIMIT) throw new Error("CELL_TOO_LARGE: " + k + " row " + (i + 1) + " exceeds the Sheets cell limit"); }));
     if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
     sh.getRange(1, 1, 1, width).setValues([header]);
     if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
@@ -830,8 +915,7 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     return db;
   }
   /* Writes are append-safe by design: a snapshot may never shrink the ledger or audit log (void, never delete). */
-  function guardNoLoss(ss, db) {
-    const cur = readAll(ss);
+  function guardNoLoss(cur, db) {
     ["transactions", "loans", "members", "auditLog"].forEach((k) => {
       const have = new Set(cur[k].map((r) => String(r.id)));
       const sent = new Set((db[k] || []).map((r) => String(r.id)));
@@ -842,6 +926,12 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
   function writeAll(ss, db) {
     Object.keys(COLLECTIONS).forEach((k) => { if (k !== "users") writeCollection(ss, k, db[k] || []); });
   }
+  /* Persist only the collections a command actually changed (faster, and untouched sheets cannot be damaged). */
+  function writeChanged(ss, before, after) {
+    const changed = [];
+    Object.keys(COLLECTIONS).forEach((k) => { if (k === "users") return; if (JSON.stringify(before[k] || []) !== JSON.stringify(after[k] || [])) { writeCollection(ss, k, after[k] || []); changed.push(k); } });
+    return changed;
+  }
   function readMeta(ss) {
     const sh = ss.getSheetByName(META); const m = {};
     if (sh && sh.getLastRow() >= 1) sh.getRange(1, 1, sh.getLastRow(), 2).getValues().forEach((r) => { if (r[0]) m[r[0]] = r[1]; });
@@ -851,7 +941,7 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+  return { COLLECTIONS, writeChanged, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
 });
 
 return module.exports; })();
@@ -922,8 +1012,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
 })(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G) {
   const fail = (error) => ({ ok: false, error });
-  const strip = (o, keys) => { const c = Object.assign({}, o); keys.forEach((k) => delete c[k]); return c; };
-
+  
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
@@ -964,14 +1053,14 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
         try {
           const db = S.readAll(env.ss);
           const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });  // identity from the SESSION only
-          const before = JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]);
+          const before = JSON.parse(JSON.stringify(db));
           const result = CMD.run(db, ctx, body.name, body.args);
-          S.guardNoLoss(env.ss, db);
-          S.writeAll(env.ss, db);
+          S.guardNoLoss(before, db);
+          const changedSheets = S.writeChanged(env.ss, before, db);
           const rev = Number(S.readMeta(env.ss).revision || 0) + 1;
           S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() });
           db.revision = rev;
-          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)), db: viewFor(db, user, asOf), changed: before !== JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]) };
+          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)), db: viewFor(db, user, asOf), changed: changedSheets.length > 0, sheets: changedSheets };
         } finally { env.lock.releaseLock(); }
       }
 
@@ -999,6 +1088,21 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
         try { const users = S.readCollection(env.ss, "users"); const t = users.find((u) => u.id === body.userId); if (!t) return fail("NOT_FOUND");
           if (t.id === user.id) return fail("INVALID: you cannot disable yourself"); t.status = "Disabled"; S.writeCollection(env.ss, "users", users); return { ok: true }; }
         finally { env.lock.releaseLock(); }
+      }
+      /* Bulk-load pre-hashed sign-ins produced offline by tools/provision-users (no plain PIN ever reaches the server or the Sheet). Admin only. */
+      if (body.action === "importUsers") {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may import users");
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users"), members = S.readCollection(env.ss, "members"), added = [];
+          (body.users || []).forEach((u) => {
+            if (!/^[0-9a-f]{64}$/.test(String(u.pinHash)) || !u.salt || !A.ROLES.includes(u.role)) throw new Error("INVALID: malformed user " + u.id);
+            if (u.role === "Member" && !members.some((m) => m.id === u.memberId)) throw new Error("UNKNOWN_MEMBER: " + u.memberId);
+            if (A.findUser({ users }, u.id)) throw new Error("EXISTS: " + u.id);
+            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash }); added.push(u.id);
+          });
+          S.writeCollection(env.ss, "users", users); return { ok: true, added: added.length };
+        } finally { env.lock.releaseLock(); }
       }
       /* One-time migration: Admin only, and only into an EMPTY ledger. Never available once data exists. */
       if (body.action === "importSnapshot") {
@@ -1039,6 +1143,13 @@ function doPost(e){
   return ContentService.createTextOutput(JSON.stringify(__M['backend/api'].handle(__env(), body))).setMimeType(ContentService.MimeType.JSON);
 }
 function doGet(){ return ContentService.createTextOutput(JSON.stringify({ ok: true, service: "SOB Ledger" })).setMimeType(ContentService.MimeType.JSON); }
+/* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
+   and SOB_INITIAL_ADMIN_PIN (6+ characters). The PIN property is deleted as soon as the Admin exists. */
+function setupAdmin(){
+  var props = PropertiesService.getScriptProperties(), pin = props.getProperty("SOB_INITIAL_ADMIN_PIN"), id = props.getProperty("SOB_INITIAL_ADMIN_ID") || "ADMIN";
+  if (!pin) throw new Error("Add Script Property SOB_INITIAL_ADMIN_PIN first");
+  var r = initAdmin(id, pin); props.deleteProperty("SOB_INITIAL_ADMIN_PIN"); return r + " (" + id + "); the PIN property has been removed";
+}
 function initAdmin(id, pin){
   var env = __env(), S = __M['backend/store'], A = __M['backend/auth'];
   var users = S.readCollection(env.ss, "users");

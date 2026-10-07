@@ -1,6 +1,6 @@
 const assert = require("assert"), fs = require("fs");
 const C = require("../src/client/store.js"), R = require("../src/core/reports.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
-const raw = JSON.parse(fs.readFileSync(process.env.SEED || "/mnt/user-data/outputs/SOB_FINAL_DATA_V2.json", "utf8"));
+const raw = require("./helpers/synth.js").legacyRaw();
 const AS_OF = "2026-03-31"; const db0 = M.migrateLegacy(raw, AS_OF);
 const tests = []; const t = (n, f) => tests.push([n, f]);
 const memStorage = () => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = v; }, removeItem: (k) => { delete m[k]; }, m }; };

@@ -37,13 +37,14 @@
   }
 
   /* ---------- navigation ---------- */
-  const NAV_STAFF = [["dash", "Dashboard"], ["members", "Members"], ["loans", "Loans"], ["ledger", "Ledger"], ["subs", "Subscriptions"], ["shareout", "Share-Out"], ["reports", "Reports"], ["audit", "Audit"]];
+  const NAV_STAFF = [["dash", "Dashboard"], ["members", "Members"], ["loans", "Loans"], ["ledger", "Ledger"], ["subs", "Subscriptions"], ["shareout", "Share-Out"], ["reports", "Reports"], ["recon", "Reconciliation"], ["audit", "Audit"]];
   const NAV_MEMBER = [["home", "Home"], ["savings", "Savings & Statement"], ["myloans", "Loan & Interest"]];
   function render() {
     app.replaceChildren();
     if (!st.user) { app.append(loginScreen()); return; }
     const nav = isStaff() ? NAV_STAFF : NAV_MEMBER; st.view = st.view || nav[0][0];
     app.append(h("header", null, h("h1", null, "SOB " + (isStaff() ? "Admin" : "Member")), h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV"), h("span", { class: "pill" }, st.user.role + " · " + st.user.name),
+      st.live ? h("button", { id: "my-pin", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed")) }, "My PIN") : null,
       h("button", { id: "logout", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, "Sign out")),
       h("nav", null, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l))));
     const main = h("main", { id: "main" }); app.append(main);
@@ -85,6 +86,9 @@
     const hist = L.memberLifetimeHistory(st.db, id).slice().reverse(), loans = st.db.loans.filter((l) => l.memberId === id && !l.voided);
     drill(m.id + " — " + m.name, null, h("div", null,
       h("div", { class: "grid" }, Card("Savings", ugx(L.memberSavings(st.db, id)), "Lifetime ledger"), Card("Guarantee committed", ugx(LN.committed(st.db, id))), Card("Outstanding loan", ugx(loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, st.db, today())), 0)))),
+      st.live && st.user.role === "Admin" ? h("div", { class: "row" }, (st.db.users || []).some((u) => u.id === m.id)
+        ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset PIN for " + m.name, [{ name: "n", label: "New PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
+        : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
       h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(st.db, today()).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id)),
       h("h2", { class: "sec" }, "Lifetime history"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "Savings after", num: 1, render: (t) => num(t.runningSavings) }], hist.slice(0, 50))));
   }
@@ -155,6 +159,24 @@
       drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => dl(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), h("button", { "data-print": 1, onclick: () => { const w = window.open("", "_blank"); w.document.write(R.toPrintHTML(rep, { generated: D.toDisplay(today()) })); w.document.close(); w.print(); } }, "Print / PDF")), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
     })));
   }
+  function recon() {
+    const list = (st.db.discrepancies || []).slice().sort((a, b) => (a.status === b.status ? 0 : a.status === "Open" ? -1 : 1)), integ = S.integrity.check(st.db, today()), un = S.integrity.unaccounted(st.db, today());
+    return h("div", null, h("div", { class: "grid" }, Card("Open items", String(list.filter((d) => d.status === "Open").length), "Need a decision with evidence"), Card("Resolved", String(list.filter((d) => d.status === "Resolved").length)),
+      Card("Data errors not in the register", String(un.length), un.length ? "Click to see" : "All accounted for", () => drill("Unaccounted data errors", "Errors the integrity check finds that no register item covers.", Table([{ label: "Code", key: "code" }, { label: "Detail", key: "detail" }], un))),
+      Card("Integrity warnings", String(integ.warnings))),
+      h("p", { class: "mute" }, "History is never edited to make figures balance. A difference is closed only by a decision, a reason and evidence; any correction is a new dated, audited entry."),
+      Table([{ label: "Kind", key: "kind" }, { label: "Subject", key: "subject" }, { label: "Summary", key: "summary" }, { label: "Status", render: (d) => badge(d.status, d.status === "Open" ? "warn" : "ok") }], list, (d) => openDiscrepancy(d.id)));
+  }
+  function openDiscrepancy(id) {
+    const d = st.db.discrepancies.find((x) => x.id === id), body = h("div", null, h("p", null, d.summary), h("p", { class: "mute" }, "Platform: " + (d.platformValue ?? "—") + " · Source: " + (d.sourceValue ?? "—") + " · " + (d.source || "")),
+      d.status === "Resolved" ? h("p", null, "Resolved (" + d.decision + "): " + d.resolutionReason + " — evidence: " + d.evidence) : null);
+    if (d.status === "Open" && G.can(ctx(), "reconcile.manage")) body.append(h("button", { class: "primary", "data-act": "resolve", onclick: () => Form("Resolve " + d.subject, [
+      { name: "decision", label: "Decision", options: [{ value: "ACCEPT_PLATFORM", label: "Platform is right (source is stale/explained)" }, { value: "NO_ACTION_EXPLAINED", label: "Explained, no change needed" }, { value: "ACCEPT_SOURCE_WITH_ENTRY", label: "Source is right: post a correcting entry" }] },
+      { name: "reason", label: "Reason (required)" }, { name: "evidence", label: "Evidence, e.g. receipt no. / paper record (required)" },
+      { name: "etype", label: "Correcting entry type (only for 'post a correcting entry')", options: ["Savings", "Withdraw", "Loan Repayment", "Expense", "Income"] }, { name: "eamt", label: "Entry amount", type: "number" }, { name: "edate", label: "Entry date", value: today() }, { name: "emember", label: "Entry member ID", value: /^SOB-\d+/.test(d.subject) ? d.subject : "" }],
+      act(async (f) => { await commit("resolveDiscrepancy", { id, decision: f.decision, reason: f.reason, evidence: f.evidence, entry: f.decision === "ACCEPT_SOURCE_WITH_ENTRY" ? { type: f.etype, amount: f.eamt, date: f.edate, memberId: f.emember } : undefined }); document.querySelector(".modal-bg") && document.querySelector(".modal-bg").remove(); }, "Resolved")) }, "Resolve"));
+    drill("Discrepancy " + d.subject, null, body);
+  }
   function audit() { return Table([{ label: "When", key: "date" }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], (st.db.auditLog || []).slice().reverse().slice(0, 200)); }
 
   /* ---------- member portal ---------- */
@@ -174,7 +196,7 @@
     return h("div", null, h("div", { class: "row" }, h("button", { class: "primary", id: "apply", onclick: () => Form("Apply for a loan", [{ name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: me(), amount: f.amt }), "Application sent")) }, "Apply for a loan")),
       Table(loanCols.filter((c) => c.label !== "Member"), mine, (v) => openLoan(v.id)), h("p", { class: "mute" }, "Interest is assigned by the Admin for each loan and recalculated monthly until the loan is settled."));
   }
-  const VIEWS = { dash: dashboard, members, loans, ledger, subs, shareout, reports, audit, home, savings: mySavings, myloans: myLoans };
+  const VIEWS = { dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home, savings: mySavings, myloans: myLoans };
 
   /* ---------- boot ---------- */
   async function boot() {

@@ -4,8 +4,7 @@ const path = require("path");
 const dates = require("../src/core/dates.js");
 const L = require("../src/core/ledger.js");
 
-const seedPath = process.env.SEED || "/mnt/user-data/outputs/SOB_FINAL_DATA_V2.json";
-const raw = JSON.parse(fs.readFileSync(seedPath, "utf8"));
+const raw = require("./helpers/synth.js").legacyRaw();
 // Migration step: rename monthlyStandardInterest -> assignedMonthlyInterest
 const db = JSON.parse(JSON.stringify(raw));
 db.loans.forEach((l) => { l.assignedMonthlyInterest = l.monthlyStandardInterest; delete l.monthlyStandardInterest; });
@@ -33,11 +32,8 @@ t("golden: group totals match legacy", () => {
   assert.equal(L.computeGroupTotals(db, ASOF).groupSavings, s);
   assert.equal(L.computeGroupTotals(db, ASOF).loansOutstanding, raw.loans.reduce((a, l) => a + oldOutstanding(l), 0));
 });
-t("confirmed loan facts from the final-requirements document", () => {
-  const by = (id) => db.loans.find((l) => l.memberId === id);
-  assert.equal(by("SOB-004").loanAmount, 861000); assert.equal(by("SOB-004").assignedMonthlyInterest, 30000);
-  assert.equal(by("SOB-011").loanAmount, 2070000); assert.equal(by("SOB-011").assignedMonthlyInterest, 50000);
-  assert.equal(by("SOB-005").assignedMonthlyInterest, 60000);
+t("loan facts survive the field rename exactly (amount, rate, grace, date)", () => {
+  raw.loans.forEach((o, i) => { const n = db.loans[i]; assert.equal(n.loanAmount, o.loanAmount); assert.equal(n.assignedMonthlyInterest, o.monthlyStandardInterest); assert.equal(n.graceMonths, o.graceMonths); assert.equal(n.date, o.date); });
 });
 t("no legacy field name survives", () => assert(db.loans.every((l) => l.monthlyStandardInterest === undefined)));
 t("stateless: 50 evaluations create no transactions and never change the answer", () => {

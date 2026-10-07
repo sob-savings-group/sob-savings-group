@@ -8,8 +8,7 @@
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
 })(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G) {
   const fail = (error) => ({ ok: false, error });
-  const strip = (o, keys) => { const c = Object.assign({}, o); keys.forEach((k) => delete c[k]); return c; };
-
+  
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
@@ -50,14 +49,14 @@
         try {
           const db = S.readAll(env.ss);
           const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });  // identity from the SESSION only
-          const before = JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]);
+          const before = JSON.parse(JSON.stringify(db));
           const result = CMD.run(db, ctx, body.name, body.args);
-          S.guardNoLoss(env.ss, db);
-          S.writeAll(env.ss, db);
+          S.guardNoLoss(before, db);
+          const changedSheets = S.writeChanged(env.ss, before, db);
           const rev = Number(S.readMeta(env.ss).revision || 0) + 1;
           S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() });
           db.revision = rev;
-          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)), db: viewFor(db, user, asOf), changed: before !== JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]) };
+          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)), db: viewFor(db, user, asOf), changed: changedSheets.length > 0, sheets: changedSheets };
         } finally { env.lock.releaseLock(); }
       }
 
@@ -85,6 +84,21 @@
         try { const users = S.readCollection(env.ss, "users"); const t = users.find((u) => u.id === body.userId); if (!t) return fail("NOT_FOUND");
           if (t.id === user.id) return fail("INVALID: you cannot disable yourself"); t.status = "Disabled"; S.writeCollection(env.ss, "users", users); return { ok: true }; }
         finally { env.lock.releaseLock(); }
+      }
+      /* Bulk-load pre-hashed sign-ins produced offline by tools/provision-users (no plain PIN ever reaches the server or the Sheet). Admin only. */
+      if (body.action === "importUsers") {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may import users");
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users"), members = S.readCollection(env.ss, "members"), added = [];
+          (body.users || []).forEach((u) => {
+            if (!/^[0-9a-f]{64}$/.test(String(u.pinHash)) || !u.salt || !A.ROLES.includes(u.role)) throw new Error("INVALID: malformed user " + u.id);
+            if (u.role === "Member" && !members.some((m) => m.id === u.memberId)) throw new Error("UNKNOWN_MEMBER: " + u.memberId);
+            if (A.findUser({ users }, u.id)) throw new Error("EXISTS: " + u.id);
+            users.push({ id: u.id, name: u.name || u.id, role: u.role, memberId: u.memberId || "", phone: u.phone || "", status: "Active", salt: u.salt, pinHash: u.pinHash }); added.push(u.id);
+          });
+          S.writeCollection(env.ss, "users", users); return { ok: true, added: added.length };
+        } finally { env.lock.releaseLock(); }
       }
       /* One-time migration: Admin only, and only into an EMPTY ledger. Never available once data exists. */
       if (body.action === "importSnapshot") {

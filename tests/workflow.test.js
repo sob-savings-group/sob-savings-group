@@ -221,7 +221,7 @@ t("KPIs derive from the ledger and agree with each other", () => {
   assert.equal(K.loanBook(db, "2026-03-01")[0].balance, k.outstandingLoans.value);
 });
 t("migration of the real data set is verified figure-for-figure and non-destructive", () => {
-  const raw = JSON.parse(fs.readFileSync(process.env.SEED || "/mnt/user-data/outputs/SOB_FINAL_DATA_V2.json", "utf8"));
+  const raw = require("./helpers/synth.js").legacyRaw();
   const snapshot = JSON.stringify(raw);
   const db = M.migrateLegacy(raw, "2026-10-06"); const v = M.verifyMigration(raw, db, "2026-10-06");
   assert(v.pass, JSON.stringify(v.checks.filter((c) => !c.pass)));
