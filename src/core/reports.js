@@ -47,6 +47,9 @@
   function quarterlyDistribution(db, period) {
     try { return L.profitShare(db, period); } catch (e) { return { blocked: true, title: "Quarterly profit distribution", reason: String(e.message) }; }
   }
+  function repaymentAllocation(db) {
+    try { L.allocateRepayment(db); } catch (e) { return { blocked: true, title: "Interest vs principal received", reason: String(e.message) }; }
+  }
   function annualSummary(db, year) {
     const d = K.dashboard(db, year + "-12-31", { year: Number(year) });
     return R("Annual summary " + year, ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
@@ -65,5 +68,5 @@
       esc(rep.title) + "</h2><p>Generated " + esc(meta.generated || "") + "</p><table><thead><tr>" + rep.columns.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>" +
       rep.rows.map((r) => "<tr>" + rep.columns.map((c) => "<td>" + esc(r[c]) + "</td>").join("") + "</tr>").join("") + "</tbody></table><h3>Totals</h3><table>" + t + "</table>";
   }
-  return { memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, annualSummary, toCSV, toPrintHTML };
+  return { memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, repaymentAllocation, annualSummary, toCSV, toPrintHTML };
 });
