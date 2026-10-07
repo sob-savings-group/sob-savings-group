@@ -68,5 +68,19 @@
       esc(rep.title) + "</h2><p>Generated " + esc(meta.generated || "") + "</p><table><thead><tr>" + rep.columns.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>" +
       rep.rows.map((r) => "<tr>" + rep.columns.map((c) => "<td>" + esc(r[c]) + "</td>").join("") + "</tr>").join("") + "</tbody></table><h3>Totals</h3><table>" + t + "</table>";
   }
-  return { memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, repaymentAllocation, annualSummary, toCSV, toPrintHTML };
+  function airtime(db) {
+    const rows = (db.airtimeRequests || []).map((r) => ({ date: dates.toDisplay(r.date), member: r.memberName || name(db, r.memberId), phone: r.phone, airtime: r.airtimeAmount, fee: r.fee, total: r.total, status: r.status }));
+    const done = rows.filter((r) => r.status === "Fulfilled");
+    return R("Airtime requests", ["date", "member", "phone", "airtime", "fee", "total", "status"], rows, { fulfilledAirtime: sum(done, "airtime"), fulfilledFees: sum(done, "fee"), fulfilledTotal: sum(done, "total"), pending: rows.filter((r) => r.status === "Pending").length });
+  }
+  function notificationLog(db) {
+    const rows = (db.outbox || []).map((m) => ({ created: dates.toDisplay(String(m.createdAt).slice(0, 10)), to: m.to === "ADMIN" ? "Admin phone" : m.memberId ? name(db, m.memberId) : m.to, channel: m.channel, template: m.template, status: m.status, note: m.reason || "" }));
+    const c = (k) => rows.filter((r) => r.status === k).length;
+    return R("Notification log", ["created", "to", "channel", "template", "status", "note"], rows, { queued: c("QUEUED"), dryRun: c("DRY_RUN"), sent: c("SENT"), failed: c("FAILED"), skipped: c("SKIPPED") });
+  }
+  function reconciliationRegister(db) {
+    const rows = (db.discrepancies || []).map((d) => ({ kind: d.kind, subject: d.subject, summary: d.summary, status: d.status, decision: d.decision || "", reason: d.resolutionReason || "", evidence: d.evidence || "" }));
+    return R("Reconciliation register", ["kind", "subject", "summary", "status", "decision", "reason", "evidence"], rows, { open: rows.filter((r) => r.status === "Open").length, resolved: rows.filter((r) => r.status === "Resolved").length });
+  }
+  return { airtime, notificationLog, reconciliationRegister, memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, repaymentAllocation, annualSummary, toCSV, toPrintHTML };
 });

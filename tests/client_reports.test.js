@@ -51,6 +51,15 @@ t("reports: blocked distribution, share-out preview, subscriptions, annual summa
   assert.ok(R.annualSummary(db0, 2026).rows.length === 7); assert.equal(R.guarantors(db0).rows.length, 0);
   R.incomeExpenses(db0, { year: 2026 }); R.repayments(db0, { year: 2026 });
 });
+t("reports: airtime, notification log and reconciliation register totals match their records", () => {
+  const G = require("../src/core/governance.js"), AT = require("../src/core/airtime.js"), CMD = require("../src/core/commands.js");
+  const db = JSON.parse(JSON.stringify(db0)), mem = db.members.find((m) => L.memberSavings(db, m.id) >= 10000 && !L.memberHasOutstandingLoan(db, m.id, AS_OF));
+  const admin = G.makeCtx({ id: "A", name: "Admin", role: "Admin" }, { today: "2026-04-02", now: "2026-04-02T08:00:00.000Z" });
+  const r1 = CMD.run(db, admin, "requestAirtime", { memberId: mem.id, amount: 3000, phone: "0772123456" }); CMD.run(db, admin, "requestAirtime", { memberId: mem.id, amount: 2000, phone: "0772123456" }); CMD.run(db, admin, "fulfilAirtime", { id: r1.id });
+  const a = R.airtime(db); assert.deepEqual([a.rows.length, a.totals.fulfilledAirtime, a.totals.fulfilledFees, a.totals.fulfilledTotal, a.totals.pending], [2, 3000, 200, 3200, 1]);
+  const n = R.notificationLog(db); assert.equal(n.rows.length, (db.outbox || []).length); assert.equal(n.totals.sent, 0);
+  const rr = R.reconciliationRegister(db); assert.equal(rr.rows.length, (db.discrepancies || []).length);
+});
 t("CSV escapes quotes/commas and neutralises spreadsheet formulas; HTML escapes markup", () => {
   const rep = { title: "<x>", columns: ["a", "b"], rows: [{ a: 'he said "hi", ok', b: "=HYPERLINK(1)" }], totals: { t: 1 } };
   const csv = R.toCSV(rep).split("\n")[1]; assert.equal(csv, '"he said ""hi"", ok",\'=HYPERLINK(1)');
