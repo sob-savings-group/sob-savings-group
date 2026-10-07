@@ -144,7 +144,7 @@ window.SOBMember = function (E) {
     return h("div", null, signInfo(), List([
       Row({ icon: "receipt", title: "Annual subscription", sub: "UGX 5,000 a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
       viewOnly() ? null : Row({ icon: "bell", title: "SMS / WhatsApp notices", sub: off ? "Off — tap to switch on" : "On — tap to switch off", onOpen: act(async () => commit("setNotifyOptOut", { memberId: me(), optOut: !off }), off ? "Notices switched on" : "Notices switched off") }),
-      viewOnly() ? null : Row({ icon: "key", title: "Change my PIN", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
+      viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my PIN", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
       Section("Need help?"), List(help().map((o) => h("a", { class: "li click", href: "tel:" + o[2].replace(/\s/g, ""), style: "text-decoration:none;color:inherit" }, h("div", { class: "lic" }, Icon("phone")), h("div", { class: "lm" }, h("div", { class: "lt" }, o[0]), h("div", { class: "ls" }, o[1])), h("div", { class: "lr" }, h("b", null, o[2]))))));
   }
   function subs() {

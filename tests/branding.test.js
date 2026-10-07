@@ -13,7 +13,8 @@ t("every report builder prints with the mandatory header and footer", () => {
 t("blocked reports are branded too; no unbranded path exists", () => {
   check(R.toPrintHTML({ title: "Blocked one", blocked: true, reason: "x", columns: [], rows: [], totals: {} }, {}), "Blocked one");
   const app = fs.readFileSync(path.join(__dirname, "../app/app.js"), "utf8");
-  assert.equal((app.match(/document\.write|window\.open|\.print\(/g) || []).length, 1, "only printReport may print");
+  const pr = app.slice(app.indexOf("function printReport"), app.indexOf("const printButton")), re = /document\.write|window\.open|\.print\(/g;
+  assert.equal((app.match(re) || []).length, (pr.match(re) || []).length, "only printReport may open or print a document"); assert.ok(/R\.toPrintHTML/.test(pr));
   assert.ok(!/<h1>Sons of Bethel/.test(fs.readFileSync(path.join(__dirname, "../src/core/reports.js"), "utf8")));
 });
 console.log(n + " branding tests passed");

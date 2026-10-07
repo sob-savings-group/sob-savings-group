@@ -16,6 +16,7 @@ const sheets = {}; const mk = () => { const d = []; return { d, getLastRow: () =
 const cache = {}, env = { ss: { getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk()) }, lock: { waitLock() {}, releaseLock() {} }, now: () => new Date().toISOString(), hash: (s) => crypto.createHash("sha256").update(s).digest("hex"), randomToken: () => crypto.randomBytes(8).toString("hex"), cache: { get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } } };
 S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" })]);
 const tok = API.handle(env, { action: "login", id: "ADMIN", pin: "admin-pin-1" }).token; if (!API.handle(env, { action: "importSnapshot", token: tok, db: db0 }).ok) throw new Error("seed failed");
+S.writeCollection(env.ss, "users", S.readCollection(env.ss, "users").concat([A.makeUser(env, { id: "SOB-001", role: "Member", memberId: "SOB-001", pin: "1234" }), A.makeUser(env, { id: "SOB-002", role: "Member", memberId: "SOB-002", pin: "4321" })]));
 const ledger = () => API.handle(env, { action: "getLedger", token: tok }).db;
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const srv = http.createServer((q, r) => { const u = q.url.split("?")[0];
@@ -63,6 +64,19 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await closeAll(); await pg.click('[data-nav="subs"]'); await pg.click("[data-sub]"); await pg.waitForSelector('input[name="date"]');
   ok((await pg.locator('input[name="date"]').inputValue()) === TODAY, "subscription date defaults to today and can be changed");
   await pg.click("[data-close]");
+  /* 5. what members SEE equals what the engine computes (same ledger, member phone view) */
+  const ug = (n) => "UGX " + Math.round(n).toLocaleString("en-US"), dbf = ledger(), lo2 = dbf.loans.find((x) => x.id === loan.id), w = L.loanInterestPosition(lo2, dbf, TODAY), owe = L.loanOutstanding(lo2, dbf, TODAY);
+  await pg.setViewportSize({ width: 390, height: 844 }); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-001"); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
+  await pg.click('[data-nav="myloans"]'); await pg.click("[data-loan]"); await pg.waitForSelector(".modal .kv"); const mt = await pg.locator(".modal").innerText();
+  const grab = (label) => { const m = new RegExp(label + "\\s*UGX ([\\d,]+)").exec(mt); return m ? Number(m[1].replace(/,/g, "")) : null; };
+  ok(grab("Principal left") === w.principalOutstanding && grab("Interest due now") === w.unpaidInterest && grab("Interest paid") === w.interestPaid && grab("Interest charged so far") === w.accruedInterest, "borrower's loan screen matches the engine (principal left " + w.principalOutstanding + ", interest due " + w.unpaidInterest + ")");
+  ok(new RegExp("You owe today\\s*" + ug(owe)).test(mt), "'You owe today' equals loan outstanding (" + ug(owe) + ")");
+  ok(w.steps.every((x) => mt.includes(ug(x.amount)) && (x.principal === 0 || mt.includes(ug(x.principal)))), "every repayment is listed with its interest / principal split");
+  await pg.click("[data-close]"); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-002"); await pg.fill("#pin", "4321"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
+  const pos = L.memberPosition(dbf, "SOB-002"), lg = await pg.locator(".legend").first().innerText();
+  ok(lg.includes("Available to you") && lg.includes(ug(pos.available)) && lg.includes(ug(pos.committed)), "guarantor's home shows available " + ug(pos.available) + " and held " + ug(pos.committed));
+  await pg.click('[data-nav="myguar"]'); const gt = await pg.locator("#main").innerText(), gg = dbf.guarantees.find((g) => g.guarantorId === "SOB-002");
+  ok(gt.includes(ug(L.guaranteeRemaining(gg))) && gt.includes(ug(gg.amount)), "guarantee screen shows guaranteed " + ug(gg.amount) + " and still held " + ug(L.guaranteeRemaining(gg)));
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs[0] : "")); await b.close(); srv.close();
   console.log(fails ? fails + " FAILED" : "dates e2e passed"); process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

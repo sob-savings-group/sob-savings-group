@@ -158,10 +158,14 @@
   }
   /* Every PDF/print goes through here -> R.toPrintHTML -> mandatory SOB header + footer (repeats on every page). Printed from a hidden frame (no pop-up blocking). */
   function printReport(rep, period) {
-    return Busy.run("Generating PDF…", () => new Promise((res) => {
-      const html = R.toPrintHTML(rep, { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) });
+    return Busy.run("Preparing your PDF…", () => new Promise((res) => {
+      const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
+      /* Opens the branded statement in its own tab: desktop prints straight away; on a phone use "Print / Save as PDF" there (then share the PDF on WhatsApp). */
+      const w = window.open(URL.createObjectURL(new Blob([R.toPrintHTML(rep, Object.assign({ toolbar: true }, meta))], { type: "text/html" })), "_blank");
+      if (w) { setTimeout(res, 300); return; }
+      toast("Please allow pop-ups for this page to open the PDF.", "warn");
       const f = document.createElement("iframe"); f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"; document.body.append(f);
-      const d = f.contentWindow.document; d.open(); d.write(html); d.close();
+      const d = f.contentWindow.document; d.open(); d.write(R.toPrintHTML(rep, meta)); d.close();
       setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast("Could not open the print dialog", true); } setTimeout(() => f.remove(), 60000); res(); }, 400);
     }));
   }
@@ -329,7 +333,7 @@
       act(async (f) => { await commit("resolveDiscrepancy", { id, decision: f.decision, reason: f.reason, evidence: f.evidence, entry: f.decision === "ACCEPT_SOURCE_WITH_ENTRY" ? { type: f.etype, amount: f.eamt, date: f.edate, memberId: f.emember } : undefined }); document.querySelector(".modal-bg") && document.querySelector(".modal-bg").remove(); }, "Resolved")) }, "Resolve"));
     drill("Discrepancy " + d.subject, null, body);
   }
-  function audit() { return Table([{ label: "When", key: "date" }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], (st.db.auditLog || []).slice().reverse().slice(0, 200)); }
+  function audit() { const all = (st.db.auditLog || []).slice().reverse(); return Searchable("Search the audit trail by action, person, record or reason", (q) => { const hit = all.filter((a) => !q || ((a.entityType || "") + " " + (a.entityId || "") + " " + (a.action || "") + " " + (a.by || "") + " " + (a.reason || "")).toLowerCase().includes(q)); return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > 200 ? "Showing the latest 200 of " + hit.length + " — search to narrow." : hit.length + " entries"), Table([{ label: "When", key: "date" }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], hit.slice(0, 200), null, "No audit entries match")); }); }
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
@@ -417,6 +421,10 @@
       window.__SOB = st; render();
     } catch (e) { app.replaceChildren(State("error", "We could not load SOB. " + friendly(e), () => { app.replaceChildren(State("loading")); boot(); })); }
   }
+  /* a phone left unlocked must not stay signed in: 20 minutes without a touch signs out (the server session also expires) */
+  let idleT = null; const IDLE_MS = 20 * 60 * 1000;
+  const touch = () => { clearTimeout(idleT); if (!st.user) return; idleT = setTimeout(async () => { if (!st.user) return; try { if (st.live) await st.store.logout(); } catch (e) { /* ignore */ } st.user = null; st.view = null; render(); toast("You were signed out after 20 minutes of inactivity.", "warn"); }, window.SOB_IDLE_MS || IDLE_MS); };
+  ["click", "keydown", "touchstart", "scroll"].forEach((ev) => document.addEventListener(ev, touch, { passive: true })); window.__SOB_IDLE = { touch, ms: IDLE_MS };
   /* connection awareness: say so plainly instead of letting buttons look dead */
   const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "You are offline. Changes cannot be saved until the connection returns.")); };
   window.addEventListener("offline", offline); window.addEventListener("online", () => { const o = document.getElementById("offline"); if (o) o.remove(); toast("Back online"); });
