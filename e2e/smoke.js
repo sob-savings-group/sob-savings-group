@@ -30,8 +30,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.click('[data-nav="shareout"]'); ok((await pg.locator(".blocked").count()) >= 1, vp.name + ": share-out shows blocked profit notice");
     await pg.click('[data-nav="dash"]'); await pg.click('[data-card="Interest Receivable"]'); await pg.waitForSelector(".modal tbody tr"); ok((await pg.locator(".modal tbody tr").count()) >= 1, vp.name + ": Interest Receivable drills down to loans"); await pg.keyboard.press("Escape"); if (await pg.locator(".modal-bg").count()) await pg.locator(".modal-bg").first().click({ position: { x: 2, y: 2 } });
-    for (const v of ["profit", "approvals"]) { await pg.click('[data-nav="' + v + '"]'); await pg.waitForTimeout(100); }
-    ok(true, vp.name + ": Profit and Approvals screens open");
+    await pg.click('[data-nav="profit"]'); await pg.waitForTimeout(100);
+    ok((await pg.locator("#profit-cycle").count()) === 1 && /Cycle inputs/.test(await pg.locator("#main").innerText()), vp.name + ": Profit shows audited cycle inputs (pool and measurement date are Admin inputs)");
+    await pg.click('[data-nav="approvals"]'); await pg.waitForTimeout(100);
+    { const tx = await pg.locator("#main").innerText(); ok(/PENDING SOB DECISION/.test(tx) && !/whole loan/i.test(tx), vp.name + ": repayment allocation shows as pending (nothing assumed) and there is no whole-loan option"); }
     for (const role of ["Chairperson", "Treasurer"]) {
       await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", role); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
       await pg.click('[data-nav="loans"]'); ok((await pg.locator("#apply, #new-loan, #record-loan").count()) === 0, vp.name + ": " + role + " has no loan-entry buttons");

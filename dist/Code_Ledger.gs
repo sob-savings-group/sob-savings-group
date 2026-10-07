@@ -64,9 +64,9 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
      every default is either confirmed by SOB or an explicit, visible, changeable setting. --- */
   const POLICY_DEFAULTS = {
     approval: { requiredTypes: [], loanSecondApproval: false },                       // WHICH items need the Chairperson is SOB's call; none by default
-    loan: { guidelineMultiple: 3,                                                      // confirmed: standard guideline up to 3x savings
-            guaranteeCover: "SHORTFALL",                                               // guarantors back the part of a loan beyond the 3x guideline ("FULL_LOAN" = back the whole loan)
-            repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: false },       // how repayments split interest/principal for the Interest Receivable display
+    // confirmed: standard guideline up to 3x savings; guarantors back ONLY the shortfall beyond the borrower's own qualification (not a policy option).
+    // repaymentAllocation is an OPEN SOB decision: null = pending. While pending nothing is assumed (see loanRepaymentSplit).
+    loan: { guidelineMultiple: 3, repaymentAllocation: null, allocationConfirmed: false },
     profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
   };
   const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
@@ -138,27 +138,52 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
-  /* --- loan interest position: how much of the money repaid went to interest and how much interest is still unpaid.
-     Allocation order is db.policy "loan".repaymentAllocation (INTEREST_FIRST by default); repayments are walked in date order so interest
-     accrued AFTER a payment is still unpaid. Invariant: principalOutstanding + unpaidInterest + unpaidPenalties == loanOutstanding. --- */
-  function loanInterestPosition(loan, db, asOf) {
-    asOf = asOf || dates.todayISO();
-    const policy = getPolicy(db, "loan"), principal = Number(loan.loanAmount) || 0;
-    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= effectiveAsOf(loan, asOf)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  /* --- how repayments split between interest, penalties and principal. THIS IS AN OPEN SOB DECISION (db.policy "loan": repaymentAllocation + allocationConfirmed).
+     It never changes a loan balance (loanOutstanding is the same either way) - it only decides how much of each payment reduced PRINCIPAL, which is what releases guarantees,
+     and how much interest is still unpaid. Until SOB confirms, NOTHING IS ASSUMED: both orders are computed; what is the same under both is treated as certain, the rest is
+     reported as a range / "pending". --- */
+  const ALLOCATION_RULES = ["INTEREST_FIRST", "PRINCIPAL_FIRST"];
+  const confirmedAllocation = (db) => { const p = getPolicy(db, "loan"); return p.allocationConfirmed && ALLOCATION_RULES.includes(p.repaymentAllocation) ? p.repaymentAllocation : null; };
+  function walkAllocation(loan, db, rule, asOf) {
+    const principal = Number(loan.loanAmount) || 0, e = effectiveAsOf(loan, asOf);
+    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
     const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
-    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0;
+    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
-      let amt = Number(t.amount);
+      let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
       const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
-      const order = policy.repaymentAllocation === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
+      const order = rule === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
       order.forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
+      steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
-    const e = effectiveAsOf(loan, asOf), accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
-    return { principal, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid),
-      principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid, allocation: policy.repaymentAllocation, allocationConfirmed: !!policy.allocationConfirmed };
+    const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
+  }
+  /* Principal reduction per repayment for ONE loan. status CONFIRMED: by SOB's rule. status PENDING: `principal` per repayment is the part that is principal under EVERY possible rule
+     (the safe minimum), `possible` is the most it could be; the difference waits for SOB. */
+  function loanRepaymentSplit(loan, db, asOf) {
+    const rule = confirmedAllocation(db);
+    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return { status: "CONFIRMED", rule, steps: w.steps.map((x) => Object.assign({ possible: x.principal }, x)), totalPrincipal: w.principalPaid, totalPossible: w.principalPaid }; }
+    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
+    let ca = 0, cb = 0, cm = 0;
+    const steps = A.steps.map((x, i) => { ca += x.principal; cb += B.steps[i].principal; const m = Math.min(ca, cb), d = m - cm; cm = m; return { entryId: x.entryId, date: x.date, amount: x.amount, principal: d, possible: Math.max(x.principal, B.steps[i].principal) }; });
+    return { status: "PENDING", rule: null, steps, totalPrincipal: cm, totalPossible: Math.max(A.principalPaid, B.principalPaid), A, B };
+  }
+  /* Interest position of a loan. Allocation-independent facts are always exact: accrued interest, total repaid, outstanding loan. Split facts (unpaid interest, principal outstanding)
+     are exact when SOB's rule is confirmed, or whenever both orders give the same answer (e.g. no repayments yet); otherwise they are null with a [min, max] range. */
+  function loanInterestPosition(loan, db, asOf) {
+    asOf = asOf || dates.todayISO();
+    const rule = confirmedAllocation(db), policy = getPolicy(db, "loan");
+    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return Object.assign({}, w, { allocation: rule, allocationConfirmed: true, pending: false, unpaidInterestRange: { min: w.unpaidInterest, max: w.unpaidInterest } }); }
+    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
+    const same = A.interestPaid === B.interestPaid && A.principalPaid === B.principalPaid && A.penaltiesPaid === B.penaltiesPaid;
+    const range = { min: Math.min(A.unpaidInterest, B.unpaidInterest), max: Math.max(A.unpaidInterest, B.unpaidInterest) };
+    const base = { principal: A.principal, accruedInterest: A.accruedInterest, penalties: A.penalties, totalRepaid: A.totalRepaid, unpaidInterestRange: range, principalOutstandingRange: { min: Math.min(A.principalOutstanding, B.principalOutstanding), max: Math.max(A.principalOutstanding, B.principalOutstanding) },
+      allocation: policy.repaymentAllocation || null, allocationConfirmed: false, pending: !same };
+    return same ? Object.assign({}, A, base) : Object.assign(base, { interestPaid: null, penaltiesPaid: null, principalPaid: null, unpaidInterest: null, unpaidPenalties: null, principalOutstanding: null });
   }
   const memberHasOutstandingLoan = (db, memberId, asOf) =>
     activeLoans(db).some((l) => l.memberId === memberId && loanOutstanding(l, db, asOf) > 0);
@@ -212,7 +237,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   return {
     RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
-    POLICY_DEFAULTS, getPolicy, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
+    POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, ALLOCATION_RULES, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
   };
@@ -352,9 +377,11 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
       if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
       if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
     } else if (key === "loan") {
-      if (v.guaranteeCover !== undefined) { if (!["SHORTFALL", "FULL_LOAN"].includes(v.guaranteeCover)) throw new Error("INVALID: guaranteeCover must be SHORTFALL or FULL_LOAN"); next.guaranteeCover = v.guaranteeCover; }
-      if (v.repaymentAllocation !== undefined) { if (!["INTEREST_FIRST", "PRINCIPAL_FIRST"].includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation"); next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.allocationConfirmed === true; }
-      else if (v.allocationConfirmed !== undefined) next.allocationConfirmed = !!v.allocationConfirmed;
+      if (v.guaranteeCover !== undefined) throw new Error("INVALID: guarantors always back the shortfall beyond the borrower's own qualification (confirmed SOB rule); it is not a setting");
+      if (v.repaymentAllocation !== undefined) {
+        if (v.repaymentAllocation !== null && !ledger.ALLOCATION_RULES.includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation must be INTEREST_FIRST, PRINCIPAL_FIRST, or null (pending SOB decision)");
+        next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.repaymentAllocation !== null && v.allocationConfirmed === true;
+      } else if (v.allocationConfirmed !== undefined) { if (v.allocationConfirmed && !next.repaymentAllocation) throw new Error("INVALID: choose the rule before confirming it"); next.allocationConfirmed = !!v.allocationConfirmed; }
     } else if (key === "profit") {
       if (v.addFactor) {
         const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");
@@ -381,8 +408,10 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
    - 3x savings is the STANDARD GUIDELINE, not a hard stop: a borrower who falls short may continue with guarantor(s) and/or exceptionally approved security.
    - MORE THAN ONE guarantor may back a loan; their commitments add up. A guarantee takes effect only when the guarantor ACCEPTS it, and from that instant the
      guaranteed amount is deducted from the guarantor's AVAILABLE savings (it stays in their account but cannot be withdrawn).
-   - Each qualifying repayment reduces the borrower's outstanding loan AND releases the same amount back to the guarantors (pro rata), linked by the repayment id;
-     clearing the loan releases whatever remains. Voiding a repayment re-commits exactly what it released.
+   - A guarantee secures the borrower's outstanding PRINCIPAL exposure beyond their own qualification (the shortfall). It is therefore released by the REDUCTION IN PRINCIPAL a repayment
+     causes - not by the cash received (part of a payment may be interest). How a payment splits is SOB's open repayment-allocation decision (ledger.loanRepaymentSplit): once confirmed
+     the release follows that rule; while pending only the part that is principal under EVERY possible rule is released, and the rest waits (nothing is assumed). Releases are pro rata to
+     each guarantor's commitment and linked by repayment id; clearing the loan releases whatever remains; voiding a repayment re-commits exactly what it released.
    - Property / other security is an EXCEPTIONAL, separately recorded route (core/security.js), never the default. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
@@ -399,7 +428,9 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   /* --- guarantor exposure (single source: ledger.js) --- */
   const committed = (db, guarantorId) => L.memberCommitted(db, guarantorId);
   const loanCover = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + L.guaranteeRemaining(g), 0);
-  const loanGuaranteed = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + Number(g.amount), 0);
+  // guarantees that bound the loan at disbursement (still Active, or since released by repayments); not ones withdrawn before disbursement
+  const bound = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && g.dateCommitted && !g.preRelease && (g.status === "Active" || g.status === "Released"));
+  const loanGuaranteed = (db, loanId) => bound(db, loanId).reduce((a, g) => a + Number(g.amount), 0);
   const securityCover = (db, loanId) => secs(db, loanId).filter((x) => x.status === "Approved").reduce((a, x) => a + Number(x.acceptedCover || 0), 0);
   function qualifyingSavings(db, memberId) { return L.loanEligibility(db, memberId).qualifyingSavings; }
   const guarantorAvailable = (db, guarantorId) => L.memberAvailable(db, guarantorId);
@@ -413,12 +444,12 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   function assessLoan(db, memberId, amount, loanId) {
     const pol = L.getPolicy(db, "loan"), el = L.loanEligibility(db, memberId), amt = Number(amount);
     const guideline = el.maxLoan, shortfall = Math.max(0, amt - guideline);
-    const required = pol.guaranteeCover === "FULL_LOAN" ? amt : shortfall;
+    const required = shortfall;                                              // confirmed: guarantors back only the shortfall beyond the borrower's own qualification
     const gs = loanId ? (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g)) : [];
     const guaranteeCover = loanId ? loanCover(db, loanId) : 0, secCover = loanId ? securityCover(db, loanId) : 0, backing = guaranteeCover + secCover;
     const reasons = [];
     if (required > 0 && backing < required) reasons.push("Backing of " + required + " is needed (loan " + amt + " vs guideline " + guideline + " = " + el.multiple + "x savings of " + el.qualifyingSavings + ") but only " + backing + " is accepted (guarantees " + guaranteeCover + ", approved security " + secCover + ").");
-    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, coverRule: pol.guaranteeCover, required,
+    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required,
       guaranteeCover, guaranteesRequested: gs.filter((g) => g.status === "Requested").length, securityCover: secCover, securityBacked: secCover > 0, backing, shortBy: Math.max(0, required - backing), canApprove: reasons.length === 0, reasons };
   }
 
@@ -464,6 +495,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   function releaseGuarantor(db, ctx, loanId, reason, guaranteeId) {
     G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); stateMust(loan, ...PRE_DISBURSE);
+    (db.guarantees || []).filter((g) => g.loanId === loanId && (!guaranteeId || g.id === guaranteeId)).forEach((g) => { g.preRelease = true; });
     releaseGuarantees(db, ctx, loanId, reason, guaranteeId);
   }
   function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry) {
@@ -481,49 +513,79 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
       G.audit(db, ctx, "Security", x.id, x.status, { status: was }, { status: x.status }, why);
     });
   }
-  /* Double entry: a counted repayment releases the SAME amount of commitment back to the guarantors (pro rata to what each still has committed). */
-  function releaseOnRepayment(db, ctx, loan, entry) {
-    const gs = (db.guarantees || []).filter((g) => g.loanId === loan.id && LIVE_GUARANTEE(g) && L.guaranteeRemaining(g) > 0);
-    if (!gs.some((g) => (g.releases || []).some((r) => r.entryId === entry.id && !r.reversed))) {
-      const total = gs.reduce((a, g) => a + L.guaranteeRemaining(g), 0), rel = Math.min(Number(entry.amount), total);
-      if (rel > 0) {
-        let left = rel; const sorted = gs.slice().sort((a, b) => L.guaranteeRemaining(b) - L.guaranteeRemaining(a));
-        sorted.forEach((g, i) => {
-          const part = i === sorted.length - 1 ? Math.min(left, L.guaranteeRemaining(g)) : Math.min(Math.floor(rel * L.guaranteeRemaining(g) / total), L.guaranteeRemaining(g));
-          left -= part; if (part <= 0) return;
-          (g.releases = g.releases || []).push({ date: entry.date, entryId: entry.id, amount: part });
-          g.releasedAmount = Number(g.releasedAmount || 0) + part;
-          if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; }
-          G.audit(db, ctx, "Guarantee", g.id, "Released by repayment", { committed: L.guaranteeRemaining(g) + part }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id, loanId: loan.id }, "Borrower repayment " + entry.amount + " on " + entry.date);
-        });
-        // rounding remainder (if any) goes to the first guarantor still committed so Σ released == repayment (up to the amount committed)
-        if (left > 0) { const g = sorted.find((x) => L.guaranteeRemaining(x) > 0); if (g) { const part = Math.min(left, L.guaranteeRemaining(g)); g.releases.push({ date: entry.date, entryId: entry.id, amount: part }); g.releasedAmount += part; if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; } } }
-      }
-    }
+  /* Double entry: guarantee release FOLLOWS THE REDUCTION IN PRINCIPAL. syncReleases() is idempotent: for every counted repayment (in date order) it works out the principal
+     reduction (confirmed rule, or the safe minimum while the rule is pending), caps the running total at what the guarantors committed, and makes the recorded releases match -
+     releasing more, or re-committing, as needed. Each release row carries the repayment id, so it is traceable both ways. */
+  const isClearRow = (r) => r.reason === "Loan cleared";
+  function reverseRelease(db, ctx, g, r, why, entryId) {
+    r.reversed = true; g.releasedAmount = Math.max(0, Number(g.releasedAmount || 0) - r.amount);
+    if (g.status === "Released" && L.guaranteeRemaining(g) > 0) { g.status = "Active"; g.dateReleased = ""; g.releaseReason = ""; }
+    G.audit(db, ctx, "Guarantee", g.id, "Re-committed", { committed: L.guaranteeRemaining(g) - r.amount }, { committed: L.guaranteeRemaining(g), repaymentEntry: entryId || r.entryId }, why);
+  }
+  function applyRelease(db, ctx, gs, rel, entry, note) {
+    const total = gs.reduce((a, g) => a + L.guaranteeRemaining(g), 0); rel = Math.min(rel, total); if (!(rel > 0)) return 0;
+    let left = rel; const sorted = gs.slice().sort((a, b) => L.guaranteeRemaining(b) - L.guaranteeRemaining(a) || (a.id < b.id ? -1 : 1));
+    const take = (g, part) => {
+      part = Math.min(part, L.guaranteeRemaining(g)); if (part <= 0) return; left -= part;
+      (g.releases = g.releases || []).push({ date: entry.date, entryId: entry.id, amount: part });
+      g.releasedAmount = Number(g.releasedAmount || 0) + part;
+      if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Principal repaid"; }
+      G.audit(db, ctx, "Guarantee", g.id, "Released by principal repayment", { committed: L.guaranteeRemaining(g) + part }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id, loanId: entry.loanId }, note);
+    };
+    sorted.forEach((g, i) => take(g, i === sorted.length - 1 ? left : Math.floor(rel * L.guaranteeRemaining(g) / total)));
+    sorted.forEach((g) => { if (left > 0) take(g, left); });                 // rounding remainder
+    return rel - left;
+  }
+  function syncReleases(db, ctx, loan) {
+    if (!loan || loan.voided || loan.status !== "Active") return { loanId: loan && loan.id, status: "n/a" };
+    const all = bound(db, loan.id);
+    if (!all.length) return { loanId: loan.id, status: "none" };
+    const split = L.loanRepaymentSplit(loan, db, ctx.today), counted = new Set(split.steps.map((x) => x.entryId));
+    // releases tied to a repayment that no longer counts (voided / rejected) are re-committed
+    all.forEach((g) => (g.releases || []).filter((r) => !r.reversed && r.entryId && !counted.has(r.entryId) && !isClearRow(r)).forEach((r) => reverseRelease(db, ctx, g, r, "Repayment no longer counts", r.entryId)));
+    const cap = all.reduce((a, g) => a + Number(g.amount), 0); let run = 0, pendingAmt = 0;
+    split.steps.forEach((st) => {
+      const want = Math.max(0, Math.min(cap, run + st.principal) - run); run += want;
+      pendingAmt += Math.max(0, Math.min(st.possible, cap) - st.principal);
+      const entry = db.transactions.find((t) => t.id === st.entryId);
+      const mine = [].concat(...all.map((g) => (g.releases || []).filter((r) => r.entryId === st.entryId && !r.reversed && !isClearRow(r)).map((r) => ({ g, r })))), have = mine.reduce((a, x) => a + x.r.amount, 0);
+      if (have === want) return;
+      mine.forEach((x) => reverseRelease(db, ctx, x.g, x.r, "Release recalculated from the principal reduction", st.entryId));
+      applyRelease(db, ctx, all.filter((g) => g.status === "Active" && L.guaranteeRemaining(g) > 0), want, entry, "Principal reduced by " + want + " of repayment " + st.amount + " (" + (split.status === "CONFIRMED" ? split.rule.replace("_", " ").toLowerCase() : "certain under any allocation rule") + ")");
+    });
+    return { loanId: loan.id, status: split.status, principalReduced: run, pendingAllocation: split.status === "PENDING" ? Math.max(0, Math.min(split.totalPossible, cap) - run) : 0 };
+  }
+  function clearIfRepaid(db, ctx, loan, entry) {
     if (loan.status === "Active" && L.loanOutstanding(loan, db, entry.date) <= 0) {
       Object.assign(loan, { status: "Cleared", datePaidFull: entry.date, clearedBy: ctx.by });
-      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);
+      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);      // fully repaid: principal is zero under any allocation rule
       G.audit(db, ctx, "Loan", loan.id, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
     }
   }
+  /* Re-evaluate every active loan (e.g. right after SOB confirms or changes the repayment-allocation rule). */
+  function syncAllReleases(db, ctx) { return (db.loans || []).filter((l) => l.status === "Active" && !l.voided).map((l) => syncReleases(db, ctx, l)); }
   /* A repayment entry that becomes COUNTED (approved by the Chairperson) or is RESTORED triggers its release; one that is voided re-commits it. */
   function onRepaymentCounted(db, ctx, entry) {
     if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
     const loan = db.loans.find((l) => l.id === entry.loanId); if (!loan || loan.voided) return;
-    releaseOnRepayment(db, ctx, loan, entry);
+    syncReleases(db, ctx, loan); clearIfRepaid(db, ctx, loan, entry);
   }
   function onRepaymentRemoved(db, ctx, entry, why) {
     if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
-    (db.guarantees || []).forEach((g) => (g.releases || []).filter((r) => r.entryId === entry.id && !r.reversed).forEach((r) => {
-      r.reversed = true; g.releasedAmount = Math.max(0, Number(g.releasedAmount || 0) - r.amount);
-      if (g.status === "Released" && L.guaranteeRemaining(g) > 0) { g.status = "Active"; g.dateReleased = ""; g.releaseReason = ""; }
-      G.audit(db, ctx, "Guarantee", g.id, "Re-committed (repayment removed)", { committed: L.guaranteeRemaining(g) - r.amount }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id }, why || "repayment voided");
-    }));
-    const loan = db.loans.find((l) => l.id === entry.loanId);
-    if (loan && loan.status === "Cleared" && L.loanOutstanding(loan, db, ctx.today) > 0) {
+    const loan = db.loans.find((l) => l.id === entry.loanId); if (!loan) return;
+    (db.guarantees || []).forEach((g) => (g.releases || []).filter((r) => r.entryId === entry.id && !r.reversed).forEach((r) => reverseRelease(db, ctx, g, r, why || "repayment voided", entry.id)));
+    if (loan.status === "Cleared" && L.loanOutstanding(loan, db, ctx.today) > 0) {
+      (db.guarantees || []).filter((g) => g.loanId === loan.id).forEach((g) => (g.releases || []).filter((r) => !r.reversed && isClearRow(r)).forEach((r) => reverseRelease(db, ctx, g, r, why || "repayment voided", entry.id)));
       Object.assign(loan, { status: "Active", datePaidFull: "" });
       G.audit(db, ctx, "Loan", loan.id, "Re-opened (repayment removed)", { status: "Cleared" }, { status: "Active" }, why || "repayment voided");
     }
+    syncReleases(db, ctx, loan);
+  }
+  /* What is held back for SOB's allocation decision, per loan (shown to Admin and in the guarantee statement). */
+  function pendingRelease(db, loanId, today) {
+    const loan = getLoan(db, loanId); if (loan.status !== "Active") return 0;
+    const split = L.loanRepaymentSplit(loan, db, today); if (split.status !== "PENDING") return 0;
+    const cap = loanGuaranteed(db, loanId); return Math.max(0, Math.min(split.totalPossible, cap) - Math.min(split.totalPrincipal, cap));
   }
 
   /* --- workflow --- */
@@ -644,29 +706,31 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db) || "PENDING_SOB_DECISION", guaranteeReleaseWaiting: pendingRelease(db, loan.id, asOf), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
   /* The linked double-entry view of one loan: every repayment beside the guarantor releases it caused, with both sides' running positions. */
   function linkedLedger(db, loanId, asOf) {
     const loan = getLoan(db, loanId), rows = [], gs = (db.guarantees || []).filter((g) => g.loanId === loanId && g.status !== "Declined");
     const reps = L.activeTransactions(db).filter((t) => t.loanId === loanId && (t.type === "Loan Disbursement" || t.type === "Loan Repayment")).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const split = loan.status === "Active" || loan.status === "Cleared" ? L.loanRepaymentSplit(loan, db, asOf || dates.todayISO()) : { status: "n/a", steps: [] }, stepOf = {}; split.steps.forEach((x) => { stepOf[x.entryId] = x; });
     let paid = 0; const running = {}; gs.forEach((g) => { running[g.id] = 0; });
     gs.filter((g) => g.dateCommitted).sort((a, b) => (a.dateCommitted < b.dateCommitted ? -1 : 1)).forEach((g) => rows.push({ date: g.dateCommitted, event: "Guarantee committed", ref: g.id, guarantor: g.guarantorId, borrowerChange: 0, guarantorCommittedChange: Number(g.amount), _o: 0 }));
     reps.forEach((t) => {
       if (t.type === "Loan Disbursement") { rows.push({ date: t.date, event: "Loan disbursed", ref: t.id, guarantor: "", borrowerChange: Number(t.amount), guarantorCommittedChange: 0, _o: 1 }); return; }
       paid += Number(t.amount);
+      const sp = stepOf[t.id] || { principal: Number(t.amount), possible: Number(t.amount) }, pr = sp.principal, wait = Math.max(0, sp.possible - sp.principal);   // principal reduction (not cash) is what the guarantee follows
       const rel = gs.reduce((a, g) => a.concat((g.releases || []).filter((r) => r.entryId === t.id && !r.reversed).map((r) => ({ g, r }))), []);
-      if (!rel.length) rows.push({ date: t.date, event: "Repayment", ref: t.id, guarantor: "", borrowerChange: -Number(t.amount), guarantorCommittedChange: 0, _o: 2 });
-      rel.forEach(({ g, r }, i) => rows.push({ date: t.date, event: "Repayment" + (i ? " (continued)" : ""), ref: t.id, guarantor: g.guarantorId, borrowerChange: i ? 0 : -Number(t.amount), guarantorCommittedChange: -r.amount, _o: 2 }));
+      if (!rel.length) rows.push({ date: t.date, event: "Repayment", ref: t.id, guarantor: "", borrowerChange: -pr, cashReceived: Number(t.amount), awaitingRule: wait, guarantorCommittedChange: 0, _o: 2 });
+      rel.forEach(({ g, r }, i) => rows.push({ date: t.date, event: "Repayment" + (i ? " (continued)" : ""), ref: t.id, guarantor: g.guarantorId, borrowerChange: i ? 0 : -pr, cashReceived: i ? 0 : Number(t.amount), awaitingRule: i ? 0 : wait, guarantorCommittedChange: -r.amount, _o: 2 }));
     });
     rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a._o - b._o));
     let out = 0, com = 0;
     rows.forEach((r) => { out += r.borrowerChange; com += r.guarantorCommittedChange; r.borrowerPrincipalExposure = out; r.totalGuaranteeCommitted = com; delete r._o; });
     const rest = L.loanOutstanding(loan, db, asOf || dates.todayISO());
-    return { loanId, rows, summary: { borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
+    return { loanId, rows, summary: { allocationRule: split.status === "CONFIRMED" ? split.rule : "PENDING SOB DECISION", guaranteeAwaitingRule: pendingRelease(db, loanId, asOf || dates.todayISO()), borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
-  return { assessLoan, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
+  return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
     declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });
 
@@ -757,7 +821,7 @@ __M['core/profit'] = (function(){ const module = {exports:{}}; const require = _
 })(typeof self !== "undefined" ? self : this, function (dates, L, G) {
   const asAt = (db, date) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= date) });
 
-  function preview(db, a) {
+  function compute(db, a) {
     a = a || {};
     const pool = Number(a.pool); if (!(pool > 0)) throw new Error("INVALID: pool (the profit amount to distribute) must be positive");
     const date = a.date; if (!dates.isISO(date)) throw new Error("INVALID: date (YYYY-MM-DD) - savings are measured at this date");
@@ -784,18 +848,45 @@ __M['core/profit'] = (function(){ const module = {exports:{}}; const require = _
       totalWeight: total, rows, distributed, undistributed: pool - distributed, eligibleMembers: rows.filter((r) => r.eligible).length, excludedMembers: rows.filter((r) => !r.eligible && r.savings > 0).length,
       formula: "entitlement = floor( pool x weight / sum of weights ), weight = savings x product of approved multiplier factors (0 if excluded)" };
   }
-  function distribute(db, ctx, a) {
+  /* The pool and the measurement date are NOT invented or defaulted: for each distribution cycle the Super Admin enters them (with the source and a reason) and every change is kept in
+     the cycle's history and the audit log. Distribution is only possible from a cycle that has been set, and a posted cycle is locked. */
+  const cycleId = (period) => "cycle:" + period;
+  const getCycle = (db, period) => (db.policy || []).find((p) => p.id === cycleId(period)) || null;
+  function setCycle(db, ctx, a) {
     G.require(ctx, "profit.distribute"); a = a || {};
-    const period = G.need(a.period, "period (e.g. 2026-Q1)"); G.need(a.sourceNote, "sourceNote (where this profit came from)");
-    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period);
-    const pv = preview(db, a);
-    const rec = { id: G.uid("PRD"), period, status: "Posted", date: pv.date, pool: pv.pool, sourceNote: String(a.sourceNote).trim(), basis: pv.basis, formula: pv.formula, factorsUsed: pv.factorsUsed, rows: pv.rows, distributed: pv.distributed, undistributed: pv.undistributed, executedBy: ctx.by, executedDate: ctx.today };
-    (db.profitDistributions = db.profitDistributions || []).push(rec);
-    pv.rows.filter((r) => r.entitlement > 0).forEach((r) => { const t = G.createEntry(db, ctx, { date: pv.date, memberId: r.memberId, amount: r.entitlement, type: "Profit", purpose: "Profit distribution " + period, profitDistributionId: rec.id }); r.entryId = t.id; });
-    G.audit(db, ctx, "ProfitDistribution", rec.id, "Posted", null, { period, pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed, members: pv.rows.filter((r) => r.entitlement > 0).length }, a.sourceNote);
+    const period = String(G.need(a.period, "period (e.g. 2026-Q1)")).trim(), reason = G.need(a.reason, "reason / SOB reference for these inputs");
+    const pool = Number(a.pool); if (!(pool > 0)) throw new Error("INVALID: pool (the profit amount to distribute) must be positive");
+    if (!dates.isISO(a.measurementDate)) throw new Error("INVALID: measurementDate (YYYY-MM-DD) - savings are measured at this date");
+    const sourceNote = String(G.need(a.sourceNote, "sourceNote (where this profit came from)")).trim();
+    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period + " is posted and locked");
+    db.policy = db.policy || []; let rec = getCycle(db, period); const prev = rec ? { pool: rec.pool, measurementDate: rec.measurementDate, sourceNote: rec.sourceNote } : null;
+    if (!rec) { rec = { id: cycleId(period), period, history: [] }; db.policy.push(rec); }
+    const next = { pool, measurementDate: a.measurementDate, sourceNote };
+    rec.history = (rec.history || []).concat([{ date: ctx.today, timestamp: ctx.now, by: ctx.by, role: ctx.role, previous: prev, new: next, reason: String(reason).trim() }]);
+    Object.assign(rec, next, { updatedBy: ctx.by, updatedDate: ctx.today });
+    G.audit(db, ctx, "ProfitCycle", rec.id, prev ? "Inputs changed" : "Inputs set", prev, next, reason);
     return rec;
   }
-  return { preview, distribute };
+  function cycleInputs(db, period) {
+    const c = getCycle(db, period); if (!c) throw new Error("CYCLE_NOT_SET: the profit pool and measurement date for " + period + " have not been entered (Admin -> Profit -> Set cycle inputs)");
+    return { pool: c.pool, date: c.measurementDate, sourceNote: c.sourceNote };
+  }
+  function preview(db, a) {
+    a = a || {}; const c = cycleInputs(db, G.need(a.period, "period"));
+    return Object.assign(compute(db, { pool: c.pool, date: c.date, factorValues: a.factorValues }), { period: a.period, sourceNote: c.sourceNote });
+  }
+  function distribute(db, ctx, a) {
+    G.require(ctx, "profit.distribute"); a = a || {};
+    const period = G.need(a.period, "period (e.g. 2026-Q1)");
+    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period);
+    const pv = preview(db, { period, factorValues: a.factorValues }), cyc = getCycle(db, period);
+    const rec = { id: G.uid("PRD"), period, status: "Posted", cycleHistory: cyc.history, date: pv.date, pool: pv.pool, sourceNote: pv.sourceNote, basis: pv.basis, formula: pv.formula, factorsUsed: pv.factorsUsed, rows: pv.rows, distributed: pv.distributed, undistributed: pv.undistributed, executedBy: ctx.by, executedDate: ctx.today };
+    (db.profitDistributions = db.profitDistributions || []).push(rec);
+    pv.rows.filter((r) => r.entitlement > 0).forEach((r) => { const t = G.createEntry(db, ctx, { date: pv.date, memberId: r.memberId, amount: r.entitlement, type: "Profit", purpose: "Profit distribution " + period, profitDistributionId: rec.id }); r.entryId = t.id; });
+    G.audit(db, ctx, "ProfitDistribution", rec.id, "Posted", null, { period, pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed, members: pv.rows.filter((r) => r.entitlement > 0).length }, pv.sourceNote);
+    return rec;
+  }
+  return { preview, distribute, setCycle, getCycle, compute };
 });
 
 return module.exports; })();
@@ -1250,9 +1341,10 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     addSecurityDocument: (db, ctx, a) => SEC.addSecurityDocument(db, ctx, a.id, { name: a.name, reference: a.reference, note: a.note }),
     decideSecurity: (db, ctx, a) => SEC.decideSecurity(db, ctx, a.id, a.decision, { reason: a.reason, acceptedCover: a.acceptedCover }),
     releaseSecurity: (db, ctx, a) => SEC.releaseSecurity(db, ctx, a.id, a.reason),
-    setPolicy: (db, ctx, a) => G.setPolicy(db, ctx, a.key, a.values, a.reason),
+    setPolicy: (db, ctx, a) => { const r = G.setPolicy(db, ctx, a.key, a.values, a.reason); if (a.key === "loan") LN.syncAllReleases(db, ctx); return r; },
+    setProfitCycle: (db, ctx, a) => PR.setCycle(db, ctx, { period: a.period, pool: a.pool, measurementDate: a.measurementDate, sourceNote: a.sourceNote, reason: a.reason }),
     previewProfit: (db, ctx, a) => { G.require(ctx, "profit.distribute"); return PR.preview(db, a); },
-    distributeProfit: (db, ctx, a) => PR.distribute(db, ctx, { period: a.period, date: a.date, pool: a.pool, sourceNote: a.sourceNote, factorValues: a.factorValues }),
+    distributeProfit: (db, ctx, a) => PR.distribute(db, ctx, { period: a.period, factorValues: a.factorValues }),
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, date: a.date }),
@@ -1309,7 +1401,8 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     const loans = L.activeLoans(d);
     const outstanding = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, d, asOf)), 0);
     const positions = loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => L.loanInterestPosition(l, d, asOf));
-    const unpaidInterest = positions.reduce((a, p) => a + p.unpaidInterest, 0);
+    const irMin = positions.reduce((a, p) => a + p.unpaidInterestRange.min, 0), irMax = positions.reduce((a, p) => a + p.unpaidInterestRange.max, 0), irPending = irMin !== irMax;
+    const unpaidInterest = irPending ? null : irMin;                               // exact unless SOB's repayment-allocation rule is still pending AND it matters
     const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + L.guaranteeRemaining(g), 0);
     const pol = L.getPolicy(db, "loan");
     return {
@@ -1317,8 +1410,8 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
       totalSavings: { value: savings, definition: "Net of all member savings, withdrawals, charges and share-outs, up to the as-of date." },
       availableCash: { value: cash, definition: "Net cash movement in the ledger (deposits, repayments, subscriptions, income minus withdrawals, disbursements, expenses)." },
       outstandingLoans: { value: outstanding, count: loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).length, definition: "Sum of Loan Payable minus repayments across booked loans." },
-      interestReceivable: { value: unpaidInterest, loans: positions.length, provisional: !pol.allocationConfirmed,
-        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + pol.repaymentAllocation.replace("_", " ").toLowerCase() + "). Tap for every member and loan." },
+      interestReceivable: { value: unpaidInterest, min: irMin, max: irMax, pending: irPending, loans: positions.length, provisional: irPending,
+        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + (L.confirmedAllocation(db) ? L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ", confirmed by SOB" : "SOB has not yet decided whether repayments go to interest or principal first, so while that is pending the figure is shown as a range wherever it matters") + "). Tap for every member and loan." },
       profit: { value: profit, definition: "Profit entries recorded in the selected period." },
       expenses: { value: expenses, definition: "Expense entries recorded in the selected period." },
       members: { value: db.members.filter((m) => m.status !== "Inactive").length, definition: "Active registered members." },
@@ -1343,12 +1436,13 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     const rows = L.activeLoans(d).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
       return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
-        monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid + p.penaltiesPaid,
-        unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
+        monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
+        unpaidInterest: p.unpaidInterest, unpaidInterestRange: p.unpaidInterestRange, pending: p.pending, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });
     const pol = L.getPolicy(db, "loan");
-    return { asOf, rows, total: rows.reduce((a, r) => a + r.unpaidInterest, 0), accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
-      allocation: pol.repaymentAllocation, allocationConfirmed: !!pol.allocationConfirmed };
+    const tmin = rows.reduce((a, r) => a + r.unpaidInterestRange.min, 0), tmax = rows.reduce((a, r) => a + r.unpaidInterestRange.max, 0);
+    return { asOf, rows, total: tmin === tmax ? tmin : null, totalMin: tmin, totalMax: tmax, pending: tmin !== tmax, accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
+      allocation: L.confirmedAllocation(db), allocationConfirmed: !!L.confirmedAllocation(db) };
   }
   return { dashboard, loanBook, pipeline, interestReceivable };
 });
@@ -1438,8 +1532,8 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   /* Linked double entry for one loan: borrower repayments beside the guarantor releases they caused. */
   function loanStatement(db, loanId, asOf) {
     const l = LN.linkedLedger(db, loanId, asOf), loan = db.loans.find((x) => x.id === loanId);
-    const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
-    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "borrowerChange", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
+    const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, cashReceived: r.cashReceived || 0, awaitingRule: r.awaitingRule || 0, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
+    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "cashReceived", "borrowerChange", "awaitingRule", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
   }
   function securities(db) {
     const rows = (db.securities || []).map((x) => ({ id: x.id, loanId: x.loanId, borrower: name(db, x.memberId), kind: x.kind, description: x.description, owner: x.owner, valuation: x.valuation == null ? "" : x.valuation, acceptedCover: x.acceptedCover || 0, documents: (x.documents || []).length, status: x.status, decidedBy: x.decidedBy || "", reason: x.decisionReason || "" }));
@@ -1447,9 +1541,9 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   }
   function interestReceivable(db, asOf) {
     const d = K.interestReceivable(db, asOf);
-    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding }));
+    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest === null ? "pending SOB rule: " + r.unpaidInterestRange.min + " to " + r.unpaidInterestRange.max : r.unpaidInterest, outstanding: r.outstanding }));
     return R("Interest Receivable (unpaid interest on outstanding loans)", ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"], rows,
-      { unpaidInterest: d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocation + (d.allocationConfirmed ? "" : " (assumed until SOB confirms)") });
+      { unpaidInterest: d.total === null ? "pending SOB rule: " + d.totalMin + " to " + d.totalMax : d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocationConfirmed ? d.allocation : "PENDING SOB DECISION (nothing assumed)" });
   }
   function approvals(db) {
     const rows = [].concat((db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).map((t) => ({ kind: "Ledger entry", ref: t.id, member: name(db, t.memberId), detail: t.type + " " + t.amount + " on " + dates.toDisplay(t.date), enteredBy: t.createdBy })),
@@ -1495,7 +1589,9 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
     return R("Profit distribution " + d.period, ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], d.rows, { pool: d.pool, distributed: d.distributed, undistributed: d.undistributed, basis: d.basis, formula: d.formula });
   }
   function repaymentAllocation(db) {
-    try { L.allocateRepayment(db); } catch (e) { return { blocked: true, title: "Interest vs principal received", reason: String(e.message) }; }
+    if (!L.confirmedAllocation(db)) return { blocked: true, title: "Interest vs principal received", reason: "PENDING_SOB_DECISION: repayments go to interest first or principal first - awaiting SOB. Nothing is assumed; no balance or guarantee depends on it until it is confirmed." };
+    const rows = L.activeLoans(db).map((l) => { const p = L.loanInterestPosition(l, db, dates.todayISO()); return { loanId: l.id, member: name(db, l.memberId), repaid: p.totalRepaid, toInterest: p.interestPaid, toPenalties: p.penaltiesPaid, toPrincipal: p.principalPaid }; });
+    return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
   function annualSummary(db, year) {
     const d = K.dashboard(db, year + "-12-31", { year: Number(year) });

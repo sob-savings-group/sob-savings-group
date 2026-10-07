@@ -130,9 +130,11 @@
       if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
       if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
     } else if (key === "loan") {
-      if (v.guaranteeCover !== undefined) { if (!["SHORTFALL", "FULL_LOAN"].includes(v.guaranteeCover)) throw new Error("INVALID: guaranteeCover must be SHORTFALL or FULL_LOAN"); next.guaranteeCover = v.guaranteeCover; }
-      if (v.repaymentAllocation !== undefined) { if (!["INTEREST_FIRST", "PRINCIPAL_FIRST"].includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation"); next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.allocationConfirmed === true; }
-      else if (v.allocationConfirmed !== undefined) next.allocationConfirmed = !!v.allocationConfirmed;
+      if (v.guaranteeCover !== undefined) throw new Error("INVALID: guarantors always back the shortfall beyond the borrower's own qualification (confirmed SOB rule); it is not a setting");
+      if (v.repaymentAllocation !== undefined) {
+        if (v.repaymentAllocation !== null && !ledger.ALLOCATION_RULES.includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation must be INTEREST_FIRST, PRINCIPAL_FIRST, or null (pending SOB decision)");
+        next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.repaymentAllocation !== null && v.allocationConfirmed === true;
+      } else if (v.allocationConfirmed !== undefined) { if (v.allocationConfirmed && !next.repaymentAllocation) throw new Error("INVALID: choose the rule before confirming it"); next.allocationConfirmed = !!v.allocationConfirmed; }
     } else if (key === "profit") {
       if (v.addFactor) {
         const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");

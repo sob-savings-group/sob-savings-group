@@ -87,7 +87,14 @@ t("full lifecycle: apply > guarantee (request, accept) > approve > disburse > re
   assert.equal(L.loanOutstanding(l, db, "2026-07-10"), 200000 + 2 * 10000); // Feb->Jul = 5 months - 3 grace
   LN.repayLoan(db, ctxAt("2026-07-10"), l.id, 20000, "2026-07-10");
   assert.equal(l.status, "Active"); assert.equal(L.loanOutstanding(l, db, "2026-07-10"), 200000);
-  assert.equal(LN.committed(db, "SOB-002"), 60000, "20,000 repaid -> 20,000 released back to the guarantor");
+  // the 20,000 paid equals the interest accrued: whether any of it was principal is SOB's open allocation decision -> nothing released on an assumption
+  assert.equal(LN.committed(db, "SOB-002"), 80000, "rule pending: the release waits"); assert.equal(LN.pendingRelease(db, l.id, "2026-07-10"), 20000);
+  G.setPolicy(db, ctxAt("2026-07-11"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "SOB decision (test)"); LN.syncAllReleases(db, ctxAt("2026-07-11"));
+  assert.equal(LN.committed(db, "SOB-002"), 80000, "interest first: the payment was all interest, principal unchanged, nothing to release");
+  G.setPolicy(db, ctxAt("2026-07-12"), "loan", { repaymentAllocation: "PRINCIPAL_FIRST", allocationConfirmed: true }, "SOB changed its decision (test)"); LN.syncAllReleases(db, ctxAt("2026-07-12"));
+  assert.equal(LN.committed(db, "SOB-002"), 60000, "principal first: 20,000 of principal repaid -> 20,000 released");
+  G.setPolicy(db, ctxAt("2026-07-13"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "SOB decided interest first (test)"); LN.syncAllReleases(db, ctxAt("2026-07-13"));
+  assert.equal(LN.committed(db, "SOB-002"), 80000, "a changed rule re-commits exactly what it had released");
   throwsMsg(() => LN.repayLoan(db, ctxAt("2026-07-10"), l.id, 999999, "2026-07-10"), /OVERPAYMENT/);
   LN.repayLoan(db, ctxAt("2026-07-10"), l.id, 200000, "2026-07-10");
   assert.equal(l.status, "Cleared"); assert.equal(l.datePaidFull, "2026-07-10");
@@ -179,9 +186,13 @@ t("share-out execution: loan holders withdraw too (loan stays payable), closes t
 });
 t("profit distribution needs a pool, a date and a source note; posting is Admin-only", () => {
   const db = fresh(); seed(db, "SOB-001", 100000); seed(db, "SOB-002", 300000);
-  throwsMsg(() => C.distributeProfit(db, ctxAt("2026-12-10"), { period: "2026-Q4", date: "2026-12-10", pool: 0, sourceNote: "x" }), /INVALID/);
-  throwsMsg(() => C.distributeProfit(db, ctxAt("2026-12-10", chair), { period: "2026-Q4", date: "2026-12-10", pool: 4000, sourceNote: "x" }), /FORBIDDEN/);
-  const r = C.distributeProfit(db, ctxAt("2026-12-10"), { period: "2026-Q4", date: "2026-12-10", pool: 4000, sourceNote: "loan interest received Q4" });
+  const PR = require("../src/core/profit.js");
+  throwsMsg(() => C.distributeProfit(db, ctxAt("2026-12-10"), { period: "2026-Q4" }), /CYCLE_NOT_SET/);
+  throwsMsg(() => PR.setCycle(db, ctxAt("2026-12-10"), { period: "2026-Q4", measurementDate: "2026-12-10", pool: 0, sourceNote: "x", reason: "r" }), /INVALID/);
+  throwsMsg(() => PR.setCycle(db, ctxAt("2026-12-10", chair), { period: "2026-Q4", measurementDate: "2026-12-10", pool: 4000, sourceNote: "x", reason: "r" }), /FORBIDDEN/);
+  PR.setCycle(db, ctxAt("2026-12-10"), { period: "2026-Q4", measurementDate: "2026-12-10", pool: 4000, sourceNote: "loan interest received Q4", reason: "SOB minute (test)" });
+  throwsMsg(() => C.distributeProfit(db, ctxAt("2026-12-10", chair), { period: "2026-Q4" }), /FORBIDDEN/);
+  const r = C.distributeProfit(db, ctxAt("2026-12-10"), { period: "2026-Q4" });
   assert.equal(r.rows.find((x) => x.memberId === "SOB-001").entitlement, 1000); assert.equal(r.rows.find((x) => x.memberId === "SOB-002").entitlement, 3000);
 });
 
@@ -192,7 +203,7 @@ t("KPIs derive from the ledger and agree with each other", () => {
   G.createEntry(db, ctxAt("2026-02-01"), { date: "2026-02-01", amount: 2000, type: "Expense", purpose: "stationery" });
   const k = K.dashboard(db, "2026-03-01", { year: 2026 });
   assert.equal(k.totalSavings.value, 400000); assert.equal(k.outstandingLoans.value, 80000 + 2 * 8000);
-  assert.equal(k.availableCash.value, 400000 - 80000 - 2000); assert.equal(k.expenses.value, 2000); assert.equal(k.interestReceivable.provisional, true); assert.equal(k.interestReceivable.value, 2 * 8000);
+  assert.equal(k.availableCash.value, 400000 - 80000 - 2000); assert.equal(k.expenses.value, 2000); assert.equal(k.interestReceivable.pending, false, "no repayments yet: exact whatever the allocation rule"); assert.equal(k.interestReceivable.value, 2 * 8000);
   assert.equal(k.members.value, 3); assert.equal(k.loanExposure.pct, 24);
   assert.equal(K.loanBook(db, "2026-03-01")[0].balance, k.outstandingLoans.value);
 });

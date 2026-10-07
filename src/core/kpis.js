@@ -19,7 +19,8 @@
     const loans = L.activeLoans(d);
     const outstanding = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, d, asOf)), 0);
     const positions = loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => L.loanInterestPosition(l, d, asOf));
-    const unpaidInterest = positions.reduce((a, p) => a + p.unpaidInterest, 0);
+    const irMin = positions.reduce((a, p) => a + p.unpaidInterestRange.min, 0), irMax = positions.reduce((a, p) => a + p.unpaidInterestRange.max, 0), irPending = irMin !== irMax;
+    const unpaidInterest = irPending ? null : irMin;                               // exact unless SOB's repayment-allocation rule is still pending AND it matters
     const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + L.guaranteeRemaining(g), 0);
     const pol = L.getPolicy(db, "loan");
     return {
@@ -27,8 +28,8 @@
       totalSavings: { value: savings, definition: "Net of all member savings, withdrawals, charges and share-outs, up to the as-of date." },
       availableCash: { value: cash, definition: "Net cash movement in the ledger (deposits, repayments, subscriptions, income minus withdrawals, disbursements, expenses)." },
       outstandingLoans: { value: outstanding, count: loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).length, definition: "Sum of Loan Payable minus repayments across booked loans." },
-      interestReceivable: { value: unpaidInterest, loans: positions.length, provisional: !pol.allocationConfirmed,
-        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + pol.repaymentAllocation.replace("_", " ").toLowerCase() + "). Tap for every member and loan." },
+      interestReceivable: { value: unpaidInterest, min: irMin, max: irMax, pending: irPending, loans: positions.length, provisional: irPending,
+        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + (L.confirmedAllocation(db) ? L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ", confirmed by SOB" : "SOB has not yet decided whether repayments go to interest or principal first, so while that is pending the figure is shown as a range wherever it matters") + "). Tap for every member and loan." },
       profit: { value: profit, definition: "Profit entries recorded in the selected period." },
       expenses: { value: expenses, definition: "Expense entries recorded in the selected period." },
       members: { value: db.members.filter((m) => m.status !== "Inactive").length, definition: "Active registered members." },
@@ -53,12 +54,13 @@
     const rows = L.activeLoans(d).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
       return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
-        monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid + p.penaltiesPaid,
-        unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
+        monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
+        unpaidInterest: p.unpaidInterest, unpaidInterestRange: p.unpaidInterestRange, pending: p.pending, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });
     const pol = L.getPolicy(db, "loan");
-    return { asOf, rows, total: rows.reduce((a, r) => a + r.unpaidInterest, 0), accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
-      allocation: pol.repaymentAllocation, allocationConfirmed: !!pol.allocationConfirmed };
+    const tmin = rows.reduce((a, r) => a + r.unpaidInterestRange.min, 0), tmax = rows.reduce((a, r) => a + r.unpaidInterestRange.max, 0);
+    return { asOf, rows, total: tmin === tmax ? tmin : null, totalMin: tmin, totalMax: tmax, pending: tmin !== tmax, accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
+      allocation: L.confirmedAllocation(db), allocationConfirmed: !!L.confirmedAllocation(db) };
   }
   return { dashboard, loanBook, pipeline, interestReceivable };
 });

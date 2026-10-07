@@ -11,7 +11,7 @@
 })(typeof self !== "undefined" ? self : this, function (dates, L, G) {
   const asAt = (db, date) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= date) });
 
-  function preview(db, a) {
+  function compute(db, a) {
     a = a || {};
     const pool = Number(a.pool); if (!(pool > 0)) throw new Error("INVALID: pool (the profit amount to distribute) must be positive");
     const date = a.date; if (!dates.isISO(date)) throw new Error("INVALID: date (YYYY-MM-DD) - savings are measured at this date");
@@ -38,16 +38,43 @@
       totalWeight: total, rows, distributed, undistributed: pool - distributed, eligibleMembers: rows.filter((r) => r.eligible).length, excludedMembers: rows.filter((r) => !r.eligible && r.savings > 0).length,
       formula: "entitlement = floor( pool x weight / sum of weights ), weight = savings x product of approved multiplier factors (0 if excluded)" };
   }
-  function distribute(db, ctx, a) {
+  /* The pool and the measurement date are NOT invented or defaulted: for each distribution cycle the Super Admin enters them (with the source and a reason) and every change is kept in
+     the cycle's history and the audit log. Distribution is only possible from a cycle that has been set, and a posted cycle is locked. */
+  const cycleId = (period) => "cycle:" + period;
+  const getCycle = (db, period) => (db.policy || []).find((p) => p.id === cycleId(period)) || null;
+  function setCycle(db, ctx, a) {
     G.require(ctx, "profit.distribute"); a = a || {};
-    const period = G.need(a.period, "period (e.g. 2026-Q1)"); G.need(a.sourceNote, "sourceNote (where this profit came from)");
-    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period);
-    const pv = preview(db, a);
-    const rec = { id: G.uid("PRD"), period, status: "Posted", date: pv.date, pool: pv.pool, sourceNote: String(a.sourceNote).trim(), basis: pv.basis, formula: pv.formula, factorsUsed: pv.factorsUsed, rows: pv.rows, distributed: pv.distributed, undistributed: pv.undistributed, executedBy: ctx.by, executedDate: ctx.today };
-    (db.profitDistributions = db.profitDistributions || []).push(rec);
-    pv.rows.filter((r) => r.entitlement > 0).forEach((r) => { const t = G.createEntry(db, ctx, { date: pv.date, memberId: r.memberId, amount: r.entitlement, type: "Profit", purpose: "Profit distribution " + period, profitDistributionId: rec.id }); r.entryId = t.id; });
-    G.audit(db, ctx, "ProfitDistribution", rec.id, "Posted", null, { period, pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed, members: pv.rows.filter((r) => r.entitlement > 0).length }, a.sourceNote);
+    const period = String(G.need(a.period, "period (e.g. 2026-Q1)")).trim(), reason = G.need(a.reason, "reason / SOB reference for these inputs");
+    const pool = Number(a.pool); if (!(pool > 0)) throw new Error("INVALID: pool (the profit amount to distribute) must be positive");
+    if (!dates.isISO(a.measurementDate)) throw new Error("INVALID: measurementDate (YYYY-MM-DD) - savings are measured at this date");
+    const sourceNote = String(G.need(a.sourceNote, "sourceNote (where this profit came from)")).trim();
+    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period + " is posted and locked");
+    db.policy = db.policy || []; let rec = getCycle(db, period); const prev = rec ? { pool: rec.pool, measurementDate: rec.measurementDate, sourceNote: rec.sourceNote } : null;
+    if (!rec) { rec = { id: cycleId(period), period, history: [] }; db.policy.push(rec); }
+    const next = { pool, measurementDate: a.measurementDate, sourceNote };
+    rec.history = (rec.history || []).concat([{ date: ctx.today, timestamp: ctx.now, by: ctx.by, role: ctx.role, previous: prev, new: next, reason: String(reason).trim() }]);
+    Object.assign(rec, next, { updatedBy: ctx.by, updatedDate: ctx.today });
+    G.audit(db, ctx, "ProfitCycle", rec.id, prev ? "Inputs changed" : "Inputs set", prev, next, reason);
     return rec;
   }
-  return { preview, distribute };
+  function cycleInputs(db, period) {
+    const c = getCycle(db, period); if (!c) throw new Error("CYCLE_NOT_SET: the profit pool and measurement date for " + period + " have not been entered (Admin -> Profit -> Set cycle inputs)");
+    return { pool: c.pool, date: c.measurementDate, sourceNote: c.sourceNote };
+  }
+  function preview(db, a) {
+    a = a || {}; const c = cycleInputs(db, G.need(a.period, "period"));
+    return Object.assign(compute(db, { pool: c.pool, date: c.date, factorValues: a.factorValues }), { period: a.period, sourceNote: c.sourceNote });
+  }
+  function distribute(db, ctx, a) {
+    G.require(ctx, "profit.distribute"); a = a || {};
+    const period = G.need(a.period, "period (e.g. 2026-Q1)");
+    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period);
+    const pv = preview(db, { period, factorValues: a.factorValues }), cyc = getCycle(db, period);
+    const rec = { id: G.uid("PRD"), period, status: "Posted", cycleHistory: cyc.history, date: pv.date, pool: pv.pool, sourceNote: pv.sourceNote, basis: pv.basis, formula: pv.formula, factorsUsed: pv.factorsUsed, rows: pv.rows, distributed: pv.distributed, undistributed: pv.undistributed, executedBy: ctx.by, executedDate: ctx.today };
+    (db.profitDistributions = db.profitDistributions || []).push(rec);
+    pv.rows.filter((r) => r.entitlement > 0).forEach((r) => { const t = G.createEntry(db, ctx, { date: pv.date, memberId: r.memberId, amount: r.entitlement, type: "Profit", purpose: "Profit distribution " + period, profitDistributionId: rec.id }); r.entryId = t.id; });
+    G.audit(db, ctx, "ProfitDistribution", rec.id, "Posted", null, { period, pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed, members: pv.rows.filter((r) => r.entitlement > 0).length }, pv.sourceNote);
+    return rec;
+  }
+  return { preview, distribute, setCycle, getCycle, compute };
 });

@@ -25,8 +25,8 @@
   /* Linked double entry for one loan: borrower repayments beside the guarantor releases they caused. */
   function loanStatement(db, loanId, asOf) {
     const l = LN.linkedLedger(db, loanId, asOf), loan = db.loans.find((x) => x.id === loanId);
-    const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
-    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "borrowerChange", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
+    const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, cashReceived: r.cashReceived || 0, awaitingRule: r.awaitingRule || 0, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
+    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "cashReceived", "borrowerChange", "awaitingRule", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
   }
   function securities(db) {
     const rows = (db.securities || []).map((x) => ({ id: x.id, loanId: x.loanId, borrower: name(db, x.memberId), kind: x.kind, description: x.description, owner: x.owner, valuation: x.valuation == null ? "" : x.valuation, acceptedCover: x.acceptedCover || 0, documents: (x.documents || []).length, status: x.status, decidedBy: x.decidedBy || "", reason: x.decisionReason || "" }));
@@ -34,9 +34,9 @@
   }
   function interestReceivable(db, asOf) {
     const d = K.interestReceivable(db, asOf);
-    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding }));
+    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest === null ? "pending SOB rule: " + r.unpaidInterestRange.min + " to " + r.unpaidInterestRange.max : r.unpaidInterest, outstanding: r.outstanding }));
     return R("Interest Receivable (unpaid interest on outstanding loans)", ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"], rows,
-      { unpaidInterest: d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocation + (d.allocationConfirmed ? "" : " (assumed until SOB confirms)") });
+      { unpaidInterest: d.total === null ? "pending SOB rule: " + d.totalMin + " to " + d.totalMax : d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocationConfirmed ? d.allocation : "PENDING SOB DECISION (nothing assumed)" });
   }
   function approvals(db) {
     const rows = [].concat((db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).map((t) => ({ kind: "Ledger entry", ref: t.id, member: name(db, t.memberId), detail: t.type + " " + t.amount + " on " + dates.toDisplay(t.date), enteredBy: t.createdBy })),
@@ -82,7 +82,9 @@
     return R("Profit distribution " + d.period, ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], d.rows, { pool: d.pool, distributed: d.distributed, undistributed: d.undistributed, basis: d.basis, formula: d.formula });
   }
   function repaymentAllocation(db) {
-    try { L.allocateRepayment(db); } catch (e) { return { blocked: true, title: "Interest vs principal received", reason: String(e.message) }; }
+    if (!L.confirmedAllocation(db)) return { blocked: true, title: "Interest vs principal received", reason: "PENDING_SOB_DECISION: repayments go to interest first or principal first - awaiting SOB. Nothing is assumed; no balance or guarantee depends on it until it is confirmed." };
+    const rows = L.activeLoans(db).map((l) => { const p = L.loanInterestPosition(l, db, dates.todayISO()); return { loanId: l.id, member: name(db, l.memberId), repaid: p.totalRepaid, toInterest: p.interestPaid, toPenalties: p.penaltiesPaid, toPrincipal: p.principalPaid }; });
+    return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
   function annualSummary(db, year) {
     const d = K.dashboard(db, year + "-12-31", { year: Number(year) });

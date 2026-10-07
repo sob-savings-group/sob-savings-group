@@ -224,7 +224,7 @@ t("staff roles over the API: Super Admin inputs; Chairperson second-approves; Tr
   const chair = w.tok("CHAIR", "chair-pin-1"), treas = w.tok("TREAS", "treas-pin-1");
   for (const tk of [chair, treas]) {
     assert.ok(w.call({ action: "getLedger", token: tk }).ok);
-    for (const [n, a] of [["createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "x" }], ["applyForLoan", { memberId: memberWith.id, amount: 1000 }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "x", date: "2026-04-01", pool: 1 }]])
+    for (const [n, a] of [["createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "x" }], ["applyForLoan", { memberId: memberWith.id, amount: 1000 }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "x" }], ["setProfitCycle", { period: "x", pool: 1, measurementDate: "2026-04-01", sourceNote: "n", reason: "r" }]])
       assert.match(cmd(w, tk, n, a).error || "", /FORBIDDEN/, n);
   }
   assert.match(cmd(w, treas, "approveEntry", { id: "X" }).error || "", /FORBIDDEN/);

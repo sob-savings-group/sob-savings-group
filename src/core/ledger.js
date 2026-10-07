@@ -22,9 +22,9 @@
      every default is either confirmed by SOB or an explicit, visible, changeable setting. --- */
   const POLICY_DEFAULTS = {
     approval: { requiredTypes: [], loanSecondApproval: false },                       // WHICH items need the Chairperson is SOB's call; none by default
-    loan: { guidelineMultiple: 3,                                                      // confirmed: standard guideline up to 3x savings
-            guaranteeCover: "SHORTFALL",                                               // guarantors back the part of a loan beyond the 3x guideline ("FULL_LOAN" = back the whole loan)
-            repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: false },       // how repayments split interest/principal for the Interest Receivable display
+    // confirmed: standard guideline up to 3x savings; guarantors back ONLY the shortfall beyond the borrower's own qualification (not a policy option).
+    // repaymentAllocation is an OPEN SOB decision: null = pending. While pending nothing is assumed (see loanRepaymentSplit).
+    loan: { guidelineMultiple: 3, repaymentAllocation: null, allocationConfirmed: false },
     profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
   };
   const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
@@ -96,27 +96,52 @@
   const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
-  /* --- loan interest position: how much of the money repaid went to interest and how much interest is still unpaid.
-     Allocation order is db.policy "loan".repaymentAllocation (INTEREST_FIRST by default); repayments are walked in date order so interest
-     accrued AFTER a payment is still unpaid. Invariant: principalOutstanding + unpaidInterest + unpaidPenalties == loanOutstanding. --- */
-  function loanInterestPosition(loan, db, asOf) {
-    asOf = asOf || dates.todayISO();
-    const policy = getPolicy(db, "loan"), principal = Number(loan.loanAmount) || 0;
-    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= effectiveAsOf(loan, asOf)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  /* --- how repayments split between interest, penalties and principal. THIS IS AN OPEN SOB DECISION (db.policy "loan": repaymentAllocation + allocationConfirmed).
+     It never changes a loan balance (loanOutstanding is the same either way) - it only decides how much of each payment reduced PRINCIPAL, which is what releases guarantees,
+     and how much interest is still unpaid. Until SOB confirms, NOTHING IS ASSUMED: both orders are computed; what is the same under both is treated as certain, the rest is
+     reported as a range / "pending". --- */
+  const ALLOCATION_RULES = ["INTEREST_FIRST", "PRINCIPAL_FIRST"];
+  const confirmedAllocation = (db) => { const p = getPolicy(db, "loan"); return p.allocationConfirmed && ALLOCATION_RULES.includes(p.repaymentAllocation) ? p.repaymentAllocation : null; };
+  function walkAllocation(loan, db, rule, asOf) {
+    const principal = Number(loan.loanAmount) || 0, e = effectiveAsOf(loan, asOf);
+    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
     const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
-    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0;
+    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
-      let amt = Number(t.amount);
+      let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
       const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
-      const order = policy.repaymentAllocation === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
+      const order = rule === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
       order.forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
+      steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
-    const e = effectiveAsOf(loan, asOf), accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
-    return { principal, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid),
-      principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid, allocation: policy.repaymentAllocation, allocationConfirmed: !!policy.allocationConfirmed };
+    const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
+  }
+  /* Principal reduction per repayment for ONE loan. status CONFIRMED: by SOB's rule. status PENDING: `principal` per repayment is the part that is principal under EVERY possible rule
+     (the safe minimum), `possible` is the most it could be; the difference waits for SOB. */
+  function loanRepaymentSplit(loan, db, asOf) {
+    const rule = confirmedAllocation(db);
+    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return { status: "CONFIRMED", rule, steps: w.steps.map((x) => Object.assign({ possible: x.principal }, x)), totalPrincipal: w.principalPaid, totalPossible: w.principalPaid }; }
+    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
+    let ca = 0, cb = 0, cm = 0;
+    const steps = A.steps.map((x, i) => { ca += x.principal; cb += B.steps[i].principal; const m = Math.min(ca, cb), d = m - cm; cm = m; return { entryId: x.entryId, date: x.date, amount: x.amount, principal: d, possible: Math.max(x.principal, B.steps[i].principal) }; });
+    return { status: "PENDING", rule: null, steps, totalPrincipal: cm, totalPossible: Math.max(A.principalPaid, B.principalPaid), A, B };
+  }
+  /* Interest position of a loan. Allocation-independent facts are always exact: accrued interest, total repaid, outstanding loan. Split facts (unpaid interest, principal outstanding)
+     are exact when SOB's rule is confirmed, or whenever both orders give the same answer (e.g. no repayments yet); otherwise they are null with a [min, max] range. */
+  function loanInterestPosition(loan, db, asOf) {
+    asOf = asOf || dates.todayISO();
+    const rule = confirmedAllocation(db), policy = getPolicy(db, "loan");
+    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return Object.assign({}, w, { allocation: rule, allocationConfirmed: true, pending: false, unpaidInterestRange: { min: w.unpaidInterest, max: w.unpaidInterest } }); }
+    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
+    const same = A.interestPaid === B.interestPaid && A.principalPaid === B.principalPaid && A.penaltiesPaid === B.penaltiesPaid;
+    const range = { min: Math.min(A.unpaidInterest, B.unpaidInterest), max: Math.max(A.unpaidInterest, B.unpaidInterest) };
+    const base = { principal: A.principal, accruedInterest: A.accruedInterest, penalties: A.penalties, totalRepaid: A.totalRepaid, unpaidInterestRange: range, principalOutstandingRange: { min: Math.min(A.principalOutstanding, B.principalOutstanding), max: Math.max(A.principalOutstanding, B.principalOutstanding) },
+      allocation: policy.repaymentAllocation || null, allocationConfirmed: false, pending: !same };
+    return same ? Object.assign({}, A, base) : Object.assign(base, { interestPaid: null, penaltiesPaid: null, principalPaid: null, unpaidInterest: null, unpaidPenalties: null, principalOutstanding: null });
   }
   const memberHasOutstandingLoan = (db, memberId, asOf) =>
     activeLoans(db).some((l) => l.memberId === memberId && loanOutstanding(l, db, asOf) > 0);
@@ -170,7 +195,7 @@
   return {
     RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
-    POLICY_DEFAULTS, getPolicy, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
+    POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, ALLOCATION_RULES, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
   };

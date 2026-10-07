@@ -30,12 +30,13 @@ t("a loan inside the guideline needs no guarantor at all", () => {
   const db = fresh(); seed(db, "SOB-001", 10000); const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 30000);
   assert.equal(LN.approveLoan(db, at("2026-02-03"), l.id).status, "Approved");
 });
-t("policy can switch the cover rule to FULL_LOAN (every loan fully backed); invalid values refused", () => {
+t("backing is ONLY the shortfall beyond the borrower's own qualification - it is not a setting, and policy changes are Admin-only and need a reason", () => {
   const db = fresh(); seed(db, "SOB-001", 10000); const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 30000);
-  G.setPolicy(db, at("2026-02-01"), "loan", { guaranteeCover: "FULL_LOAN" }, "SOB decision (test)");
-  assert.equal(LN.assessLoan(db, "SOB-001", 30000, l.id).required, 30000);
-  throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", { guaranteeCover: "X" }, "r"), /INVALID/); throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", {}, ""), /REQUIRED/);
-  throwsMsg(() => G.setPolicy(db, at("2026-02-01", "chair"), "loan", { guaranteeCover: "SHORTFALL" }, "r"), /FORBIDDEN/);
+  assert.equal(LN.assessLoan(db, "SOB-001", 30000, l.id).required, 0); assert.equal(LN.assessLoan(db, "SOB-001", 45000).required, 15000);
+  throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", { guaranteeCover: "FULL_LOAN" }, "r"), /not a setting/);
+  throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", { repaymentAllocation: "X" }, "r"), /INVALID/); throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", {}, ""), /REQUIRED/);
+  throwsMsg(() => G.setPolicy(db, at("2026-02-01", "chair"), "loan", { repaymentAllocation: "INTEREST_FIRST" }, "r"), /FORBIDDEN/);
+  throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "loan", { allocationConfirmed: true }, "r"), /choose the rule/);
 });
 
 console.log("rules 3, 8, 9 - several guarantors, committed vs available, release by repayment");
@@ -209,7 +210,11 @@ t("unpaid interest = accrued interest minus payments applied to interest, across
   let ir = K.interestReceivable(db, "2026-06-01");                         // a: 5 months - 2 grace = 3 x 5,000; b: 4 x 2,000
   assert.equal(ir.rows.find((r) => r.loanId === a.id).accumulatedInterest, 15000); assert.equal(ir.rows.find((r) => r.loanId === b.id).accumulatedInterest, 8000); assert.equal(ir.total, 23000);
   assert.equal(K.dashboard(db, "2026-06-01").interestReceivable.value, 23000);
-  LN.repayLoan(db, at("2026-06-01"), a.id, 10000, "2026-06-01");           // interest first
+  LN.repayLoan(db, at("2026-06-01"), a.id, 10000, "2026-06-01");
+  ir = K.interestReceivable(db, "2026-06-01");                              // allocation rule NOT decided: nothing assumed, a range is reported
+  const pa = ir.rows.find((r) => r.loanId === a.id); assert.equal(pa.unpaidInterest, null); assert.deepEqual(pa.unpaidInterestRange, { min: 5000, max: 15000 }); assert.equal(pa.outstanding, 105000); assert.equal(pa.accumulatedInterest, 15000); assert.equal(pa.paymentsMade, 10000);
+  assert.equal(ir.total, null); assert.deepEqual([ir.totalMin, ir.totalMax], [13000, 23000]); assert.equal(K.dashboard(db, "2026-06-01").interestReceivable.pending, true); assert.equal(K.dashboard(db, "2026-06-01").interestReceivable.value, null);
+  G.setPolicy(db, at("2026-06-02"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "SOB decision (test)");
   ir = K.interestReceivable(db, "2026-06-01"); const ra = ir.rows.find((r) => r.loanId === a.id);
   assert.deepEqual([ra.paymentsMade, ra.paidToInterest, ra.unpaidInterest, ra.principalOutstanding, ra.outstanding], [10000, 10000, 5000, 100000, 105000]);
   assert.equal(ra.principalOutstanding + ra.unpaidInterest, ra.outstanding, "interest + principal reconcile to the loan position");
@@ -221,30 +226,71 @@ t("unpaid interest = accrued interest minus payments applied to interest, across
   LN.repayLoan(db, at("2026-09-01"), a.id, L.loanOutstanding(a, db, "2026-09-01"), "2026-09-01");   // fully repaid -> stops
   assert.equal(K.interestReceivable(db, "2027-01-01").rows.some((r) => r.loanId === a.id), false); assert.equal(L.loanOutstanding(a, db, "2027-06-01"), 0);
 });
-t("allocation setting is visible and switchable; principal-first changes the unpaid interest, never the loan balance", () => {
+t("allocation is pending until SOB confirms: no assumption touches a balance; principal-first changes the split, never the loan balance", () => {
   const mk = () => { const db = fresh(); seed(db, "SOB-001", 10000); const l = LN.recordExistingLoan(db, at("2026-01-01"), { memberId: "SOB-001", amount: 100000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 0 }); LN.repayLoan(db, at("2026-04-01"), l.id, 20000, "2026-04-01"); return { db, l }; };
-  const x = mk(), y = mk(); G.setPolicy(y.db, at("2026-04-02"), "loan", { repaymentAllocation: "PRINCIPAL_FIRST", allocationConfirmed: true }, "SOB decision (test)");
-  const px = L.loanInterestPosition(x.l, x.db, "2026-04-01"), py = L.loanInterestPosition(y.l, y.db, "2026-04-01");
-  assert.equal(px.unpaidInterest, 0); assert.equal(py.unpaidInterest, 15000); assert.equal(L.loanOutstanding(x.l, x.db, "2026-04-01"), L.loanOutstanding(y.l, y.db, "2026-04-01"));
-  assert.equal(K.dashboard(x.db, "2026-04-01").interestReceivable.provisional, true); assert.equal(K.dashboard(y.db, "2026-04-01").interestReceivable.provisional, false);
+  const w = mk(), x = mk(), y = mk(); G.setPolicy(x.db, at("2026-04-02"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "SOB decision (test)"); G.setPolicy(y.db, at("2026-04-02"), "loan", { repaymentAllocation: "PRINCIPAL_FIRST", allocationConfirmed: true }, "SOB decision (test)");
+  const pw = L.loanInterestPosition(w.l, w.db, "2026-04-01"), px = L.loanInterestPosition(x.l, x.db, "2026-04-01"), py = L.loanInterestPosition(y.l, y.db, "2026-04-01");
+  assert.equal(pw.pending, true); assert.equal(pw.unpaidInterest, null); assert.deepEqual(pw.unpaidInterestRange, { min: 0, max: 15000 }); assert.equal(px.unpaidInterest, 0); assert.equal(py.unpaidInterest, 15000);
+  assert.equal(L.loanOutstanding(w.l, w.db, "2026-04-01"), L.loanOutstanding(x.l, x.db, "2026-04-01")); assert.equal(L.loanOutstanding(x.l, x.db, "2026-04-01"), L.loanOutstanding(y.l, y.db, "2026-04-01"));
+  assert.equal(K.dashboard(w.db, "2026-04-01").interestReceivable.pending, true); assert.equal(K.dashboard(y.db, "2026-04-01").interestReceivable.pending, false);
+  assert.equal(R.repaymentAllocation(w.db).blocked, true); assert.equal(R.repaymentAllocation(y.db).rows[0].toPrincipal, 20000);
+});
+
+console.log("rule 4 (revised) - guarantee release follows PRINCIPAL reduction, not cash; works with the allocation rule");
+t("pending rule: only the part that is principal under EVERY rule is released; confirming or changing the rule re-evaluates, re-committing if needed; all traceable", () => {
+  const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 500000);
+  const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 100000);                  // shortfall 70,000
+  guarantee(db, l.id, "SOB-002", 70000); active(db, l.id, "2026-02-03");                // interest 10,000 a month after 3 months' grace
+  LN.repayLoan(db, at("2026-04-01"), l.id, 30000, "2026-04-01");                       // in grace: no interest yet -> principal under every rule
+  assert.equal(LN.committed(db, "SOB-002"), 40000, "cash 30,000 that is certainly principal releases 30,000");
+  LN.repayLoan(db, at("2026-08-10"), l.id, 20000, "2026-08-10");                       // by now 2 months' interest (20,000) has accrued: all interest or all principal depending on SOB
+  assert.equal(LN.committed(db, "SOB-002"), 40000, "nothing released on an assumption"); assert.equal(LN.pendingRelease(db, l.id, "2026-08-10"), 20000);
+  const g = db.guarantees[0]; assert.equal(LN.linkedLedger(db, l.id, "2026-08-10").summary.guaranteeAwaitingRule, 20000);
+  CMD.run(db, at("2026-08-11"), "setPolicy", { key: "loan", values: { repaymentAllocation: "PRINCIPAL_FIRST", allocationConfirmed: true }, reason: "SOB decision (test)" });
+  assert.equal(LN.committed(db, "SOB-002"), 20000, "principal first: the 20,000 reduced principal -> released"); assert.equal(g.releases.filter((r) => !r.reversed).length, 2); assert.ok(g.releases.every((r) => r.entryId));
+  CMD.run(db, at("2026-08-12"), "setPolicy", { key: "loan", values: { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, reason: "SOB reversed its decision (test)" });
+  assert.equal(LN.committed(db, "SOB-002"), 40000, "interest first: that payment was interest, so its release is re-committed"); assert.equal(g.releases.filter((r) => r.reversed).length, 1);
+  assert.equal(LN.linkedLedger(db, l.id, "2026-08-12").summary.reconciled, true); noErrors(db, "2026-08-12");
+  CMD.run(db, at("2026-08-13"), "setPolicy", { key: "loan", values: { repaymentAllocation: null }, reason: "back to pending (test)" });
+  assert.equal(LN.committed(db, "SOB-002"), 40000, "back to pending: the certain release stays, the uncertain part waits");
+});
+t("with interest first confirmed, release equals principal reduction only; a payment that clears interest first releases nothing until principal is touched", () => {
+  const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 500000);
+  const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 100000); guarantee(db, l.id, "SOB-002", 70000); active(db, l.id, "2026-02-03");
+  G.setPolicy(db, at("2026-02-04"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "SOB decision (test)");
+  LN.repayLoan(db, at("2026-08-10"), l.id, 50000, "2026-08-10");                       // 30,000 interest accrued + 20,000 principal
+  assert.equal(LN.committed(db, "SOB-002"), 50000); const r = db.guarantees[0].releases[0]; assert.equal(r.amount, 20000); assert.ok(r.entryId);
+  const stmt = R.loanStatement(db, l.id, "2026-08-10"); const row = stmt.rows.find((x) => x.event === "Repayment"); assert.equal(row.cashReceived, 50000); assert.equal(row.borrowerChange, -20000); assert.equal(row.guarantorCommittedChange, -20000);
+  const entry = db.transactions.find((x) => x.type === "Loan Repayment"); CMD.run(db, at("2026-08-11"), "voidEntry", { id: entry.id, reason: "wrong amount (test)" });
+  assert.equal(LN.committed(db, "SOB-002"), 70000, "voiding the repayment re-commits exactly what it released");
+  CMD.run(db, at("2026-08-11"), "restoreEntry", { id: entry.id, reason: "restored (test)" }); assert.equal(LN.committed(db, "SOB-002"), 50000);
+  LN.repayLoan(db, at("2026-08-12"), l.id, L.loanOutstanding(l, db, "2026-08-12"), "2026-08-12"); assert.equal(l.status, "Cleared"); assert.equal(LN.committed(db, "SOB-002"), 0); noErrors(db, "2026-08-12");
 });
 
 console.log("rule 1 - profit sharing with a transparent drill-down");
 t("profit is proportional to savings; loan-holders are excluded; every factor and per-member figure is visible; remainder shown, never assigned", () => {
   const db = fresh(); seed(db, "SOB-001", 100000, "2026-03-01"); seed(db, "SOB-002", 200000, "2026-03-01"); seed(db, "SOB-003", 300000, "2026-03-01"); seed(db, "SOB-004", 50000, "2026-03-01");
   LN.recordExistingLoan(db, at("2026-03-02"), { memberId: "SOB-004", amount: 10000, date: "2026-03-02", assignedMonthlyInterest: 1, graceMonths: 0 });
-  const pv = CMD.run(db, at("2026-06-30"), "previewProfit", { pool: 100001, date: "2026-06-30" });
+  throwsMsg(() => CMD.run(db, at("2026-06-30"), "previewProfit", { period: "2026-Q2" }), /CYCLE_NOT_SET/);
+  throwsMsg(() => CMD.run(db, at("2026-06-30", "chair"), "setProfitCycle", { period: "2026-Q2", pool: 100001, measurementDate: "2026-06-30", sourceNote: "n", reason: "r" }), /FORBIDDEN/);
+  throwsMsg(() => CMD.run(db, at("2026-06-30", "treas"), "setProfitCycle", { period: "2026-Q2", pool: 100001, measurementDate: "2026-06-30", sourceNote: "n", reason: "r" }), /FORBIDDEN/);
+  throwsMsg(() => CMD.run(db, at("2026-06-30"), "setProfitCycle", { period: "2026-Q2", pool: 100001, measurementDate: "2026-06-30", sourceNote: "n" }), /REQUIRED/);
+  CMD.run(db, at("2026-06-29"), "setProfitCycle", { period: "2026-Q2", pool: 90000, measurementDate: "2026-06-29", sourceNote: "Interest received Apr-Jun (draft)", reason: "first figure from the Treasurer's report" });
+  CMD.run(db, at("2026-06-30"), "setProfitCycle", { period: "2026-Q2", pool: 100001, measurementDate: "2026-06-30", sourceNote: "Interest received Apr-Jun", reason: "corrected per SOB minute 3" });
+  const cyc = db.policy.find((x) => x.id === "cycle:2026-Q2"); assert.equal(cyc.history.length, 2); assert.equal(cyc.history[1].previous.pool, 90000); assert.ok(db.auditLog.some((a) => a.entityType === "ProfitCycle" && a.action === "Inputs changed"));
+  const pv = CMD.run(db, at("2026-06-30"), "previewProfit", { period: "2026-Q2" });
   const by = (id) => pv.rows.find((r) => r.memberId === id);
   assert.equal(pv.totalWeight, 600000); assert.equal(by("SOB-001").entitlement, 16666); assert.equal(by("SOB-002").entitlement, 33333); assert.equal(by("SOB-003").entitlement, 50000);
   assert.equal(by("SOB-004").eligible, false); assert.match(by("SOB-004").excludedBecause, /outstanding loan/); assert.equal(by("SOB-004").entitlement, 0);
   assert.equal(pv.distributed + pv.undistributed, 100001); assert.equal(pv.undistributed, 100001 - 16666 - 33333 - 50000);
   assert(pv.factorsUsed.some((x) => x.id === "LOAN_HOLDER_EXCLUSION" && x.approvedBy) && pv.formula && pv.basis, "the factors and formula are shown");
   assert(by("SOB-001").factors[0].value && by("SOB-001").sharePct > 16.6 && by("SOB-001").sharePct < 16.7);
-  throwsMsg(() => CMD.run(db, at("2026-06-30"), "previewProfit", { pool: 1000, date: "2026-06-30", factorValues: { MADE_UP: { "SOB-001": 2 } } }), /UNAPPROVED_FACTOR/);
+  throwsMsg(() => CMD.run(db, at("2026-06-30"), "previewProfit", { period: "2026-Q2", factorValues: { MADE_UP: { "SOB-001": 2 } } }), /UNAPPROVED_FACTOR/);
   assert.equal(db.profitDistributions, undefined, "previewing writes nothing");
-  const rec = CMD.run(db, at("2026-06-30"), "distributeProfit", { period: "2026-Q2", date: "2026-06-30", pool: 100001, sourceNote: "Interest received Apr-Jun" });
+  const rec = CMD.run(db, at("2026-06-30"), "distributeProfit", { period: "2026-Q2" }); assert.equal(rec.cycleHistory.length, 2, "the audited input history travels with the posted distribution");
   assert.equal(L.memberSavings(db, "SOB-003"), 350000); assert.equal(rec.rows.find((r) => r.memberId === "SOB-003").entryId.length > 0, true);
-  throwsMsg(() => CMD.run(db, at("2026-07-01"), "distributeProfit", { period: "2026-Q2", date: "2026-06-30", pool: 5, sourceNote: "again" }), /ALREADY_DISTRIBUTED/);
+  throwsMsg(() => CMD.run(db, at("2026-07-01"), "distributeProfit", { period: "2026-Q2" }), /ALREADY_DISTRIBUTED/);
+  throwsMsg(() => CMD.run(db, at("2026-07-01"), "setProfitCycle", { period: "2026-Q2", pool: 5, measurementDate: "2026-06-30", sourceNote: "n", reason: "r" }), /ALREADY_DISTRIBUTED/);
   const rep = R.quarterlyDistribution(db, { period: "2026-Q2" }); assert.equal(rep.rows.length, 4); assert.equal(rep.totals.undistributed, pv.undistributed);
   noErrors(db, "2026-07-01");
 });
@@ -253,7 +299,8 @@ t("an additional factor can only be added with its SOB approver and reference, a
   throwsMsg(() => G.setPolicy(db, at("2026-04-01"), "profit", { addFactor: { id: "TENURE", kind: "multiplier", name: "Tenure" } }, "r"), /REQUIRED: approvedBy/);
   throwsMsg(() => G.setPolicy(db, at("2026-04-01"), "profit", { addFactor: { id: "tenure", kind: "multiplier", name: "T", approvedBy: "AGM", approvalRef: "min 4" } }, "r"), /UPPER_SNAKE/);
   G.setPolicy(db, at("2026-04-01"), "profit", { addFactor: { id: "TENURE", kind: "multiplier", name: "Tenure weighting", approvedBy: "SOB AGM", approvalRef: "Minute 7/2026" } }, "SOB approved this factor (test)");
-  const pv = CMD.run(db, at("2026-06-30"), "previewProfit", { pool: 3000, date: "2026-06-30", factorValues: { TENURE: { "SOB-001": 2 } } });
+  CMD.run(db, at("2026-06-30"), "setProfitCycle", { period: "2026-Q2", pool: 3000, measurementDate: "2026-06-30", sourceNote: "n", reason: "r" });
+  const pv = CMD.run(db, at("2026-06-30"), "previewProfit", { period: "2026-Q2", factorValues: { TENURE: { "SOB-001": 2 } } });
   assert.equal(pv.rows.find((r) => r.memberId === "SOB-001").entitlement, 2000); assert.equal(pv.rows.find((r) => r.memberId === "SOB-002").entitlement, 1000);
   assert.equal(pv.rows.find((r) => r.memberId === "SOB-002").factors.find((x) => x.id === "TENURE").defaulted, true, "a defaulted value is flagged, not hidden");
 });
@@ -276,11 +323,11 @@ t("statements show actual savings, committed and available; loan statement links
 });
 t("guarantees, releases, securities and policy survive the Sheet round trip exactly", () => {
   const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 100000);
-  const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 100000); guarantee(db, l.id, "SOB-002", 30000); SEC.proposeSecurity(db, at("2026-02-02"), secArgs(l.id)); G.setPolicy(db, at("2026-02-02"), "loan", { guaranteeCover: "FULL_LOAN" }, "r");
+  const l = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 100000); guarantee(db, l.id, "SOB-002", 30000); SEC.proposeSecurity(db, at("2026-02-02"), secArgs(l.id)); G.setPolicy(db, at("2026-02-02"), "loan", { repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: true }, "r");
   const sheets = {}; const mk = () => { const d = []; return { getLastRow: () => d.length, getLastColumn: () => d.reduce((a, r) => Math.max(a, r.length), 0), getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (d[r - 1 + i] || [])[c - 1 + j] ?? "")), setValues: (v) => v.forEach((row, i) => { d[r - 1 + i] = d[r - 1 + i] || []; row.forEach((x, j) => { d[r - 1 + i][c - 1 + j] = x; }); }), clearContent: () => { for (let i = 0; i < nr; i++) d[r - 1 + i] = []; } }; } }; };
   const ss = { getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk()) };
   S.writeAll(ss, db); const back = S.readAll(ss);
-  assert.deepEqual(back.guarantees[0], JSON.parse(JSON.stringify(db.guarantees[0]))); assert.equal(back.securities[0].documents[0].name, "Land title"); assert.equal(L.getPolicy(back, "loan").guaranteeCover, "FULL_LOAN");
+  assert.deepEqual(back.guarantees[0], JSON.parse(JSON.stringify(db.guarantees[0]))); assert.equal(back.securities[0].documents[0].name, "Land title"); assert.equal(L.getPolicy(back, "loan").repaymentAllocation, "INTEREST_FIRST"); assert.equal(L.confirmedAllocation(back), "INTEREST_FIRST");
   assert.equal(L.memberCommitted(back, "SOB-002"), 30000);
 });
 console.log("\n" + (f ? f + " FAILED, " : "") + pass + " passed");

@@ -4,8 +4,10 @@
    - 3x savings is the STANDARD GUIDELINE, not a hard stop: a borrower who falls short may continue with guarantor(s) and/or exceptionally approved security.
    - MORE THAN ONE guarantor may back a loan; their commitments add up. A guarantee takes effect only when the guarantor ACCEPTS it, and from that instant the
      guaranteed amount is deducted from the guarantor's AVAILABLE savings (it stays in their account but cannot be withdrawn).
-   - Each qualifying repayment reduces the borrower's outstanding loan AND releases the same amount back to the guarantors (pro rata), linked by the repayment id;
-     clearing the loan releases whatever remains. Voiding a repayment re-commits exactly what it released.
+   - A guarantee secures the borrower's outstanding PRINCIPAL exposure beyond their own qualification (the shortfall). It is therefore released by the REDUCTION IN PRINCIPAL a repayment
+     causes - not by the cash received (part of a payment may be interest). How a payment splits is SOB's open repayment-allocation decision (ledger.loanRepaymentSplit): once confirmed
+     the release follows that rule; while pending only the part that is principal under EVERY possible rule is released, and the rest waits (nothing is assumed). Releases are pro rata to
+     each guarantor's commitment and linked by repayment id; clearing the loan releases whatever remains; voiding a repayment re-commits exactly what it released.
    - Property / other security is an EXCEPTIONAL, separately recorded route (core/security.js), never the default. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
@@ -22,7 +24,9 @@
   /* --- guarantor exposure (single source: ledger.js) --- */
   const committed = (db, guarantorId) => L.memberCommitted(db, guarantorId);
   const loanCover = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + L.guaranteeRemaining(g), 0);
-  const loanGuaranteed = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + Number(g.amount), 0);
+  // guarantees that bound the loan at disbursement (still Active, or since released by repayments); not ones withdrawn before disbursement
+  const bound = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && g.dateCommitted && !g.preRelease && (g.status === "Active" || g.status === "Released"));
+  const loanGuaranteed = (db, loanId) => bound(db, loanId).reduce((a, g) => a + Number(g.amount), 0);
   const securityCover = (db, loanId) => secs(db, loanId).filter((x) => x.status === "Approved").reduce((a, x) => a + Number(x.acceptedCover || 0), 0);
   function qualifyingSavings(db, memberId) { return L.loanEligibility(db, memberId).qualifyingSavings; }
   const guarantorAvailable = (db, guarantorId) => L.memberAvailable(db, guarantorId);
@@ -36,12 +40,12 @@
   function assessLoan(db, memberId, amount, loanId) {
     const pol = L.getPolicy(db, "loan"), el = L.loanEligibility(db, memberId), amt = Number(amount);
     const guideline = el.maxLoan, shortfall = Math.max(0, amt - guideline);
-    const required = pol.guaranteeCover === "FULL_LOAN" ? amt : shortfall;
+    const required = shortfall;                                              // confirmed: guarantors back only the shortfall beyond the borrower's own qualification
     const gs = loanId ? (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g)) : [];
     const guaranteeCover = loanId ? loanCover(db, loanId) : 0, secCover = loanId ? securityCover(db, loanId) : 0, backing = guaranteeCover + secCover;
     const reasons = [];
     if (required > 0 && backing < required) reasons.push("Backing of " + required + " is needed (loan " + amt + " vs guideline " + guideline + " = " + el.multiple + "x savings of " + el.qualifyingSavings + ") but only " + backing + " is accepted (guarantees " + guaranteeCover + ", approved security " + secCover + ").");
-    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, coverRule: pol.guaranteeCover, required,
+    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required,
       guaranteeCover, guaranteesRequested: gs.filter((g) => g.status === "Requested").length, securityCover: secCover, securityBacked: secCover > 0, backing, shortBy: Math.max(0, required - backing), canApprove: reasons.length === 0, reasons };
   }
 
@@ -87,6 +91,7 @@
   function releaseGuarantor(db, ctx, loanId, reason, guaranteeId) {
     G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); stateMust(loan, ...PRE_DISBURSE);
+    (db.guarantees || []).filter((g) => g.loanId === loanId && (!guaranteeId || g.id === guaranteeId)).forEach((g) => { g.preRelease = true; });
     releaseGuarantees(db, ctx, loanId, reason, guaranteeId);
   }
   function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry) {
@@ -104,49 +109,79 @@
       G.audit(db, ctx, "Security", x.id, x.status, { status: was }, { status: x.status }, why);
     });
   }
-  /* Double entry: a counted repayment releases the SAME amount of commitment back to the guarantors (pro rata to what each still has committed). */
-  function releaseOnRepayment(db, ctx, loan, entry) {
-    const gs = (db.guarantees || []).filter((g) => g.loanId === loan.id && LIVE_GUARANTEE(g) && L.guaranteeRemaining(g) > 0);
-    if (!gs.some((g) => (g.releases || []).some((r) => r.entryId === entry.id && !r.reversed))) {
-      const total = gs.reduce((a, g) => a + L.guaranteeRemaining(g), 0), rel = Math.min(Number(entry.amount), total);
-      if (rel > 0) {
-        let left = rel; const sorted = gs.slice().sort((a, b) => L.guaranteeRemaining(b) - L.guaranteeRemaining(a));
-        sorted.forEach((g, i) => {
-          const part = i === sorted.length - 1 ? Math.min(left, L.guaranteeRemaining(g)) : Math.min(Math.floor(rel * L.guaranteeRemaining(g) / total), L.guaranteeRemaining(g));
-          left -= part; if (part <= 0) return;
-          (g.releases = g.releases || []).push({ date: entry.date, entryId: entry.id, amount: part });
-          g.releasedAmount = Number(g.releasedAmount || 0) + part;
-          if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; }
-          G.audit(db, ctx, "Guarantee", g.id, "Released by repayment", { committed: L.guaranteeRemaining(g) + part }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id, loanId: loan.id }, "Borrower repayment " + entry.amount + " on " + entry.date);
-        });
-        // rounding remainder (if any) goes to the first guarantor still committed so Σ released == repayment (up to the amount committed)
-        if (left > 0) { const g = sorted.find((x) => L.guaranteeRemaining(x) > 0); if (g) { const part = Math.min(left, L.guaranteeRemaining(g)); g.releases.push({ date: entry.date, entryId: entry.id, amount: part }); g.releasedAmount += part; if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; } } }
-      }
-    }
+  /* Double entry: guarantee release FOLLOWS THE REDUCTION IN PRINCIPAL. syncReleases() is idempotent: for every counted repayment (in date order) it works out the principal
+     reduction (confirmed rule, or the safe minimum while the rule is pending), caps the running total at what the guarantors committed, and makes the recorded releases match -
+     releasing more, or re-committing, as needed. Each release row carries the repayment id, so it is traceable both ways. */
+  const isClearRow = (r) => r.reason === "Loan cleared";
+  function reverseRelease(db, ctx, g, r, why, entryId) {
+    r.reversed = true; g.releasedAmount = Math.max(0, Number(g.releasedAmount || 0) - r.amount);
+    if (g.status === "Released" && L.guaranteeRemaining(g) > 0) { g.status = "Active"; g.dateReleased = ""; g.releaseReason = ""; }
+    G.audit(db, ctx, "Guarantee", g.id, "Re-committed", { committed: L.guaranteeRemaining(g) - r.amount }, { committed: L.guaranteeRemaining(g), repaymentEntry: entryId || r.entryId }, why);
+  }
+  function applyRelease(db, ctx, gs, rel, entry, note) {
+    const total = gs.reduce((a, g) => a + L.guaranteeRemaining(g), 0); rel = Math.min(rel, total); if (!(rel > 0)) return 0;
+    let left = rel; const sorted = gs.slice().sort((a, b) => L.guaranteeRemaining(b) - L.guaranteeRemaining(a) || (a.id < b.id ? -1 : 1));
+    const take = (g, part) => {
+      part = Math.min(part, L.guaranteeRemaining(g)); if (part <= 0) return; left -= part;
+      (g.releases = g.releases || []).push({ date: entry.date, entryId: entry.id, amount: part });
+      g.releasedAmount = Number(g.releasedAmount || 0) + part;
+      if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Principal repaid"; }
+      G.audit(db, ctx, "Guarantee", g.id, "Released by principal repayment", { committed: L.guaranteeRemaining(g) + part }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id, loanId: entry.loanId }, note);
+    };
+    sorted.forEach((g, i) => take(g, i === sorted.length - 1 ? left : Math.floor(rel * L.guaranteeRemaining(g) / total)));
+    sorted.forEach((g) => { if (left > 0) take(g, left); });                 // rounding remainder
+    return rel - left;
+  }
+  function syncReleases(db, ctx, loan) {
+    if (!loan || loan.voided || loan.status !== "Active") return { loanId: loan && loan.id, status: "n/a" };
+    const all = bound(db, loan.id);
+    if (!all.length) return { loanId: loan.id, status: "none" };
+    const split = L.loanRepaymentSplit(loan, db, ctx.today), counted = new Set(split.steps.map((x) => x.entryId));
+    // releases tied to a repayment that no longer counts (voided / rejected) are re-committed
+    all.forEach((g) => (g.releases || []).filter((r) => !r.reversed && r.entryId && !counted.has(r.entryId) && !isClearRow(r)).forEach((r) => reverseRelease(db, ctx, g, r, "Repayment no longer counts", r.entryId)));
+    const cap = all.reduce((a, g) => a + Number(g.amount), 0); let run = 0, pendingAmt = 0;
+    split.steps.forEach((st) => {
+      const want = Math.max(0, Math.min(cap, run + st.principal) - run); run += want;
+      pendingAmt += Math.max(0, Math.min(st.possible, cap) - st.principal);
+      const entry = db.transactions.find((t) => t.id === st.entryId);
+      const mine = [].concat(...all.map((g) => (g.releases || []).filter((r) => r.entryId === st.entryId && !r.reversed && !isClearRow(r)).map((r) => ({ g, r })))), have = mine.reduce((a, x) => a + x.r.amount, 0);
+      if (have === want) return;
+      mine.forEach((x) => reverseRelease(db, ctx, x.g, x.r, "Release recalculated from the principal reduction", st.entryId));
+      applyRelease(db, ctx, all.filter((g) => g.status === "Active" && L.guaranteeRemaining(g) > 0), want, entry, "Principal reduced by " + want + " of repayment " + st.amount + " (" + (split.status === "CONFIRMED" ? split.rule.replace("_", " ").toLowerCase() : "certain under any allocation rule") + ")");
+    });
+    return { loanId: loan.id, status: split.status, principalReduced: run, pendingAllocation: split.status === "PENDING" ? Math.max(0, Math.min(split.totalPossible, cap) - run) : 0 };
+  }
+  function clearIfRepaid(db, ctx, loan, entry) {
     if (loan.status === "Active" && L.loanOutstanding(loan, db, entry.date) <= 0) {
       Object.assign(loan, { status: "Cleared", datePaidFull: entry.date, clearedBy: ctx.by });
-      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);
+      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);      // fully repaid: principal is zero under any allocation rule
       G.audit(db, ctx, "Loan", loan.id, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
     }
   }
+  /* Re-evaluate every active loan (e.g. right after SOB confirms or changes the repayment-allocation rule). */
+  function syncAllReleases(db, ctx) { return (db.loans || []).filter((l) => l.status === "Active" && !l.voided).map((l) => syncReleases(db, ctx, l)); }
   /* A repayment entry that becomes COUNTED (approved by the Chairperson) or is RESTORED triggers its release; one that is voided re-commits it. */
   function onRepaymentCounted(db, ctx, entry) {
     if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
     const loan = db.loans.find((l) => l.id === entry.loanId); if (!loan || loan.voided) return;
-    releaseOnRepayment(db, ctx, loan, entry);
+    syncReleases(db, ctx, loan); clearIfRepaid(db, ctx, loan, entry);
   }
   function onRepaymentRemoved(db, ctx, entry, why) {
     if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
-    (db.guarantees || []).forEach((g) => (g.releases || []).filter((r) => r.entryId === entry.id && !r.reversed).forEach((r) => {
-      r.reversed = true; g.releasedAmount = Math.max(0, Number(g.releasedAmount || 0) - r.amount);
-      if (g.status === "Released" && L.guaranteeRemaining(g) > 0) { g.status = "Active"; g.dateReleased = ""; g.releaseReason = ""; }
-      G.audit(db, ctx, "Guarantee", g.id, "Re-committed (repayment removed)", { committed: L.guaranteeRemaining(g) - r.amount }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id }, why || "repayment voided");
-    }));
-    const loan = db.loans.find((l) => l.id === entry.loanId);
-    if (loan && loan.status === "Cleared" && L.loanOutstanding(loan, db, ctx.today) > 0) {
+    const loan = db.loans.find((l) => l.id === entry.loanId); if (!loan) return;
+    (db.guarantees || []).forEach((g) => (g.releases || []).filter((r) => r.entryId === entry.id && !r.reversed).forEach((r) => reverseRelease(db, ctx, g, r, why || "repayment voided", entry.id)));
+    if (loan.status === "Cleared" && L.loanOutstanding(loan, db, ctx.today) > 0) {
+      (db.guarantees || []).filter((g) => g.loanId === loan.id).forEach((g) => (g.releases || []).filter((r) => !r.reversed && isClearRow(r)).forEach((r) => reverseRelease(db, ctx, g, r, why || "repayment voided", entry.id)));
       Object.assign(loan, { status: "Active", datePaidFull: "" });
       G.audit(db, ctx, "Loan", loan.id, "Re-opened (repayment removed)", { status: "Cleared" }, { status: "Active" }, why || "repayment voided");
     }
+    syncReleases(db, ctx, loan);
+  }
+  /* What is held back for SOB's allocation decision, per loan (shown to Admin and in the guarantee statement). */
+  function pendingRelease(db, loanId, today) {
+    const loan = getLoan(db, loanId); if (loan.status !== "Active") return 0;
+    const split = L.loanRepaymentSplit(loan, db, today); if (split.status !== "PENDING") return 0;
+    const cap = loanGuaranteed(db, loanId); return Math.max(0, Math.min(split.totalPossible, cap) - Math.min(split.totalPrincipal, cap));
   }
 
   /* --- workflow --- */
@@ -267,28 +302,30 @@
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db) || "PENDING_SOB_DECISION", guaranteeReleaseWaiting: pendingRelease(db, loan.id, asOf), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
   /* The linked double-entry view of one loan: every repayment beside the guarantor releases it caused, with both sides' running positions. */
   function linkedLedger(db, loanId, asOf) {
     const loan = getLoan(db, loanId), rows = [], gs = (db.guarantees || []).filter((g) => g.loanId === loanId && g.status !== "Declined");
     const reps = L.activeTransactions(db).filter((t) => t.loanId === loanId && (t.type === "Loan Disbursement" || t.type === "Loan Repayment")).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const split = loan.status === "Active" || loan.status === "Cleared" ? L.loanRepaymentSplit(loan, db, asOf || dates.todayISO()) : { status: "n/a", steps: [] }, stepOf = {}; split.steps.forEach((x) => { stepOf[x.entryId] = x; });
     let paid = 0; const running = {}; gs.forEach((g) => { running[g.id] = 0; });
     gs.filter((g) => g.dateCommitted).sort((a, b) => (a.dateCommitted < b.dateCommitted ? -1 : 1)).forEach((g) => rows.push({ date: g.dateCommitted, event: "Guarantee committed", ref: g.id, guarantor: g.guarantorId, borrowerChange: 0, guarantorCommittedChange: Number(g.amount), _o: 0 }));
     reps.forEach((t) => {
       if (t.type === "Loan Disbursement") { rows.push({ date: t.date, event: "Loan disbursed", ref: t.id, guarantor: "", borrowerChange: Number(t.amount), guarantorCommittedChange: 0, _o: 1 }); return; }
       paid += Number(t.amount);
+      const sp = stepOf[t.id] || { principal: Number(t.amount), possible: Number(t.amount) }, pr = sp.principal, wait = Math.max(0, sp.possible - sp.principal);   // principal reduction (not cash) is what the guarantee follows
       const rel = gs.reduce((a, g) => a.concat((g.releases || []).filter((r) => r.entryId === t.id && !r.reversed).map((r) => ({ g, r }))), []);
-      if (!rel.length) rows.push({ date: t.date, event: "Repayment", ref: t.id, guarantor: "", borrowerChange: -Number(t.amount), guarantorCommittedChange: 0, _o: 2 });
-      rel.forEach(({ g, r }, i) => rows.push({ date: t.date, event: "Repayment" + (i ? " (continued)" : ""), ref: t.id, guarantor: g.guarantorId, borrowerChange: i ? 0 : -Number(t.amount), guarantorCommittedChange: -r.amount, _o: 2 }));
+      if (!rel.length) rows.push({ date: t.date, event: "Repayment", ref: t.id, guarantor: "", borrowerChange: -pr, cashReceived: Number(t.amount), awaitingRule: wait, guarantorCommittedChange: 0, _o: 2 });
+      rel.forEach(({ g, r }, i) => rows.push({ date: t.date, event: "Repayment" + (i ? " (continued)" : ""), ref: t.id, guarantor: g.guarantorId, borrowerChange: i ? 0 : -pr, cashReceived: i ? 0 : Number(t.amount), awaitingRule: i ? 0 : wait, guarantorCommittedChange: -r.amount, _o: 2 }));
     });
     rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a._o - b._o));
     let out = 0, com = 0;
     rows.forEach((r) => { out += r.borrowerChange; com += r.guarantorCommittedChange; r.borrowerPrincipalExposure = out; r.totalGuaranteeCommitted = com; delete r._o; });
     const rest = L.loanOutstanding(loan, db, asOf || dates.todayISO());
-    return { loanId, rows, summary: { borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
+    return { loanId, rows, summary: { allocationRule: split.status === "CONFIRMED" ? split.rule : "PENDING SOB DECISION", guaranteeAwaitingRule: pendingRelease(db, loanId, asOf || dates.todayISO()), borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
-  return { assessLoan, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
+  return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
     declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });
