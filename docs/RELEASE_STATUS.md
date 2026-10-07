@@ -27,3 +27,6 @@ A. Apply the prepared loan-history correction (dated per the source workbook; au
 
 ## Repository privacy
 The repository is public. Pre-existing: `index.html` on `main` embeds real member names/phones. Introduced on `dev` earlier in this work and since removed from the tip: a demo file with real names and a reconciliation report/fixtures with member IDs and balances; they remain in `dev` history. All current tests/demo use synthetic data and `tests/privacy.test.js` blocks real data from being committed again.
+
+## Report letterhead (mandatory)
+Every printed/PDF report goes through `reports.brandedPage()` (via `toPrintHTML`): BWOMI logo, group name, report title, period/date in the header; the five officers (name, role, phone) in the footer. Header/footer repeat on every page (verified on a 5-page PDF by `e2e/pdf.js`). `tests/branding.test.js` fails if any report builder lacks them or another print path appears. Loading indicators: sign-in, ledger load, saving and PDF generation show a spinner + progress bar (`Busy` in app/ui.js). Still unverified on real Google: loans/guarantors/repayments/profit/share-out through this app.

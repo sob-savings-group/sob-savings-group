@@ -8,13 +8,17 @@
 })(typeof self !== "undefined" ? self : this, function () {
   function create(opts) {
     const o = Object.assign({ url: "", fetch: null, session: null, tokenKey: "sob.session" }, opts);
-    let token = null, user = null, db = null, status = "idle"; const listeners = [];
-    const emit = () => listeners.forEach((f) => f({ status, user }));
+    let token = null, user = null, db = null, status = "idle", busy = 0, busyLabel = ""; const listeners = [];
+    const emit = () => listeners.forEach((f) => f({ status, user, busy, busyLabel }));
     const keep = { get() { try { return o.session && o.session.getItem(o.tokenKey); } catch (e) { return null; } }, set(v) { try { if (o.session) v ? o.session.setItem(o.tokenKey, v) : o.session.removeItem(o.tokenKey); } catch (e) { /* optional */ } } };
     async function call(body) {
       if (!o.url) throw new Error("OFFLINE_MODE");
-      const r = await o.fetch(o.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ token }, body)) });
-      const j = await r.json();
+      busy++; busyLabel = { login: "Signing in…", getLedger: "Loading the ledger…", command: "Saving…", whoami: "Checking your session…" }[body.action] || "Working…"; emit();
+      let j;
+      try {
+        const r = await o.fetch(o.url, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ token }, body)) });
+        j = await r.json();
+      } finally { busy--; emit(); }
       if (!j.ok) { if (j.error === "UNAUTHENTICATED") { token = null; user = null; keep.set(null); status = "signed-out"; emit(); } const e = new Error(j.error || "REQUEST_FAILED"); e.code = String(j.error || "").split(":")[0]; throw e; }
       return j;
     }

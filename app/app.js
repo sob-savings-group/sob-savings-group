@@ -1,5 +1,5 @@
 (function () {
-  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly } = window.SOBUI;
+  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy } = window.SOBUI;
   const S = window.SOB, CFG = window.SOB_CONFIG || {}, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports;
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
@@ -106,6 +106,16 @@
     wrap.append(h("div", { class: "grid" }, Card("Collected", ugx(c.collected), "of " + ugx(c.expected), () => { st.view = "subs"; render(); }), Card("Unpaid members", String(c.unpaid.length), "", () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], c.unpaid, null)))));
     return wrap;
   }
+  /* Every PDF/print goes through here -> R.toPrintHTML -> mandatory SOB header + footer (repeats on every page). Printed from a hidden frame (no pop-up blocking). */
+  function printReport(rep, period) {
+    return Busy.run("Generating PDF…", () => new Promise((res) => {
+      const html = R.toPrintHTML(rep, { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) });
+      const f = document.createElement("iframe"); f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"; document.body.append(f);
+      const d = f.contentWindow.document; d.open(); d.write(html); d.close();
+      setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast("Could not open the print dialog", true); } setTimeout(() => f.remove(), 60000); res(); }, 400);
+    }));
+  }
+  const printButton = (rep, period) => h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF");
   const tableFromReport = (rep) => Table(rep.columns.map((c) => ({ label: c, render: (r) => r[c] })), rep.rows);
 
   /* ---------- members ---------- */
@@ -137,7 +147,7 @@
       h("h2", { class: "sec" }, "Other security (exceptional)"), Table([{ label: "Kind", key: "kind" }, { label: "Description", key: "description" }, { label: "Valuation", num: 1, render: (x) => x.valuation == null ? "—" : num(x.valuation) }, { label: "Accepted cover", num: 1, render: (x) => num(x.acceptedCover || 0) }, { label: "Docs", num: 1, render: (x) => (x.documents || []).length }, { label: "Status", render: (x) => badge(x.status, x.status === "Approved" ? "ok" : x.status === "Proposed" ? "warn" : "mute") },
         { label: "", render: (x) => x.status === "Proposed" && G.can(c, "security.approve") ? h("span", { class: "row", style: "margin:0" }, h("button", { class: "primary", "data-approve-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Approve exceptional security", [{ name: "reason", label: "Why SOB exceptionally accepts security (required)" }, { name: "cover", label: "Part of the loan this security backs (UGX)", type: "number" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "approve", reason: f.reason, acceptedCover: Number(f.cover) }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Security approved")); } }, "Approve"),
           h("button", { class: "danger", "data-reject-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject security", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Rejected")); } }, "Reject")) : "" }], (st.db.securities || []).filter((x) => x.loanId === id)),
-      ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), tableFromReport(R.loanStatement(st.db, id, today()))) : null,
+      ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), (() => { const lr = R.loanStatement(st.db, id, today()); return h("div", null, printButton(lr), tableFromReport(lr)); })()) : null,
       h("h2", { class: "sec" }, "Interest history"), Table([{ label: "Date", key: "date" }, { label: "From", num: 1, render: (x) => x.previousAmount == null ? "—" : num(x.previousAmount) }, { label: "To", num: 1, render: (x) => num(x.newAmount) }, { label: "Reason", key: "reason" }], v.interestHistory),
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
     const row = h("div", { class: "row" }); const M = () => document.querySelector(".modal-bg");
@@ -245,7 +255,7 @@
     return h("div", { class: "grid" }, Object.keys(REPORTS).map((n) => Card(n, "Open", "", () => {
       const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
       const dl = (name, type, data) => { const a = h("a", { href: URL.createObjectURL(new Blob([data], { type })), download: name }); document.body.append(a); a.click(); a.remove(); };
-      drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => dl(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), h("button", { "data-print": 1, onclick: () => { const w = window.open("", "_blank"); w.document.write(R.toPrintHTML(rep, { generated: D.toDisplay(today()) })); w.document.close(); w.print(); } }, "Print / PDF")), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+      drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => dl(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
     })));
   }
   function recon() {
@@ -297,7 +307,7 @@
   function mySavings() {
     const rep = R.memberStatement(st.db, me());
     const pos = L.memberPosition(st.db, me());
-    return h("div", null, h("div", { class: "grid" }, Card("Actual savings", ugx(pos.savings), "Lifetime balance, never reset at share-out"), Card("Committed to guarantees", ugx(pos.committed), "Held while the loan is unpaid"), Card("Available balance", ugx(pos.available), "Savings minus commitments")), myGuarantees(), h("h2", { class: "sec" }, "Statement"), tableFromReport(rep));
+    return h("div", null, h("div", { class: "grid" }, Card("Actual savings", ugx(pos.savings), "Lifetime balance, never reset at share-out"), Card("Committed to guarantees", ugx(pos.committed), "Held while the loan is unpaid"), Card("Available balance", ugx(pos.available), "Savings minus commitments")), myGuarantees(), h("h2", { class: "sec" }, "Statement"), printButton(rep), tableFromReport(rep));
   }
   function myLoans() {
     const mine = K.loanBook(st.db, today()).filter((v) => st.db.loans.find((l) => l.id === v.id).memberId === me());
@@ -379,6 +389,7 @@
     try {
       if (st.live) {
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
+        st.store.onChange((e) => Busy.set(e.busy ? e.busyLabel : null));
         st.db = { members: [], transactions: [], loans: [] };
         if (await st.store.resume()) { st.user = st.store.user; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } }
       }

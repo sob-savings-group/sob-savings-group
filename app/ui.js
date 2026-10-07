@@ -16,13 +16,20 @@
     h("thead", null, h("tr", null, cols.map((c) => h("th", { class: c.num ? "n" : "" }, c.label)))),
     h("tbody", null, rows.length ? rows.map((r) => h("tr", Object.assign({ class: onRow ? "click" : "" }, onRow ? { onclick: () => onRow(r) } : {}),
       cols.map((c) => h("td", { class: c.num ? "n" : "" }, c.render ? c.render(r) : r[c.key])))) : [h("tr", null, h("td", { colspan: cols.length, class: "mute" }, "Nothing to show yet."))])));
-  const State = (kind, msg) => h("div", { class: "state" + (kind === "error" ? " err" : "") }, kind === "loading" ? "Loading…" : msg);
+  const State = (kind, msg) => h("div", { class: "state" + (kind === "error" ? " err" : "") }, kind === "loading" ? [h("span", { class: "spin" }), " Loading…"] : msg);
   function Modal(title, body) {
     const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", onclick: (e) => { if (e.target === bg) close(); } });
     const close = () => bg.remove();
     bg.append(h("div", { class: "modal" }, h("div", { class: "row", style: "justify-content:space-between;margin:0" }, h("h2", null, title), h("button", { "data-close": "1", onclick: close }, "Close")), body));
     document.body.append(bg); return { close };
   }
+  /* Busy: one global "working" indicator (spinner + message + progress bar) used for sign-in, loading, saving and report generation. */
+  const Busy = (() => { let el = null, n = 0; const msgEl = h("span", { id: "busy-msg" }, "");
+    const ensure = () => { if (!el) { el = h("div", { id: "busy", class: "busy", role: "status", "aria-live": "polite" }, h("div", { class: "busy-bar" }), h("div", { class: "busy-box" }, h("span", { class: "spin" }), msgEl)); } if (!el.isConnected) document.body.append(el); };
+    const show = (m) => { ensure(); msgEl.textContent = m || "Working…"; el.style.display = "flex"; document.body.setAttribute("aria-busy", "true"); };
+    const hide = () => { if (el) el.style.display = "none"; document.body.removeAttribute("aria-busy"); };
+    return { set(m) { if (m) show(m); else hide(); },
+      async run(m, fn) { n++; show(m); await new Promise((r) => setTimeout(r, 30)); try { return await fn(); } finally { if (--n <= 0) { n = 0; hide(); } } } }; })();
   function toast(msg, bad) { const t = h("div", { class: "toast" + (bad ? " bad" : ""), role: "status" }, msg); document.body.append(t); setTimeout(() => t.remove(), bad ? 6000 : 3000); }
   /* Form modal: fields [{name,label,type,value,options,required}] -> onSubmit(values) may throw; the message is shown, nothing is half-saved. */
   function Form(title, fields, onSubmit, submitLabel) {
@@ -44,5 +51,5 @@
     if (e && e.code === "CONFLICT") return "Someone else changed the ledger. Your change was not saved — reload and try again.";
     return m.replace(/^[A-Z_]+:\s*/, "");
   };
-  window.SOBUI = { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly };
+  window.SOBUI = { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy };
 })();
