@@ -42,7 +42,8 @@ t("sourceRef survives the Sheet round-trip (idempotency holds after storage)", (
 });
 t("addMember accepts only a well-formed, unused confirmed id", () => {
   const db = mk(); const m = CMD.run(db, admin, "addMember", { id: "SOB-057", name: "Confirmed One", regDate: "2024-01-14" }); assert.equal(m.id, "SOB-057"); assert.equal(m.regDate, "2024-01-14");
-  assert.throws(() => CMD.run(db, admin, "addMember", { id: "SOB-057", name: "Again" }), /DUPLICATE_MEMBER/); assert.throws(() => CMD.run(db, admin, "addMember", { id: "57", name: "Bad" }), /INVALID/);
+  assert.throws(() => CMD.run(db, admin, "addMember", { id: "SOB-057", name: "Again" }), /DUPLICATE_MEMBER/); const blank = CMD.run(db, admin, "addMember", { id: "SOB-056", name: "No Date Known", regDate: "" }); assert.equal(blank.regDate, "", "an unknown registration date stays blank, never assumed");
+  assert.throws(() => CMD.run(db, admin, "addMember", { id: "57", name: "Bad" }), /INVALID/);
   const r = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B6", source: "w", entries: [{ memberId: "SOB-057", date: "2024-01-14", type: "Savings", amount: 100, sourceRef: "n1", originalName: "As Written" }] });
   assert.equal(db.transactions.find((q) => q.sourceRef === "n1").originalName, "As Written");
 });

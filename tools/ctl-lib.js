@@ -100,7 +100,7 @@ async function importHistory(api, o) {
   c.add("dry run: " + dry.added + " new, " + dry.alreadyImported + " already imported, " + dry.possibleDuplicates.length + " possible duplicate(s)", dry.possibleDuplicates.length === 0, JSON.stringify(dry.possibleDuplicates.slice(0, 3)));
   if (o.dryRun || !c.ok) return { ok: c.ok, checks: c.list, dry };
   const bk = await api({ action: "backupNow", token: t, force: true }); c.add("backup snapshot taken before import", !!bk.ok, bk.error);
-  for (const m of newMembers) { const r = await api({ action: "command", token: t, name: "addMember", args: { id: m.id, name: m.name, regDate: m.regDate } }); if (!r.ok) { c.add("add confirmed member " + m.id, false, r.error); return { ok: false, checks: c.list }; } }
+  for (const m of newMembers) { const r = await api({ action: "command", token: t, name: "addMember", args: { id: m.id, name: m.name, regDate: m.regDate || "" } }); if (!r.ok) { c.add("add confirmed member " + m.id, false, r.error); return { ok: false, checks: c.list }; } }
   c.add("confirmed members created: " + (newMembers.map((m) => m.id).join(", ") || "none needed"), true);
   const todo = pack.entries.filter((e) => !pre.transactions.some((x) => x.sourceRef === e.sourceRef));
   for (let i = 0; i < todo.length; i += 150) { const r = await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(todo.slice(i, i + 150), false) }); if (!r.ok) { c.add("chunk " + i, false, r.error); return { ok: false, checks: c.list }; } }

@@ -98,10 +98,10 @@
   function addMember(db, ctx, m) {
     require_(ctx, "member.manage");
     if (m.id !== undefined && !/^SOB-\d{3}$/.test(String(m.id))) throw new Error("INVALID: member id must look like SOB-057");
-    if (m.regDate !== undefined && !dates.isISO(m.regDate)) throw new Error("INVALID: regDate must be YYYY-MM-DD");
+    if (m.regDate && !dates.isISO(m.regDate)) throw new Error("INVALID: regDate must be YYYY-MM-DD");
     const id = m.id || "SOB-" + String(db.members.length + 1).padStart(3, "0");
     if (db.members.some((x) => x.id === id)) throw new Error("DUPLICATE_MEMBER: " + id);
-    const member = { id, name: need(m.name, "name"), phone: m.phone || "", email: m.email || "", location: m.location || "", regDate: m.regDate || ctx.today, status: "Active" };
+    const member = { id, name: need(m.name, "name"), phone: m.phone || "", email: m.email || "", location: m.location || "", regDate: m.regDate === undefined ? ctx.today : String(m.regDate), status: "Active" };
     db.members.push(member);
     audit(db, ctx, "Member", id, "Created", null, member);
     return member;
