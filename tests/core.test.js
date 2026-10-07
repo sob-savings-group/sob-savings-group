@@ -84,8 +84,8 @@ t("dates: EAT and DD/MM/YYYY display", () => {
   dates.setClock(Date.parse("2026-10-06T22:30:00Z")); assert.equal(dates.todayISO(), "2026-10-07"); dates.setClock(null);
   assert.equal(dates.toDisplay("2026-07-29"), "29/07/2026");
 });
-t("unresolved SOB decisions refuse to guess; confirmed 3x guideline is a guideline, not a rejection", () => {
-  assert.throws(() => L.profitShare(), /PENDING_SOB_DECISION/);
+t("the SOB rules are fixed (interest first); the 3x guideline is a guideline, not a rejection", () => {
+  assert.equal(L.confirmedAllocation(db), "INTEREST_FIRST"); assert.equal(L.profitShare, undefined); assert.equal(L.allocateRepayment, undefined);
   const e = L.loanEligibility(db, "SOB-001"); assert.equal(e.maxLoan, 3 * L.memberSavings(db, "SOB-001"));
 });
 console.log("\n" + pass + " passed");

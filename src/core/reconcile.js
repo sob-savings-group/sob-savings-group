@@ -16,7 +16,7 @@
     const dup = list(db).find((x) => x.status === "Open" && x.kind === d.kind && x.subject === d.subject);
     if (dup) throw new Error("ALREADY_OPEN: " + dup.id);
     const rec = { id: G.uid("DSC"), kind: d.kind, subject: String(d.subject), summary: String(d.summary), platformValue: d.platformValue ?? null, sourceValue: d.sourceValue ?? null,
-      source: d.source || "", status: "Open", openedDate: ctx.today, openedBy: ctx.by };
+      source: d.source || "", detail: d.detail && typeof d.detail === "object" ? JSON.parse(JSON.stringify(d.detail)) : undefined, status: "Open", openedDate: ctx.today, openedBy: ctx.by };
     list(db).push(rec);
     G.audit(db, ctx, "Discrepancy", rec.id, "Opened", null, { kind: rec.kind, subject: rec.subject, platformValue: rec.platformValue, sourceValue: rec.sourceValue });
     return rec;

@@ -14,12 +14,13 @@
   function importHistoricalEntries(db, ctx, a) {
     G.require(ctx, "history.import");
     const batchId = G.need(a.batchId, "batchId"), source = G.need(a.source, "source");
-    if (!Array.isArray(a.entries) || !a.entries.length) throw new Error("REQUIRED: entries");
+    const notes = Array.isArray(a.annotations) ? a.annotations : [];
+    if (!Array.isArray(a.entries) || (!a.entries.length && !notes.length)) throw new Error("REQUIRED: entries");
     if (a.entries.length > 5000) throw new Error("INVALID: at most 5000 entries per call");
     const byRef = new Set(db.transactions.filter((t) => t.sourceRef).map((t) => t.sourceRef));
     const live = new Map(); db.transactions.filter((t) => !t.voided && !t.sourceRef).forEach((t) => { const k = [t.memberId, t.date, t.type, Number(t.amount)].join("|"); live.set(k, (live.get(k) || 0) + 1); });
     const members = new Set(db.members.map((m) => m.id));
-    const out = { batchId, added: 0, alreadyImported: 0, possibleDuplicates: [], rejected: [], dryRun: !!a.dryRun, sum: { Savings: 0, Withdraw: 0, Profit: 0, "Share-Out": 0 } };
+    const out = { batchId, annotationsAdded: 0, annotationsAlreadyRecorded: 0, added: 0, alreadyImported: 0, possibleDuplicates: [], rejected: [], dryRun: !!a.dryRun, sum: { Savings: 0, Withdraw: 0, Profit: 0, "Share-Out": 0 } };
     const toAdd = [], seen = new Set();
     a.entries.forEach((e, i) => {
       const bad = (why) => out.rejected.push({ index: i, sourceRef: e && e.sourceRef, why });
@@ -43,7 +44,13 @@
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
         historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
-    if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, sum: out.sum }, "Verified historical records; original dates and source references preserved");
+    /* Audit ANNOTATIONS: workbook rows with no amount, no date or a zero amount. They are disclosed and kept for the record but are NEVER ledger transactions. */
+    const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
+    notes.forEach((n) => {
+      if (!n || !n.sourceRef) throw new Error("INVALID: annotation needs a sourceRef"); if (have.has(n.sourceRef)) { out.annotationsAlreadyRecorded++; return; } have.add(n.sourceRef); out.annotationsAdded++;
+      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
+    });
+    if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, annotations: out.annotationsAdded, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;
   }
   return { TYPES, idFor, importHistoricalEntries };

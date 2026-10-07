@@ -8,7 +8,7 @@ const db0 = M.migrateLegacy(raw, "2026-03-31"), mem = db0.members.find((m) => L.
 const sheets = {}; const mk = (n) => { const d = []; return { d, getLastRow: () => d.length, getLastColumn: () => d.reduce((a, r) => Math.max(a, r.length), 0), getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (d[r - 1 + i] && d[r - 1 + i][c - 1 + j] !== undefined ? d[r - 1 + i][c - 1 + j] : ""))), setValues: (v) => v.forEach((row, i) => row.forEach((x, j) => { d[r - 1 + i] = d[r - 1 + i] || []; d[r - 1 + i][c - 1 + j] = x; })), clearContent: () => { for (let i = 0; i < nr; i++) if (d[r - 1 + i]) for (let j = 0; j < nc; j++) d[r - 1 + i][c - 1 + j] = ""; } }; } }; };
 const cache = {}, env = { ss: { getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk(n)) }, lock: { waitLock() {}, releaseLock() {} }, now: () => new Date().toISOString(), gateways: { adminPhone: "0772000000", SMS: null },
   hash: (s) => crypto.createHash("sha256").update(s).digest("hex"), randomToken: () => crypto.randomBytes(8).toString("hex"), cache: { get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } } };
-S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" }), A.makeUser(env, { id: mem.id, role: "Member", memberId: mem.id, pin: "1234" }), A.makeUser(env, { id: airMem.id, role: "Member", memberId: airMem.id, pin: "2468" })]);
+S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" }), A.makeUser(env, { id: "CHAIR", role: "Chairperson", pin: "chair-pin-1" }), A.makeUser(env, { id: mem.id, role: "Member", memberId: mem.id, pin: "1234" }), A.makeUser(env, { id: airMem.id, role: "Member", memberId: airMem.id, pin: "2468" })]);
 const adminTok = API.handle(env, { action: "login", id: "ADMIN", pin: "admin-pin-1" }).token; API.handle(env, { action: "importSnapshot", token: adminTok, db: db0 });
 API.handle(env, { action: "command", token: adminTok, name: "openDiscrepancy", args: { kind: "SAVINGS_BALANCE", subject: mem.id, summary: "e2e discrepancy", platformValue: 1, sourceValue: 2, source: "e2e" } });
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
@@ -37,6 +37,15 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok(S.readAll(env.ss).discrepancies[0].status === "Resolved" && S.readAll(env.ss).discrepancies[0].evidence === "row diff", "resolution is saved with decision and evidence");
   await pg.click('[data-nav="members"]'); await pg.click("#main tbody tr:first-child"); await pg.waitForSelector('.modal [data-act="reset-pin"], .modal [data-act="create-signin"]'); ok(true, "Admin sees PIN management on a member profile");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
+  /* second approval in the real UI: the Super Admin's void only becomes a request; the Chairperson (a different sign-in) approves it */
+  await pg.click('[data-nav="ledger"]'); await pg.click("#main tbody tr:first-child"); await pg.waitForSelector('.modal [data-act="void"]'); const txBefore = S.readAll(env.ss).transactions.filter((t) => !t.voided).length;
+  await pg.click('.modal [data-act="void"]'); await pg.fill('.modal input[name="reason"]', "e2e void"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
+  ok(/Chairperson/.test(await pg.locator(".toast").last().innerText()) && S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore && (S.readAll(env.ss).approvalRequests || []).length === 1, "Super Admin's void is only a request; nothing changed");
+  await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "CHAIR"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click('[data-nav="approvals"]'); await pg.waitForSelector("[data-approve]"); ok((await pg.locator('[data-nav="ledger"] ~ * , #add-entry').count()) >= 0 && (await pg.locator("#add-entry").count()) === 0, "Chairperson has no entry buttons");
+  await pg.click("[data-approve]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForTimeout(150);
+  ok(S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore - 1 && S.readAll(env.ss).approvalRequests[0].status === "Approved" && S.readAll(env.ss).transactions.length >= txBefore, "the Chairperson's approval executes the void; the original transaction is kept");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
   await pg.fill("#mid", mem.id); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
   ok((await pg.locator('[data-nav="ledger"]').count()) === 0, "member sees member navigation only");
@@ -80,7 +89,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   /* ---- system: backups ---- */
   await pg.click('[data-nav="system"]'); await pg.waitForSelector("#backup-now"); await pg.click("#backup-now"); await pg.waitForSelector("[data-verify-backup]");
   await pg.click("[data-verify-backup]"); await pg.waitForSelector(".toast:not(.bad)"); ok(true, "Admin takes a snapshot from the UI and verifies its checksum");
-  ok(S.readAll(env.ss).users.length === 3 && (await pg.locator("[data-disable]").count()) === 2, "sign-ins are listed; Admin cannot disable themselves");
+  ok(S.readAll(env.ss).users.length === 4 && (await pg.locator("[data-disable]").count()) === 3, "sign-ins are listed; Admin cannot disable themselves");
   /* ---- Admin creates a sign-in; the member is forced to choose their own PIN ---- */
   await pg.click('[data-nav="members"]'); await pg.locator("#main tbody tr", { hasText: newMem.id }).first().click(); await pg.click('.modal [data-act="create-signin"]'); await pg.fill('.modal input[name="n"]', "3141"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click("#logout"); await pg.waitForSelector("#login-go");

@@ -45,7 +45,7 @@ t("reports: member statement closing balance equals member savings", () => {
 t("reports: blocked distribution, share-out preview, subscriptions, annual summary, guarantors", () => {
   assert.equal(R.quarterlyDistribution(db0, { year: 2026, quarter: 1 }).blocked, true);
   assert.throws(() => R.toCSV(R.quarterlyDistribution(db0, {})), /BLOCKED/);
-  assert.equal(R.repaymentAllocation(db0).blocked, true);
+  assert.equal(R.repaymentAllocation(db0).blocked, undefined); assert.equal(R.repaymentAllocation(db0).totals.rule, "INTEREST_FIRST");
   assert.equal(R.shareOut(db0, 2026, "2026-12-10").rows.length, db0.members.length);
   assert.equal(R.subscriptions(db0, 2026).totals.expected, db0.members.length * 5000);
   assert.ok(R.annualSummary(db0, 2026).rows.length === 7); assert.equal(R.guarantors(db0).rows.length, 0);

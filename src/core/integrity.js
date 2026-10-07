@@ -32,6 +32,12 @@
       if (rel !== Number(g.releasedAmount || 0)) add("error", "GUARANTEE_RELEASE_MISMATCH", g.id + " releasedAmount " + (g.releasedAmount || 0) + " vs release records " + rel);
       if (Number(g.releasedAmount || 0) > Number(g.amount)) add("error", "GUARANTEE_OVER_RELEASED", g.id);
     });
+    L.activeLoans(db).forEach((l) => {                                          // release can never exceed the principal actually reduced, and each release hangs on a live repayment
+      const gs = (db.guarantees || []).filter((g) => g.loanId === l.id), rels = gs.reduce((a, g) => a.concat((g.releases || []).filter((r) => !r.reversed)), []);
+      const released = rels.reduce((a, r) => a + Number(r.amount), 0), w = L.loanInterestPosition(l, db, asOf);
+      if (l.status !== "Cleared" && released > w.principalPaid) add("error", "RELEASE_EXCEEDS_PRINCIPAL_REDUCED", l.id + " released " + released + " but principal reduced is only " + w.principalPaid);
+      rels.forEach((r) => { const t = (db.transactions || []).find((x) => x.id === r.entryId); if (r.entryId && l.status !== "Cleared" && (!t || t.voided || t.type !== "Loan Repayment")) add("error", "RELEASE_WITHOUT_REPAYMENT", l.id + " release " + r.amount + " has no live repayment " + r.entryId); });
+    });
     const audIds = new Set(); (db.auditLog || []).forEach((a) => { if (audIds.has(a.id)) add("error", "DUPLICATE_AUDIT_ID", a.id); audIds.add(a.id); });
     (db.guarantees || []).filter((g) => g.status === "Active").forEach((g) => { const l = db.loans.find((x) => x.id === g.loanId);
       if (!l || l.voided || ["Cleared", "Declined"].includes(l.status)) add("error", "STALE_GUARANTEE", g.id + " on " + g.loanId); });

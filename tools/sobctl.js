@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /* sobctl — deploy/verify the SOB platform against the REAL deployed Apps Script web app.
-   env: SOB_URL (web-app /exec URL), SOB_ADMIN_ID, SOB_ADMIN_PIN, optional SOB_MEMBER_ID/SOB_MEMBER_PIN, SOB_AS_OF
+   env: SOB_URL (web-app /exec URL), SOB_ADMIN_ID, SOB_ADMIN_PIN, optional SOB_MEMBER_ID/SOB_MEMBER_PIN, SOB_CHAIR_ID/SOB_CHAIR_PIN (the Chairperson completes second approvals during apply-plan / smoke-write; SOB_CHAIR_NEW_PIN once, for a fresh slip), SOB_AS_OF
    commands: ping | smoke | smoke-write | import-ledger <legacy.json> [--dry-run] | import-users <users.json> | register-discrepancies <reconciliation.json> |
              apply-plan <reconciliation.json> --approved-by "<name, role, date>" |
              import-history <history-pack.json> --approved-by "<name, role, date>" [--dry-run] (pack is built privately, never committed) | verify | report <out.md> (after smoke/verify) |
              backup <out.json> (offline, outside the repo) | backup-verify <file> | restore-backup <file> (into a NEW EMPTY deployment) | backup-now | backup-list */
 const lib = require("./ctl-lib.js");
 const argv = process.argv.slice(2), cmd = argv[0], arg = argv[1], flag = (n) => argv.includes(n), val = (n) => { const i = argv.indexOf(n); return i > 0 ? argv[i + 1] : undefined; };
-const E = process.env, o = { adminId: E.SOB_ADMIN_ID, adminPin: E.SOB_ADMIN_PIN, memberId: E.SOB_MEMBER_ID, memberPin: E.SOB_MEMBER_PIN, memberNewPin: E.SOB_MEMBER_NEW_PIN, asOf: E.SOB_AS_OF };
+const E = process.env, o = { adminId: E.SOB_ADMIN_ID, adminPin: E.SOB_ADMIN_PIN, memberId: E.SOB_MEMBER_ID, memberPin: E.SOB_MEMBER_PIN, memberNewPin: E.SOB_MEMBER_NEW_PIN, asOf: E.SOB_AS_OF, chairId: E.SOB_CHAIR_ID, chairPin: E.SOB_CHAIR_PIN, chairNewPin: E.SOB_CHAIR_NEW_PIN };
 async function api(body) {
   if (!E.SOB_URL) throw new Error("Set SOB_URL to the deployed web-app URL");
   let res = await fetch(E.SOB_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), redirect: "follow" });

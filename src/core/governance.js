@@ -121,28 +121,19 @@
 
   /* SOB-approved settings, stored in the ledger itself (db.policy) and audited. Only validated, known settings can be changed; every change needs a reason. */
   const ENTRY_TYPES = ["Savings", "Withdraw", "Profit", "Loan Disbursement", "Loan Repayment", "Subscription", "Income", "Expense", "Share-Out", "Bank Charge", "Interest", "Penalty"];
+  /* FINAL SOB rules are fixed in code (3x guideline, shortfall backing, interest-first repayment, savings-proportional profit with the loan-holder exclusion, the list of
+     actions that always need the Chairperson). The ONLY adjustable setting left is to ADD ledger entry types to the Chairperson's queue; it can never remove a requirement. */
   function setPolicy(db, ctx, key, values, reason) {
     require_(ctx, "policy.manage"); need(reason, "reason");
     if (!ledger.POLICY_DEFAULTS[key]) throw new Error("INVALID: unknown policy '" + key + "'");
-    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur);
-    const v = values || {};
-    if (key === "approval") {
-      if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
-      if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
-    } else if (key === "loan") {
-      if (v.guaranteeCover !== undefined) throw new Error("INVALID: guarantors always back the shortfall beyond the borrower's own qualification (confirmed SOB rule); it is not a setting");
-      if (v.repaymentAllocation !== undefined) {
-        if (v.repaymentAllocation !== null && !ledger.ALLOCATION_RULES.includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation must be INTEREST_FIRST, PRINCIPAL_FIRST, or null (pending SOB decision)");
-        next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.repaymentAllocation !== null && v.allocationConfirmed === true;
-      } else if (v.allocationConfirmed !== undefined) { if (v.allocationConfirmed && !next.repaymentAllocation) throw new Error("INVALID: choose the rule before confirming it"); next.allocationConfirmed = !!v.allocationConfirmed; }
-    } else if (key === "profit") {
-      if (v.addFactor) {
-        const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");
-        if (!/^[A-Z][A-Z0-9_]{2,40}$/.test(f.id)) throw new Error("INVALID: factor id must be UPPER_SNAKE_CASE");
-        if (!["eligibility", "multiplier"].includes(f.kind)) throw new Error("INVALID: factor kind must be eligibility or multiplier");
-        if ((cur.factors || []).some((x) => x.id === f.id)) throw new Error("DUPLICATE: factor " + f.id);
-        next.factors = (cur.factors || []).concat([{ id: f.id, kind: f.kind, name: String(f.name).trim(), approvedBy: String(f.approvedBy).trim(), approvalRef: String(f.approvalRef).trim(), description: String(f.description || "") }]);
-      }
+    if (key !== "approval") throw new Error("INVALID: the '" + key + "' rules are fixed by SOB and cannot be changed here");
+    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur), v = values || {};
+    if (v.loanSecondApproval === false) throw new Error("INVALID: loan approval always needs the Chairperson; this cannot be switched off");
+    if (v.requiredTypes !== undefined) {
+      if (Array.isArray(v.requiredTypes) && v.requiredTypes.some((x) => ["Savings", "Loan Repayment"].includes(x))) throw new Error("INVALID: routine savings deposits and normal loan repayments do not need the Chairperson");
+      if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types");
+      const keep = v.requiredTypes.slice(); (cur.requiredTypes || []).forEach((x) => { if (!keep.includes(x)) throw new Error("INVALID: a requirement for the Chairperson cannot be removed (" + x + ")"); });
+      next.requiredTypes = keep;
     }
     db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === key);
     if (!rec) { rec = { id: key }; db.policy.push(rec); }

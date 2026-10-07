@@ -10,6 +10,20 @@ const checks = () => { const list = []; return { list, add: (name, pass, detail)
 
 async function login(api, id, pin) { return must(await api({ action: "login", id, pin }), "login").token; }
 
+/* FINAL SOB rule: voids, corrections, profit posting and share-out are only REQUESTED by the Super Admin; a different person, the Chairperson, approves.
+   These helpers sign the Chairperson in (when credentials are supplied) and complete the request through the normal approveRequest command. */
+async function chairToken(api, o) {
+  if (!o.chairId) return null;
+  const r = must(await api({ action: "login", id: o.chairId, pin: o.chairPin }), "Chairperson login");
+  if (r.user.mustChangePin) { if (!o.chairNewPin) throw new Error("The Chairperson's slip PIN must be changed first: pass SOB_CHAIR_NEW_PIN once"); must(await api({ action: "setPin", token: r.token, oldPin: o.chairPin, newPin: o.chairNewPin }), "Chairperson setPin"); }
+  return r.token;
+}
+async function gatedCommand(api, t, ct, name, args) {
+  const r = await api({ action: "command", token: t, name, args }); if (!r.ok || !(r.result && r.result.pendingApproval)) return r;
+  if (!ct) return { ok: false, error: "NEEDS_CHAIRPERSON: " + r.result.label + " was requested (" + r.result.requestId + ") and waits for the Chairperson; supply SOB_CHAIR_ID / SOB_CHAIR_PIN to complete it here" };
+  return await api({ action: "command", token: ct, name: "approveRequest", args: { id: r.result.requestId } });
+}
+
 /* Safe against production: only reads, plus negative security probes (which never use a real account id, so no real account can be locked). */
 async function smokeReadOnly(api, o) {
   const c = checks();
@@ -50,7 +64,11 @@ async function smokeWrite(api, o) {
   const before = L.memberSavings(led, m.id), r = must(await api({ action: "command", token: t, name: "createEntry", args: { date: D.todayISO(), memberId: m.id, amount: 1234, type: "Savings", purpose: "smoke test" } }), "createEntry");
   c.add("entry saved", L.memberSavings(r.db, m.id) === before + 1234);
   const back = must(await api({ action: "getLedger", token: t }), "re-read").db; c.add("entry persisted in the Sheet", L.memberSavings(back, m.id) === before + 1234);
-  const v = must(await api({ action: "command", token: t, name: "voidEntry", args: { id: r.result.id, reason: "smoke test cleanup" } }), "voidEntry");
+  const rq = must(await api({ action: "command", token: t, name: "voidEntry", args: { id: r.result.id, reason: "smoke test cleanup" } }), "voidEntry request");
+  c.add("the Super Admin's void only creates a request; the balance is unchanged until the Chairperson approves", !!(rq.result && rq.result.pendingApproval) && L.memberSavings(rq.db, m.id) === before + 1234);
+  const ct = await chairToken(api, o); if (!ct) { c.add("void completed by the Chairperson (supply SOB_CHAIR_ID/SOB_CHAIR_PIN; the test entry stays until then)", false); return { ok: c.ok, checks: c.list }; }
+  const adminTryApprove = await api({ action: "command", token: t, name: "approveRequest", args: { id: rq.result.requestId } }); c.add("the Super Admin cannot approve their own request", !adminTryApprove.ok && /FORBIDDEN|SEPARATION/.test(adminTryApprove.error || ""));
+  const v = must(await api({ action: "command", token: ct, name: "approveRequest", args: { id: rq.result.requestId } }), "approveRequest");
   c.add("void restores the balance, record kept", L.memberSavings(v.db, m.id) === before && v.db.transactions.some((x) => x.id === r.result.id && x.voided));
   c.add("audit trail has the actions", v.db.auditLog.some((a) => a.entityId === r.result.id && a.action.includes("oid")));
   return { ok: c.ok, checks: c.list };
@@ -74,14 +92,14 @@ async function importLedger(api, o) {
 }
 async function importUsers(api, o) { const t = await login(api, o.adminId, o.adminPin); const users = JSON.parse(fs.readFileSync(o.usersPath, "utf8")); return must(await api({ action: "importUsers", token: t, users }), "importUsers"); }
 async function registerDiscrepancies(api, o) {
-  const t = await login(api, o.adminId, o.adminPin), rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), out = [];
+  const t = await login(api, o.adminId, o.adminPin), ct = await chairToken(api, o), rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), out = [];
   let last;
   for (const d of rec.discrepancies) { const r = await api({ action: "command", token: t, name: "openDiscrepancy", args: d }); out.push({ subject: d.subject, ok: !!r.ok, error: r.error }); if (r.ok) last = r.db; }
   /* Items SOB has already answered (with evidence) are closed straight away, through the same audited command. */
   for (const res of rec.resolutions || []) {
     const led = (last || must(await api({ action: "getLedger", token: t }), "read").db), item = (led.discrepancies || []).find((x) => x.subject === res.subject && x.status === "Open");
     if (!item) { out.push({ subject: res.subject, resolved: false, error: "no open item" }); continue; }
-    const r = await api({ action: "command", token: t, name: "resolveDiscrepancy", args: { id: item.id, decision: res.decision, reason: res.reason, evidence: res.evidence } });
+    const r = await gatedCommand(api, t, ct, "resolveDiscrepancy", { id: item.id, decision: res.decision, reason: res.reason, evidence: res.evidence });
     out.push({ subject: res.subject, resolved: !!r.ok, error: r.error });
   }
   return out;
@@ -104,6 +122,7 @@ async function importHistory(api, o) {
   c.add("confirmed members created: " + (newMembers.map((m) => m.id).join(", ") || "none needed"), true);
   const todo = pack.entries.filter((e) => !pre.transactions.some((x) => x.sourceRef === e.sourceRef));
   for (let i = 0; i < todo.length; i += 150) { const r = await api({ action: "command", token: t, name: "importHistoricalEntries", args: args(todo.slice(i, i + 150), false) }); if (!r.ok) { c.add("chunk " + i, false, r.error); return { ok: false, checks: c.list }; } }
+  if ((pack.annotations || []).length) { const r = await api({ action: "command", token: t, name: "importHistoricalEntries", args: { batchId: pack.batchId, source: pack.source + " | Approved by: " + o.approvedBy, entries: [], annotations: pack.annotations } }); c.add("audit annotations recorded (not transactions): " + (r.result ? r.result.annotationsAdded + " new, " + r.result.annotationsAlreadyRecorded + " already" : r.error), !!r.ok, r.error); }
   const post = must(await api({ action: "getLedger", token: t }), "post-read").db;
   c.add("existing records untouched", pre.transactions.every((x) => JSON.stringify(post.transactions.find((y) => y.id === x.id)) === JSON.stringify(x)));
   c.add("transaction count rose by exactly the imported rows", post.transactions.length === pre.transactions.length + todo.length, post.transactions.length + " vs " + (pre.transactions.length + todo.length));
@@ -117,11 +136,11 @@ async function importHistory(api, o) {
 }
 async function applyPlan(api, o) {
   if (!o.approvedBy || String(o.approvedBy).trim().length < 5) throw new Error("REFUSED: --approved-by \"<name, role, date>\" is required");
-  const rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), t = await login(api, o.adminId, o.adminPin), c = checks();
+  const rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), t = await login(api, o.adminId, o.adminPin), ct = await chairToken(api, o), c = checks();
   const pre = must(await api({ action: "getLedger", token: t }), "pre-read").db, asOf = o.asOf || rec.asOf;
   for (const s of rec.plan.steps) {
     const args = Object.assign({}, s.args); if (args.reason) args.reason += " | Approved by: " + o.approvedBy;
-    const r = await api({ action: "command", token: t, name: s.name, args }); if (!r.ok) { c.add("step " + s.name, false, r.error); return { ok: false, checks: c.list }; }
+    const r = await gatedCommand(api, t, ct, s.name, args); if (!r.ok) { c.add("step " + s.name, false, r.error); return { ok: false, checks: c.list }; }
   }
   const post = must(await api({ action: "getLedger", token: t }), "post-read").db;
   c.add("all " + rec.plan.steps.length + " steps applied", true);

@@ -33,7 +33,7 @@
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
-    openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source }),
+    openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
@@ -44,15 +44,77 @@
     cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
     sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
     cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
-    importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries, dryRun: a.dryRun }),
+    importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries || [], annotations: a.annotations, dryRun: a.dryRun }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
+  };
+  /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
+     (New loan approval and exceptional security have their own two-step flows in loans.js / security.js; ledger entry types the Chairperson must also approve are
+     handled in governance.createEntry.) The Super Admin cannot bypass this: the command is NOT executed, it is stored as a request with its arguments and the
+     result of a trial run, and approveRequest alone (Chairperson only, never the requester) executes it. Routine savings deposits and loan repayments are not gated. */
+  const GATED = {
+    voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
+    voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
+    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
+    resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
+    distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
+  };
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
+  const summaryOf = (db, name, a) => {
+    if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "distributeProfit") return "Profit distribution " + a.period;
+    if (name === "executeShareOut") return "Share-out " + a.year;
+    return a.id || "";
+  };
+  function requestApproval(db, ctx, name, args) {
+    const g = GATED[name]; G.require(ctx, g.perm);
+    const trial = clone(db); let preview = null;                                  // validate now, so the Chairperson is never asked to approve something that cannot run
+    if (name === "distributeProfit") { preview = PR.preview(trial, { period: args.period }); }
+    COMMANDS[name](trial, Object.assign({}, ctx, { approvedRequest: "trial" }), args);
+    const req = { id: G.uid("REQ"), command: name, label: g.label, args: clone(args), summary: summaryOf(db, name, args), status: "Pending", requestedBy: ctx.by, requestedById: ctx.userId || ctx.by, requestedByRole: ctx.role, requestedDate: ctx.today, requestedAt: ctx.now,
+      reason: String(args.reason || args.sourceNote || "").slice(0, 300), requester: { name: ctx.by, id: ctx.userId, role: ctx.role, memberId: ctx.memberId || null } };
+    if (preview) Object.assign(req, { schedule: { pool: preview.pool, date: preview.date, basis: preview.basis, formula: preview.formula, rows: preview.rows, distributed: preview.distributed, undistributed: preview.undistributed, hash: hashRows(preview.rows) } });
+    (db.approvalRequests = db.approvalRequests || []).push(req);
+    G.audit(db, ctx, "ApprovalRequest", req.id, "Requested", null, { command: name, summary: req.summary }, "Awaiting the Chairperson: " + g.label);
+    return { pendingApproval: true, requestId: req.id, label: g.label, summary: req.summary };
+  }
+  function decideRequest(db, ctx, a, approve) {
+    G.require(ctx, "ledger.approve");
+    const req = (db.approvalRequests || []).find((x) => x.id === a.id); if (!req) throw new Error("NOT_FOUND: request " + a.id);
+    if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status);
+    if ((ctx.userId || ctx.by) === req.requestedById || ctx.by === req.requestedBy) throw new Error("SEPARATION: the person who initiated a request cannot approve it");
+    if (!approve) {
+      G.need(a.reason, "reason");
+      Object.assign(req, { status: "Rejected", decidedBy: ctx.by, decidedDate: ctx.today, decidedAt: ctx.now, decisionNote: String(a.reason).trim() });
+      G.audit(db, ctx, "ApprovalRequest", req.id, "Rejected", { status: "Pending" }, { status: "Rejected" }, a.reason); return req;
+    }
+    if (req.command === "distributeProfit") {                                  // post exactly what the Chairperson saw: the schedule must still be what it was
+      const now = PR.preview(db, { period: req.args.period }); if (hashRows(now.rows) !== req.schedule.hash) throw new Error("STALE: savings or loans changed since this schedule was prepared; ask the Super Admin to submit it again");
+    }
+    const exec = Object.assign(G.makeCtx({ name: req.requester.name, id: req.requester.id, role: req.requester.role, memberId: req.requester.memberId }, { today: ctx.today, now: ctx.now }), { approvedRequest: req.id, approvedBy: ctx.by });
+    const result = COMMANDS[req.command](db, exec, clone(req.args));
+    N.onCommand(db, exec, req.command, clone(req.args), result);                  // the same best-effort notices an ordinary run would queue
+    Object.assign(req, { status: "Approved", decidedBy: ctx.by, decidedDate: ctx.today, decidedAt: ctx.now, decisionNote: String(a.note || "").trim() });
+    G.audit(db, ctx, "ApprovalRequest", req.id, "Approved and executed", { status: "Pending" }, { status: "Approved", command: req.command }, "Initiated by " + req.requestedBy + ", approved by " + ctx.by + (a.note ? ": " + a.note : ""));
+    return { request: req, result };
+  }
+  COMMANDS.approveRequest = (db, ctx, a) => decideRequest(db, ctx, a, true);
+  COMMANDS.rejectRequest = (db, ctx, a) => decideRequest(db, ctx, a, false);
+  COMMANDS.cancelRequest = (db, ctx, a) => {
+    const req = (db.approvalRequests || []).find((x) => x.id === a.id); if (!req) throw new Error("NOT_FOUND: request " + a.id);
+    if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status); if ((ctx.userId || ctx.by) !== req.requestedById) throw new Error("FORBIDDEN: only the person who made the request can withdraw it");
+    Object.assign(req, { status: "Withdrawn", decidedBy: ctx.by, decidedDate: ctx.today }); G.audit(db, ctx, "ApprovalRequest", req.id, "Withdrawn", { status: "Pending" }, { status: "Withdrawn" }, a.reason || ""); return req;
   };
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    const gate = GATED[name];
+    if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});
     N.onCommand(db, ctx, name, args || {}, result);   // best-effort outbox notices; never blocks the command
     return result;
   }
-  return { COMMANDS, names: Object.keys(COMMANDS), run };
+  return { COMMANDS, GATED, names: Object.keys(COMMANDS), run };
 });

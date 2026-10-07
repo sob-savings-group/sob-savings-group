@@ -37,6 +37,12 @@ let memberPin = null, f = 0; const tests = []; const t = (n, fn) => tests.push([
     const r = await run(["import-users", path.join(tmp, "users.json")], base); assert.equal(r.code, 0, r.out); assert.match(r.out, /"added":\d+/);
     assert.notEqual((await run(["import-users", path.join(tmp, "users.json")], base)).code, 0);
   });
+  let chairEnv = {};
+  t("a Chairperson sign-in is created by the Super Admin (the second approver for live verification)", async () => {
+    const post = async (b) => (await fetch(url, { method: "POST", body: JSON.stringify(b) })).json(); const a = await post({ action: "login", id: "ADMIN", pin: adminPin });
+    assert.ok((await post({ action: "createUser", token: a.token, user: { id: "CHAIR", role: "Chairperson", pin: "Chair-Slip-91" } })).ok);
+    chairEnv = { SOB_CHAIR_ID: "CHAIR", SOB_CHAIR_PIN: "Chair-Slip-91", SOB_CHAIR_NEW_PIN: "Chair-Own-5512" };
+  });
   const slipFor = (id) => fs.readFileSync(path.join(tmp, "pin-slips.csv"), "utf8").split("\n").slice(1).filter(Boolean).map((l) => l.split(",")).find((s) => s[0] === id);
   t("before the reconciliation register exists, smoke flags the unaccounted data errors (and nothing else)", async () => {
     const m = slipFor("SOB-002"), skip = await run(["smoke"], Object.assign({}, base, { SOB_MEMBER_ID: m[0], SOB_MEMBER_PIN: m[3] }));
@@ -58,7 +64,7 @@ let memberPin = null, f = 0; const tests = []; const t = (n, fn) => tests.push([
   });
   t("apply-plan REFUSES without a named approver", async () => { const r = await run(["apply-plan", path.join(tmp, "recon/reconciliation.json")], base); assert.notEqual(r.code, 0); assert.match(r.out, /approved-by/); assert.match((await run(["verify"], base)).out, new RegExp("\"transactions\": " + rawTx)); });
   t("apply-plan with an approver applies the audited corrections; savings unchanged; balances as predicted", async () => {
-    const r = await run(["apply-plan", path.join(tmp, "recon/reconciliation.json"), "--approved-by", "Test Approver, Chairperson, 2026-10-07"], base); assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out);
+    const r = await run(["apply-plan", path.join(tmp, "recon/reconciliation.json"), "--approved-by", "Test Approver, Chairperson, 2026-10-07"], Object.assign({}, base, chairEnv)); chairEnv = { SOB_CHAIR_ID: "CHAIR", SOB_CHAIR_PIN: "Chair-Own-5512" };   // the slip PIN was changed on first use assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out);
     const v = JSON.parse((await run(["verify"], base)).out); assert.equal(v.totals.groupSavings, expectedSavings);
   });
   t("import-history: refuses without approver; dry run writes nothing; import preserves dates/refs, moves savings by the exact net, is idempotent", async () => {
@@ -98,7 +104,8 @@ let memberPin = null, f = 0; const tests = []; const t = (n, fn) => tests.push([
   });
   t("smoke-write is refused unless explicitly allowed; passes on a scratch deployment", async () => {
     assert.notEqual((await run(["smoke-write"], base)).code, 0);
-    const r = await run(["smoke-write"], Object.assign({}, base, { SOB_ALLOW_WRITE_TESTS: "yes" })); assert.equal(r.code, 0, r.out);
+    const nochair = await run(["smoke-write"], Object.assign({}, base, { SOB_ALLOW_WRITE_TESTS: "yes" })); assert.notEqual(nochair.code, 0, "without the Chairperson the cleanup cannot complete"); assert.match(nochair.out, /only creates a request/);
+    const r = await run(["smoke-write"], Object.assign({}, base, chairEnv, { SOB_ALLOW_WRITE_TESTS: "yes" })); assert.equal(r.code, 0, r.out);
   });
   t("DISASTER RECOVERY: a brand-new empty deployment is rebuilt from the offline backup with every figure identical", async () => {
     const out = path.join(tmp, "backup.json"), ex = JSON.parse(fs.readFileSync(out, "utf8")), orig = JSON.parse(ex.payload);

@@ -47,4 +47,17 @@ t("addMember accepts only a well-formed, unused confirmed id", () => {
   const r = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B6", source: "w", entries: [{ memberId: "SOB-057", date: "2024-01-14", type: "Savings", amount: 100, sourceRef: "n1", originalName: "As Written" }] });
   assert.equal(db.transactions.find((q) => q.sourceRef === "n1").originalName, "As Written");
 });
+t("rows without a date or amount are audit ANNOTATIONS: stored once, never ledger transactions, idempotent, savings unchanged", () => {
+  const db = mk(), notes = [{ sourceRef: "wb:A!r50", memberId: "SOB-001", amount: -150000, note: "no date: not posted" }, { sourceRef: "wb:A!r51", memberId: "SOB-002", amount: 0, date: "2025-01-01", note: "zero amount" }];
+  const before = L.memberSavings(db, "SOB-001"), n0 = db.transactions.length;
+  const dry = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B7", source: "w", entries: [], annotations: notes, dryRun: true }); assert.equal(dry.annotationsAdded, 2); assert.equal(db.historicalNotes, undefined);
+  const r = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B7", source: "w", entries: [], annotations: notes }); assert.equal(r.annotationsAdded, 2); assert.equal(db.historicalNotes.length, 2); assert.equal(db.transactions.length, n0); assert.equal(L.memberSavings(db, "SOB-001"), before);
+  const again = CMD.run(db, admin, "importHistoricalEntries", { batchId: "B7", source: "w", entries: [], annotations: notes }); assert.equal(again.annotationsAdded, 0); assert.equal(again.annotationsAlreadyRecorded, 2); assert.equal(db.historicalNotes.length, 2);
+  assert.equal(db.historicalNotes.every((x) => x.isTransaction === false), true);
+  assert.throws(() => CMD.run(db, member, "importHistoricalEntries", { batchId: "B8", source: "w", entries: [], annotations: notes }), /FORBIDDEN/);
+});
+t("exception-register items carry the full disclosure detail", () => {
+  const db = mk(); const d = CMD.run(db, admin, "openDiscrepancy", { kind: "MISSING_ENTRY", subject: "SOB-001 | r9", summary: "row not imported", sourceValue: 5000, detail: { member: "SOB-001", sourceRow: "r9", date: "2025-01-01", amount: 5000, unknown: "savings or loan repayment", why: "no label", affectsCurrentBalance: "Yes" } });
+  assert.equal(d.detail.affectsCurrentBalance, "Yes"); const back = S.fromRow(S.COLLECTIONS.discrepancies.cols, S.toRow(S.COLLECTIONS.discrepancies.cols, d)); assert.equal(back.detail.unknown, "savings or loan repayment");
+});
 console.log(f ? f + " FAILED" : "history passed");

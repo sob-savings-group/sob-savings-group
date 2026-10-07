@@ -1,12 +1,12 @@
-/* SOB core/loans — application -> review -> (optional Chairperson approval) -> disbursement -> repayment -> clearance/reversal,
+/* SOB core/loans — application -> Super Admin review -> Chairperson approval (always) -> disbursement -> repayment -> clearance/reversal,
    plus the guarantor and security workflow. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
    SOB rules implemented here:
    - 3x savings is the STANDARD GUIDELINE, not a hard stop: a borrower who falls short may continue with guarantor(s) and/or exceptionally approved security.
    - MORE THAN ONE guarantor may back a loan; their commitments add up. A guarantee takes effect only when the guarantor ACCEPTS it, and from that instant the
      guaranteed amount is deducted from the guarantor's AVAILABLE savings (it stays in their account but cannot be withdrawn).
    - A guarantee secures the borrower's outstanding PRINCIPAL exposure beyond their own qualification (the shortfall). It is therefore released by the REDUCTION IN PRINCIPAL a repayment
-     causes - not by the cash received (part of a payment may be interest). How a payment splits is SOB's open repayment-allocation decision (ledger.loanRepaymentSplit): once confirmed
-     the release follows that rule; while pending only the part that is principal under EVERY possible rule is released, and the rest waits (nothing is assumed). Releases are pro rata to
+     causes - not by the cash received (part of a payment may be interest). FINAL SOB rule (ledger.walkAllocation): accumulated unpaid interest is cleared first, the remainder reduces
+     principal; only that principal reduction releases guarantee, so an interest-only payment releases nothing. Releases are pro rata to
      each guarantor's commitment and linked by repayment id; clearing the loan releases whatever remains; voiding a repayment re-commits exactly what it released.
    - Property / other security is an EXCEPTIONAL, separately recorded route (core/security.js), never the default. */
 (function (root, factory) {
@@ -199,14 +199,13 @@
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });
     return loan;
   }
-  /* Approval. Admin (Super Admin) REVIEWS and, unless SOB's approval policy asks for the Chairperson, approves. With loanSecondApproval on, Admin's review moves the loan
-     to AwaitingApproval and only the Chairperson can make it Approved. The 3x guideline never rejects by itself: backing for any shortfall is what is checked. */
+  /* Approval. The Super Admin REVIEWS; that moves the loan to AwaitingApproval and only the Chairperson (a different person) can make it Approved. The 3x guideline never rejects by itself: backing for any shortfall is what is checked. */
   function approveLoan(db, ctx, loanId, note) {
     const second = G.can(ctx, "loan.secondApprove"), review = G.can(ctx, "loan.review");
     if (!second && !review) G.require(ctx, "loan.review");
     const loan = getLoan(db, loanId);
     const a = assessLoan(db, loan.memberId, loan.loanAmount, loanId);
-    const needsChair = !!L.getPolicy(db, "approval").loanSecondApproval;
+    const needsChair = true;                                       // FINAL SOB rule: every new loan needs the Chairperson
     if (loan.status === "AwaitingApproval") {
       if (!second) throw new Error("FORBIDDEN: this loan awaits the Chairperson's approval");
       if (G.config.approval.separateApprover && loan.reviewedBy === ctx.by) throw new Error("SEPARATION: the reviewer cannot also give the second approval");
@@ -302,7 +301,7 @@
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db) || "PENDING_SOB_DECISION", guaranteeReleaseWaiting: pendingRelease(db, loan.id, asOf), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
   /* The linked double-entry view of one loan: every repayment beside the guarantor releases it caused, with both sides' running positions. */
   function linkedLedger(db, loanId, asOf) {
@@ -323,7 +322,7 @@
     let out = 0, com = 0;
     rows.forEach((r) => { out += r.borrowerChange; com += r.guarantorCommittedChange; r.borrowerPrincipalExposure = out; r.totalGuaranteeCommitted = com; delete r._o; });
     const rest = L.loanOutstanding(loan, db, asOf || dates.todayISO());
-    return { loanId, rows, summary: { allocationRule: split.status === "CONFIRMED" ? split.rule : "PENDING SOB DECISION", guaranteeAwaitingRule: pendingRelease(db, loanId, asOf || dates.todayISO()), borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
+    return { loanId, rows, summary: { allocationRule: "INTEREST_FIRST", borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,

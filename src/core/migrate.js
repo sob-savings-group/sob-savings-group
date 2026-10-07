@@ -20,7 +20,7 @@
         n.interestHistory = n.interestHistory || [];
         return n;
       }),
-      guarantees: [], securities: [], policy: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
+      guarantees: [], securities: [], policy: [], approvalRequests: [], historicalNotes: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
       users: src.users || [], requests: src.requests || [], airtimeRequests: src.airtimeRequests || [],
       auditLog: (src.auditLog || []).slice(), reconciliations: src.reconciliations || [], smsFailures: src.smsFailures || [],
       legacyAdministration: src.ledger || [], // archived bank-level rows; they do NOT feed any total

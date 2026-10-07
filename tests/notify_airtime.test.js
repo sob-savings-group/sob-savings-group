@@ -71,7 +71,7 @@ t("a Member may change only their own consent; cancel needs a reason and refuses
 t("loan decisions and share-out queue notices (deduped); template text is bounded", () => {
   const db = fresh(); const a = ctxAt("2026-12-21"); seed(db, "SOB-001", 100000); seed(db, "SOB-002", 50000);
   const l = LN.recordExistingLoan(db, a, { memberId: "SOB-002", amount: 10000, date: "2026-02-01", assignedMonthlyInterest: 100, graceMonths: 3 });
-  CMD.run(db, a, "executeShareOut", { year: 2026, date: "2026-12-21" });
+  const rq = CMD.run(db, a, "executeShareOut", { year: 2026, date: "2026-12-21" }); assert.equal(rq.pendingApproval, true); CMD.run(db, ctxAt("2026-12-21", { name: "Chair", id: "U9", role: "Chairperson" }), "approveRequest", { id: rq.requestId });
   assert.equal(db.outbox.filter((m) => m.template === "shareOut").length, 2);
   assert.equal(N.render("custom", { text: "x".repeat(900) }).length, 320);
   throwsMsg(() => N.render("nope", {}), /UNKNOWN_TEMPLATE/);

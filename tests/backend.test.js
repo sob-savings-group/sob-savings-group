@@ -148,7 +148,11 @@ t("Admin commands persist, audit with the real identity, and totals reconcile th
   assert.ok(r.ok && r.changed);
   const back = w.call({ action: "getLedger", token: w.admin }).db;
   assert.equal(L.memberSavings(back, memberWith.id), L.memberSavings(db0, memberWith.id) + 2500);
-  assert.ok(cmd(w, w.admin, "voidEntry", { id: r.result.id, reason: "test void" }).ok);
+  const vq = cmd(w, w.admin, "voidEntry", { id: r.result.id, reason: "test void" }); assert.ok(vq.ok && vq.result.pendingApproval, "the Super Admin can only REQUEST a void");
+  assert.equal(L.memberSavings(w.call({ action: "getLedger", token: w.admin }).db, memberWith.id), L.memberSavings(db0, memberWith.id) + 2500, "nothing changed yet");
+  S.writeCollection(w.env.ss, "users", S.readCollection(w.env.ss, "users").concat([A.makeUser(w.env, { id: "CHAIR0", role: "Chairperson", pin: "chair-pin-0" })]));
+  const ch0 = w.tok("CHAIR0", "chair-pin-0"); assert.match(cmd(w, w.admin, "approveRequest", { id: vq.result.requestId }).error || "", /FORBIDDEN/);
+  assert.ok(cmd(w, ch0, "approveRequest", { id: vq.result.requestId }).ok);
   const again = w.call({ action: "getLedger", token: w.admin }).db;
   assert.equal(L.memberSavings(again, memberWith.id), L.memberSavings(db0, memberWith.id));
   assert.ok(again.auditLog.some((a) => a.entityId === r.result.id && a.by === "ADMIN" && a.role === "Admin"));

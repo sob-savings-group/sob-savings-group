@@ -43,7 +43,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
 /* SOB core/ledger — the single source of financial truth.
    Every dashboard figure, statement and report must call these functions.
    Loan interest is a pure, stateless calculation: nothing is ever posted for it.
-   Open SOB decisions are NOT guessed here; see CONFIG_PENDING. */
+ */
 (function (root, factory) {
   const deps = (typeof module === "object" && module.exports) ? require("./dates.js") : root.SOB.dates;
   const api = factory(deps);
@@ -52,21 +52,17 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
 })(typeof self !== "undefined" ? self : this, function (dates) {
   const RESTORE_WINDOW_HOURS = 48;
 
-  // Decisions still awaiting SOB (proposal Section 7). Engines read these and refuse to guess.
-  const CONFIG_PENDING = {
-    profitFormula: null,           // Open Q1
-    qualifyingSavingsRule: null,   // retired: total savings, 3x guideline (loanEligibility)
-    repaymentAllocation: null,     // interest-first vs principal-first: awaiting SOB (split is not recorded until decided)
-    interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
-  };
+  // All SOB decisions needed by the engines are now made (see POLICY_DEFAULTS / REPAYMENT_RULE); nothing here awaits SOB.
 
   /* --- policy: SOB-approved settings kept IN the ledger (db.policy), so they persist and are audited. Nothing here invents a rule:
      every default is either confirmed by SOB or an explicit, visible, changeable setting. --- */
   const POLICY_DEFAULTS = {
-    approval: { requiredTypes: [], loanSecondApproval: false },                       // WHICH items need the Chairperson is SOB's call; none by default
-    // confirmed: standard guideline up to 3x savings; guarantors back ONLY the shortfall beyond the borrower's own qualification (not a policy option).
-    // repaymentAllocation is an OPEN SOB decision: null = pending. While pending nothing is assumed (see loanRepaymentSplit).
-    loan: { guidelineMultiple: 3, repaymentAllocation: null, allocationConfirmed: false },
+    // FINAL SOB rule: loan approval, exceptional security, void/reversal, manual financial adjustments and final profit/share-out posting ALWAYS need the Chairperson
+    // (see commands.js GATED). Routine savings and loan repayments do not. requiredTypes can only ADD entry types to the Chairperson queue.
+    approval: { requiredTypes: [], loanSecondApproval: true },
+    // FINAL SOB rules: standard guideline up to 3x savings; guarantors back only the shortfall beyond the borrower's own qualification;
+    // a repayment clears accumulated unpaid interest first and any remainder reduces principal (REPAYMENT_RULE, not a setting).
+    loan: { guidelineMultiple: 3 },
     profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
   };
   const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
@@ -138,13 +134,13 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
-  /* --- how repayments split between interest, penalties and principal. THIS IS AN OPEN SOB DECISION (db.policy "loan": repaymentAllocation + allocationConfirmed).
-     It never changes a loan balance (loanOutstanding is the same either way) - it only decides how much of each payment reduced PRINCIPAL, which is what releases guarantees,
-     and how much interest is still unpaid. Until SOB confirms, NOTHING IS ASSUMED: both orders are computed; what is the same under both is treated as certain, the rest is
-     reported as a range / "pending". --- */
-  const ALLOCATION_RULES = ["INTEREST_FIRST", "PRINCIPAL_FIRST"];
-  const confirmedAllocation = (db) => { const p = getPolicy(db, "loan"); return p.allocationConfirmed && ALLOCATION_RULES.includes(p.repaymentAllocation) ? p.repaymentAllocation : null; };
-  function walkAllocation(loan, db, rule, asOf) {
+  /* --- FINAL SOB RULE for a partial repayment: accumulated UNPAID INTEREST is cleared first (then penalties), and ONLY THE REMAINDER reduces principal.
+     Example: principal 1,000,000, unpaid interest 90,000, payment 300,000 -> interest 90,000, principal 210,000, remaining principal 790,000.
+     Interest accrued AFTER a payment is still unpaid (repayments are walked in date order). This decides how much of each payment reduced PRINCIPAL, which is
+     what releases guarantees; an interest-only payment releases nothing. Invariant: principalOutstanding + unpaidInterest + unpaidPenalties == loanOutstanding. --- */
+  const REPAYMENT_RULE = "INTEREST_FIRST";
+  const confirmedAllocation = () => REPAYMENT_RULE;
+  function walkAllocation(loan, db, asOf) {
     const principal = Number(loan.loanAmount) || 0, e = effectiveAsOf(loan, asOf);
     const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
     const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
@@ -154,36 +150,21 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
       const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
-      const order = rule === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
-      order.forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
+      [["interest", interestDue], ["pen", penDue], ["principal", principalDue]].forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
       steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
     const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
     return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
   }
-  /* Principal reduction per repayment for ONE loan. status CONFIRMED: by SOB's rule. status PENDING: `principal` per repayment is the part that is principal under EVERY possible rule
-     (the safe minimum), `possible` is the most it could be; the difference waits for SOB. */
+  /* Principal reduction caused by each counted repayment (this, and only this, releases guarantees). */
   function loanRepaymentSplit(loan, db, asOf) {
-    const rule = confirmedAllocation(db);
-    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return { status: "CONFIRMED", rule, steps: w.steps.map((x) => Object.assign({ possible: x.principal }, x)), totalPrincipal: w.principalPaid, totalPossible: w.principalPaid }; }
-    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
-    let ca = 0, cb = 0, cm = 0;
-    const steps = A.steps.map((x, i) => { ca += x.principal; cb += B.steps[i].principal; const m = Math.min(ca, cb), d = m - cm; cm = m; return { entryId: x.entryId, date: x.date, amount: x.amount, principal: d, possible: Math.max(x.principal, B.steps[i].principal) }; });
-    return { status: "PENDING", rule: null, steps, totalPrincipal: cm, totalPossible: Math.max(A.principalPaid, B.principalPaid), A, B };
+    const w = walkAllocation(loan, db, asOf);
+    return { status: "CONFIRMED", rule: REPAYMENT_RULE, steps: w.steps.map((x) => Object.assign({ possible: x.principal }, x)), totalPrincipal: w.principalPaid, totalPossible: w.principalPaid };
   }
-  /* Interest position of a loan. Allocation-independent facts are always exact: accrued interest, total repaid, outstanding loan. Split facts (unpaid interest, principal outstanding)
-     are exact when SOB's rule is confirmed, or whenever both orders give the same answer (e.g. no repayments yet); otherwise they are null with a [min, max] range. */
   function loanInterestPosition(loan, db, asOf) {
-    asOf = asOf || dates.todayISO();
-    const rule = confirmedAllocation(db), policy = getPolicy(db, "loan");
-    if (rule) { const w = walkAllocation(loan, db, rule, asOf); return Object.assign({}, w, { allocation: rule, allocationConfirmed: true, pending: false, unpaidInterestRange: { min: w.unpaidInterest, max: w.unpaidInterest } }); }
-    const A = walkAllocation(loan, db, "INTEREST_FIRST", asOf), B = walkAllocation(loan, db, "PRINCIPAL_FIRST", asOf);
-    const same = A.interestPaid === B.interestPaid && A.principalPaid === B.principalPaid && A.penaltiesPaid === B.penaltiesPaid;
-    const range = { min: Math.min(A.unpaidInterest, B.unpaidInterest), max: Math.max(A.unpaidInterest, B.unpaidInterest) };
-    const base = { principal: A.principal, accruedInterest: A.accruedInterest, penalties: A.penalties, totalRepaid: A.totalRepaid, unpaidInterestRange: range, principalOutstandingRange: { min: Math.min(A.principalOutstanding, B.principalOutstanding), max: Math.max(A.principalOutstanding, B.principalOutstanding) },
-      allocation: policy.repaymentAllocation || null, allocationConfirmed: false, pending: !same };
-    return same ? Object.assign({}, A, base) : Object.assign(base, { interestPaid: null, penaltiesPaid: null, principalPaid: null, unpaidInterest: null, unpaidPenalties: null, principalOutstanding: null });
+    const w = walkAllocation(loan, db, asOf || dates.todayISO());
+    return Object.assign({}, w, { allocation: REPAYMENT_RULE, allocationConfirmed: true, pending: false, unpaidInterestRange: { min: w.unpaidInterest, max: w.unpaidInterest } });
   }
   const memberHasOutstandingLoan = (db, memberId, asOf) =>
     activeLoans(db).some((l) => l.memberId === memberId && loanOutstanding(l, db, asOf) > 0);
@@ -216,11 +197,6 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
       .filter((t) => inPeriod(t, period));
   }
 
-  /* Stubs that refuse to invent SOB's rules. */
-  function profitShare() {
-    if (!CONFIG_PENDING.profitFormula) throw new Error("PENDING_SOB_DECISION: profit-distribution formula (Open Q1)");
-    return CONFIG_PENDING.profitFormula.apply(null, arguments);
-  }
   /* SOB rule: a member normally qualifies mainly on their TOTAL savings, standard guideline up to 3x. It is a guideline, not a hard stop:
      a loan beyond it may continue when guarantors / approved security back the shortfall (see loans.assessLoan). */
   function loanEligibility(db, memberId) {
@@ -228,18 +204,14 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     return { qualifyingSavings: q, multiple: mult, maxLoan: mult * q };
   }
   /* Eligibility for distribution — the loan-exclusion rule IS confirmed, independent of the formula. */
-  function allocateRepayment() {
-    if (!CONFIG_PENDING.repaymentAllocation) throw new Error("PENDING_SOB_DECISION: repayment allocation - interest first or principal first (awaiting SOB)");
-    return CONFIG_PENDING.repaymentAllocation.apply(null, arguments);
-  }
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
-    POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, ALLOCATION_RULES, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
+    POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
-    profitShare, loanEligibility, eligibleForDistribution
+    loanEligibility, eligibleForDistribution
   };
 });
 
@@ -368,28 +340,19 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
 
   /* SOB-approved settings, stored in the ledger itself (db.policy) and audited. Only validated, known settings can be changed; every change needs a reason. */
   const ENTRY_TYPES = ["Savings", "Withdraw", "Profit", "Loan Disbursement", "Loan Repayment", "Subscription", "Income", "Expense", "Share-Out", "Bank Charge", "Interest", "Penalty"];
+  /* FINAL SOB rules are fixed in code (3x guideline, shortfall backing, interest-first repayment, savings-proportional profit with the loan-holder exclusion, the list of
+     actions that always need the Chairperson). The ONLY adjustable setting left is to ADD ledger entry types to the Chairperson's queue; it can never remove a requirement. */
   function setPolicy(db, ctx, key, values, reason) {
     require_(ctx, "policy.manage"); need(reason, "reason");
     if (!ledger.POLICY_DEFAULTS[key]) throw new Error("INVALID: unknown policy '" + key + "'");
-    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur);
-    const v = values || {};
-    if (key === "approval") {
-      if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
-      if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
-    } else if (key === "loan") {
-      if (v.guaranteeCover !== undefined) throw new Error("INVALID: guarantors always back the shortfall beyond the borrower's own qualification (confirmed SOB rule); it is not a setting");
-      if (v.repaymentAllocation !== undefined) {
-        if (v.repaymentAllocation !== null && !ledger.ALLOCATION_RULES.includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation must be INTEREST_FIRST, PRINCIPAL_FIRST, or null (pending SOB decision)");
-        next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.repaymentAllocation !== null && v.allocationConfirmed === true;
-      } else if (v.allocationConfirmed !== undefined) { if (v.allocationConfirmed && !next.repaymentAllocation) throw new Error("INVALID: choose the rule before confirming it"); next.allocationConfirmed = !!v.allocationConfirmed; }
-    } else if (key === "profit") {
-      if (v.addFactor) {
-        const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");
-        if (!/^[A-Z][A-Z0-9_]{2,40}$/.test(f.id)) throw new Error("INVALID: factor id must be UPPER_SNAKE_CASE");
-        if (!["eligibility", "multiplier"].includes(f.kind)) throw new Error("INVALID: factor kind must be eligibility or multiplier");
-        if ((cur.factors || []).some((x) => x.id === f.id)) throw new Error("DUPLICATE: factor " + f.id);
-        next.factors = (cur.factors || []).concat([{ id: f.id, kind: f.kind, name: String(f.name).trim(), approvedBy: String(f.approvedBy).trim(), approvalRef: String(f.approvalRef).trim(), description: String(f.description || "") }]);
-      }
+    if (key !== "approval") throw new Error("INVALID: the '" + key + "' rules are fixed by SOB and cannot be changed here");
+    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur), v = values || {};
+    if (v.loanSecondApproval === false) throw new Error("INVALID: loan approval always needs the Chairperson; this cannot be switched off");
+    if (v.requiredTypes !== undefined) {
+      if (Array.isArray(v.requiredTypes) && v.requiredTypes.some((x) => ["Savings", "Loan Repayment"].includes(x))) throw new Error("INVALID: routine savings deposits and normal loan repayments do not need the Chairperson");
+      if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types");
+      const keep = v.requiredTypes.slice(); (cur.requiredTypes || []).forEach((x) => { if (!keep.includes(x)) throw new Error("INVALID: a requirement for the Chairperson cannot be removed (" + x + ")"); });
+      next.requiredTypes = keep;
     }
     db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === key);
     if (!rec) { rec = { id: key }; db.policy.push(rec); }
@@ -402,15 +365,15 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
 
 return module.exports; })();
 __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
-/* SOB core/loans — application -> review -> (optional Chairperson approval) -> disbursement -> repayment -> clearance/reversal,
+/* SOB core/loans — application -> Super Admin review -> Chairperson approval (always) -> disbursement -> repayment -> clearance/reversal,
    plus the guarantor and security workflow. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
    SOB rules implemented here:
    - 3x savings is the STANDARD GUIDELINE, not a hard stop: a borrower who falls short may continue with guarantor(s) and/or exceptionally approved security.
    - MORE THAN ONE guarantor may back a loan; their commitments add up. A guarantee takes effect only when the guarantor ACCEPTS it, and from that instant the
      guaranteed amount is deducted from the guarantor's AVAILABLE savings (it stays in their account but cannot be withdrawn).
    - A guarantee secures the borrower's outstanding PRINCIPAL exposure beyond their own qualification (the shortfall). It is therefore released by the REDUCTION IN PRINCIPAL a repayment
-     causes - not by the cash received (part of a payment may be interest). How a payment splits is SOB's open repayment-allocation decision (ledger.loanRepaymentSplit): once confirmed
-     the release follows that rule; while pending only the part that is principal under EVERY possible rule is released, and the rest waits (nothing is assumed). Releases are pro rata to
+     causes - not by the cash received (part of a payment may be interest). FINAL SOB rule (ledger.walkAllocation): accumulated unpaid interest is cleared first, the remainder reduces
+     principal; only that principal reduction releases guarantee, so an interest-only payment releases nothing. Releases are pro rata to
      each guarantor's commitment and linked by repayment id; clearing the loan releases whatever remains; voiding a repayment re-commits exactly what it released.
    - Property / other security is an EXCEPTIONAL, separately recorded route (core/security.js), never the default. */
 (function (root, factory) {
@@ -603,14 +566,13 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });
     return loan;
   }
-  /* Approval. Admin (Super Admin) REVIEWS and, unless SOB's approval policy asks for the Chairperson, approves. With loanSecondApproval on, Admin's review moves the loan
-     to AwaitingApproval and only the Chairperson can make it Approved. The 3x guideline never rejects by itself: backing for any shortfall is what is checked. */
+  /* Approval. The Super Admin REVIEWS; that moves the loan to AwaitingApproval and only the Chairperson (a different person) can make it Approved. The 3x guideline never rejects by itself: backing for any shortfall is what is checked. */
   function approveLoan(db, ctx, loanId, note) {
     const second = G.can(ctx, "loan.secondApprove"), review = G.can(ctx, "loan.review");
     if (!second && !review) G.require(ctx, "loan.review");
     const loan = getLoan(db, loanId);
     const a = assessLoan(db, loan.memberId, loan.loanAmount, loanId);
-    const needsChair = !!L.getPolicy(db, "approval").loanSecondApproval;
+    const needsChair = true;                                       // FINAL SOB rule: every new loan needs the Chairperson
     if (loan.status === "AwaitingApproval") {
       if (!second) throw new Error("FORBIDDEN: this loan awaits the Chairperson's approval");
       if (G.config.approval.separateApprover && loan.reviewedBy === ctx.by) throw new Error("SEPARATION: the reviewer cannot also give the second approval");
@@ -706,7 +668,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db) || "PENDING_SOB_DECISION", guaranteeReleaseWaiting: pendingRelease(db, loan.id, asOf), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
   /* The linked double-entry view of one loan: every repayment beside the guarantor releases it caused, with both sides' running positions. */
   function linkedLedger(db, loanId, asOf) {
@@ -727,7 +689,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     let out = 0, com = 0;
     rows.forEach((r) => { out += r.borrowerChange; com += r.guarantorCommittedChange; r.borrowerPrincipalExposure = out; r.totalGuaranteeCommitted = com; delete r._o; });
     const rest = L.loanOutstanding(loan, db, asOf || dates.todayISO());
-    return { loanId, rows, summary: { allocationRule: split.status === "CONFIRMED" ? split.rule : "PENDING SOB DECISION", guaranteeAwaitingRule: pendingRelease(db, loanId, asOf || dates.todayISO()), borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
+    return { loanId, rows, summary: { allocationRule: "INTEREST_FIRST", borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
@@ -955,7 +917,7 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
     if (!dates.isISO(date) || dates.yearOf(date) !== year) throw new Error("INVALID: share-out date must fall in " + year);
     if (date.slice(5, 7) !== "12" && !(o.force && o.reason)) throw new Error("OUTSIDE_DECEMBER: share-out is a December event (force requires a reason)");
     const pv = previewShareOut(db, year, date);
-    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
+    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "SEPARATE", note: "Profit is distributed only through the Chairperson-approved profit distribution" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
     pv.rows.filter((r) => ["WITHDRAW_FULL", "WITHDRAW_AVAILABLE"].includes(r.savingsAction)).forEach((r) => {
       const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.withdraw, type: "Share-Out", purpose: "December share-out " + year + (r.retained ? " (UGX " + r.retained + " stays committed to guarantees)" : ""), shareOutId: event.id });
       event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.withdraw, committedRetained: r.retained, entryId: t.id });
@@ -993,7 +955,7 @@ __M['core/reconcile'] = (function(){ const module = {exports:{}}; const require 
     const dup = list(db).find((x) => x.status === "Open" && x.kind === d.kind && x.subject === d.subject);
     if (dup) throw new Error("ALREADY_OPEN: " + dup.id);
     const rec = { id: G.uid("DSC"), kind: d.kind, subject: String(d.subject), summary: String(d.summary), platformValue: d.platformValue ?? null, sourceValue: d.sourceValue ?? null,
-      source: d.source || "", status: "Open", openedDate: ctx.today, openedBy: ctx.by };
+      source: d.source || "", detail: d.detail && typeof d.detail === "object" ? JSON.parse(JSON.stringify(d.detail)) : undefined, status: "Open", openedDate: ctx.today, openedBy: ctx.by };
     list(db).push(rec);
     G.audit(db, ctx, "Discrepancy", rec.id, "Opened", null, { kind: rec.kind, subject: rec.subject, platformValue: rec.platformValue, sourceValue: rec.sourceValue });
     return rec;
@@ -1282,12 +1244,13 @@ __M['core/history'] = (function(){ const module = {exports:{}}; const require = 
   function importHistoricalEntries(db, ctx, a) {
     G.require(ctx, "history.import");
     const batchId = G.need(a.batchId, "batchId"), source = G.need(a.source, "source");
-    if (!Array.isArray(a.entries) || !a.entries.length) throw new Error("REQUIRED: entries");
+    const notes = Array.isArray(a.annotations) ? a.annotations : [];
+    if (!Array.isArray(a.entries) || (!a.entries.length && !notes.length)) throw new Error("REQUIRED: entries");
     if (a.entries.length > 5000) throw new Error("INVALID: at most 5000 entries per call");
     const byRef = new Set(db.transactions.filter((t) => t.sourceRef).map((t) => t.sourceRef));
     const live = new Map(); db.transactions.filter((t) => !t.voided && !t.sourceRef).forEach((t) => { const k = [t.memberId, t.date, t.type, Number(t.amount)].join("|"); live.set(k, (live.get(k) || 0) + 1); });
     const members = new Set(db.members.map((m) => m.id));
-    const out = { batchId, added: 0, alreadyImported: 0, possibleDuplicates: [], rejected: [], dryRun: !!a.dryRun, sum: { Savings: 0, Withdraw: 0, Profit: 0, "Share-Out": 0 } };
+    const out = { batchId, annotationsAdded: 0, annotationsAlreadyRecorded: 0, added: 0, alreadyImported: 0, possibleDuplicates: [], rejected: [], dryRun: !!a.dryRun, sum: { Savings: 0, Withdraw: 0, Profit: 0, "Share-Out": 0 } };
     const toAdd = [], seen = new Set();
     a.entries.forEach((e, i) => {
       const bad = (why) => out.rejected.push({ index: i, sourceRef: e && e.sourceRef, why });
@@ -1311,7 +1274,13 @@ __M['core/history'] = (function(){ const module = {exports:{}}; const require = 
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
         historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
-    if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, sum: out.sum }, "Verified historical records; original dates and source references preserved");
+    /* Audit ANNOTATIONS: workbook rows with no amount, no date or a zero amount. They are disclosed and kept for the record but are NEVER ledger transactions. */
+    const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
+    notes.forEach((n) => {
+      if (!n || !n.sourceRef) throw new Error("INVALID: annotation needs a sourceRef"); if (have.has(n.sourceRef)) { out.annotationsAlreadyRecorded++; return; } have.add(n.sourceRef); out.annotationsAdded++;
+      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
+    });
+    if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, annotations: out.annotationsAdded, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;
   }
   return { TYPES, idFor, importHistoricalEntries };
@@ -1354,7 +1323,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
-    openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source }),
+    openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
@@ -1365,17 +1334,79 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
     sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
     cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
-    importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries, dryRun: a.dryRun }),
+    importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries || [], annotations: a.annotations, dryRun: a.dryRun }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
+  };
+  /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
+     (New loan approval and exceptional security have their own two-step flows in loans.js / security.js; ledger entry types the Chairperson must also approve are
+     handled in governance.createEntry.) The Super Admin cannot bypass this: the command is NOT executed, it is stored as a request with its arguments and the
+     result of a trial run, and approveRequest alone (Chairperson only, never the requester) executes it. Routine savings deposits and loan repayments are not gated. */
+  const GATED = {
+    voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
+    voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
+    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
+    resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
+    distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
+  };
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
+  const summaryOf = (db, name, a) => {
+    if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "distributeProfit") return "Profit distribution " + a.period;
+    if (name === "executeShareOut") return "Share-out " + a.year;
+    return a.id || "";
+  };
+  function requestApproval(db, ctx, name, args) {
+    const g = GATED[name]; G.require(ctx, g.perm);
+    const trial = clone(db); let preview = null;                                  // validate now, so the Chairperson is never asked to approve something that cannot run
+    if (name === "distributeProfit") { preview = PR.preview(trial, { period: args.period }); }
+    COMMANDS[name](trial, Object.assign({}, ctx, { approvedRequest: "trial" }), args);
+    const req = { id: G.uid("REQ"), command: name, label: g.label, args: clone(args), summary: summaryOf(db, name, args), status: "Pending", requestedBy: ctx.by, requestedById: ctx.userId || ctx.by, requestedByRole: ctx.role, requestedDate: ctx.today, requestedAt: ctx.now,
+      reason: String(args.reason || args.sourceNote || "").slice(0, 300), requester: { name: ctx.by, id: ctx.userId, role: ctx.role, memberId: ctx.memberId || null } };
+    if (preview) Object.assign(req, { schedule: { pool: preview.pool, date: preview.date, basis: preview.basis, formula: preview.formula, rows: preview.rows, distributed: preview.distributed, undistributed: preview.undistributed, hash: hashRows(preview.rows) } });
+    (db.approvalRequests = db.approvalRequests || []).push(req);
+    G.audit(db, ctx, "ApprovalRequest", req.id, "Requested", null, { command: name, summary: req.summary }, "Awaiting the Chairperson: " + g.label);
+    return { pendingApproval: true, requestId: req.id, label: g.label, summary: req.summary };
+  }
+  function decideRequest(db, ctx, a, approve) {
+    G.require(ctx, "ledger.approve");
+    const req = (db.approvalRequests || []).find((x) => x.id === a.id); if (!req) throw new Error("NOT_FOUND: request " + a.id);
+    if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status);
+    if ((ctx.userId || ctx.by) === req.requestedById || ctx.by === req.requestedBy) throw new Error("SEPARATION: the person who initiated a request cannot approve it");
+    if (!approve) {
+      G.need(a.reason, "reason");
+      Object.assign(req, { status: "Rejected", decidedBy: ctx.by, decidedDate: ctx.today, decidedAt: ctx.now, decisionNote: String(a.reason).trim() });
+      G.audit(db, ctx, "ApprovalRequest", req.id, "Rejected", { status: "Pending" }, { status: "Rejected" }, a.reason); return req;
+    }
+    if (req.command === "distributeProfit") {                                  // post exactly what the Chairperson saw: the schedule must still be what it was
+      const now = PR.preview(db, { period: req.args.period }); if (hashRows(now.rows) !== req.schedule.hash) throw new Error("STALE: savings or loans changed since this schedule was prepared; ask the Super Admin to submit it again");
+    }
+    const exec = Object.assign(G.makeCtx({ name: req.requester.name, id: req.requester.id, role: req.requester.role, memberId: req.requester.memberId }, { today: ctx.today, now: ctx.now }), { approvedRequest: req.id, approvedBy: ctx.by });
+    const result = COMMANDS[req.command](db, exec, clone(req.args));
+    N.onCommand(db, exec, req.command, clone(req.args), result);                  // the same best-effort notices an ordinary run would queue
+    Object.assign(req, { status: "Approved", decidedBy: ctx.by, decidedDate: ctx.today, decidedAt: ctx.now, decisionNote: String(a.note || "").trim() });
+    G.audit(db, ctx, "ApprovalRequest", req.id, "Approved and executed", { status: "Pending" }, { status: "Approved", command: req.command }, "Initiated by " + req.requestedBy + ", approved by " + ctx.by + (a.note ? ": " + a.note : ""));
+    return { request: req, result };
+  }
+  COMMANDS.approveRequest = (db, ctx, a) => decideRequest(db, ctx, a, true);
+  COMMANDS.rejectRequest = (db, ctx, a) => decideRequest(db, ctx, a, false);
+  COMMANDS.cancelRequest = (db, ctx, a) => {
+    const req = (db.approvalRequests || []).find((x) => x.id === a.id); if (!req) throw new Error("NOT_FOUND: request " + a.id);
+    if (req.status !== "Pending") throw new Error("BAD_STATE: request is " + req.status); if ((ctx.userId || ctx.by) !== req.requestedById) throw new Error("FORBIDDEN: only the person who made the request can withdraw it");
+    Object.assign(req, { status: "Withdrawn", decidedBy: ctx.by, decidedDate: ctx.today }); G.audit(db, ctx, "ApprovalRequest", req.id, "Withdrawn", { status: "Pending" }, { status: "Withdrawn" }, a.reason || ""); return req;
   };
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    const gate = GATED[name];
+    if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});
     N.onCommand(db, ctx, name, args || {}, result);   // best-effort outbox notices; never blocks the command
     return result;
   }
-  return { COMMANDS, names: Object.keys(COMMANDS), run };
+  return { COMMANDS, GATED, names: Object.keys(COMMANDS), run };
 });
 
 return module.exports; })();
@@ -1401,8 +1432,7 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     const loans = L.activeLoans(d);
     const outstanding = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, d, asOf)), 0);
     const positions = loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => L.loanInterestPosition(l, d, asOf));
-    const irMin = positions.reduce((a, p) => a + p.unpaidInterestRange.min, 0), irMax = positions.reduce((a, p) => a + p.unpaidInterestRange.max, 0), irPending = irMin !== irMax;
-    const unpaidInterest = irPending ? null : irMin;                               // exact unless SOB's repayment-allocation rule is still pending AND it matters
+    const unpaidInterest = positions.reduce((a, p) => a + p.unpaidInterest, 0);     // interest accrued less the part of payments applied to interest (interest first)
     const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + L.guaranteeRemaining(g), 0);
     const pol = L.getPolicy(db, "loan");
     return {
@@ -1410,15 +1440,15 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
       totalSavings: { value: savings, definition: "Net of all member savings, withdrawals, charges and share-outs, up to the as-of date." },
       availableCash: { value: cash, definition: "Net cash movement in the ledger (deposits, repayments, subscriptions, income minus withdrawals, disbursements, expenses)." },
       outstandingLoans: { value: outstanding, count: loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).length, definition: "Sum of Loan Payable minus repayments across booked loans." },
-      interestReceivable: { value: unpaidInterest, min: irMin, max: irMax, pending: irPending, loans: positions.length, provisional: irPending,
-        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + (L.confirmedAllocation(db) ? L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ", confirmed by SOB" : "SOB has not yet decided whether repayments go to interest or principal first, so while that is pending the figure is shown as a range wherever it matters") + "). Tap for every member and loan." },
+      interestReceivable: { value: unpaidInterest, loans: positions.length,
+        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (SOB rule: accumulated unpaid interest is cleared first, the remainder reduces principal). Tap for every member and loan." },
       profit: { value: profit, definition: "Profit entries recorded in the selected period." },
       expenses: { value: expenses, definition: "Expense entries recorded in the selected period." },
       members: { value: db.members.filter((m) => m.status !== "Inactive").length, definition: "Active registered members." },
       loanExposure: { pct: savings > 0 ? Math.round((outstanding / savings) * 1000) / 10 : null, guaranteed,
         definition: "Outstanding Loans / Total Savings; 'guaranteed' is the total still committed by guarantors (released progressively as borrowers repay)." },
-      awaitingApproval: { value: (db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).length + (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).length + (db.securities || []).filter((x) => x.status === "Proposed").length,
-        definition: "Items waiting for the Chairperson's second approval (ledger entries, loans, exceptional security)." }
+      awaitingApproval: { value: (db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).length + (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).length + (db.securities || []).filter((x) => x.status === "Proposed").length + (db.approvalRequests || []).filter((x) => x.status === "Pending").length,
+        definition: "Items waiting for the Chairperson's second approval (loans, exceptional security, voids/adjustments, profit distribution, share-out)." }
     };
   }
   function loanBook(db, asOf) {
@@ -1437,12 +1467,11 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
       return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
         monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
-        unpaidInterest: p.unpaidInterest, unpaidInterestRange: p.unpaidInterestRange, pending: p.pending, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
+        unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });
     const pol = L.getPolicy(db, "loan");
-    const tmin = rows.reduce((a, r) => a + r.unpaidInterestRange.min, 0), tmax = rows.reduce((a, r) => a + r.unpaidInterestRange.max, 0);
-    return { asOf, rows, total: tmin === tmax ? tmin : null, totalMin: tmin, totalMax: tmax, pending: tmin !== tmax, accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
-      allocation: L.confirmedAllocation(db), allocationConfirmed: !!L.confirmedAllocation(db) };
+    return { asOf, rows, total: rows.reduce((a, r) => a + r.unpaidInterest, 0), accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
+      allocation: "INTEREST_FIRST", allocationConfirmed: true };
   }
   return { dashboard, loanBook, pipeline, interestReceivable };
 });
@@ -1471,7 +1500,7 @@ __M['core/migrate'] = (function(){ const module = {exports:{}}; const require = 
         n.interestHistory = n.interestHistory || [];
         return n;
       }),
-      guarantees: [], securities: [], policy: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
+      guarantees: [], securities: [], policy: [], approvalRequests: [], historicalNotes: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
       users: src.users || [], requests: src.requests || [], airtimeRequests: src.airtimeRequests || [],
       auditLog: (src.auditLog || []).slice(), reconciliations: src.reconciliations || [], smsFailures: src.smsFailures || [],
       legacyAdministration: src.ledger || [], // archived bank-level rows; they do NOT feed any total
@@ -1541,14 +1570,15 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   }
   function interestReceivable(db, asOf) {
     const d = K.interestReceivable(db, asOf);
-    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest === null ? "pending SOB rule: " + r.unpaidInterestRange.min + " to " + r.unpaidInterestRange.max : r.unpaidInterest, outstanding: r.outstanding }));
+    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding }));
     return R("Interest Receivable (unpaid interest on outstanding loans)", ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"], rows,
-      { unpaidInterest: d.total === null ? "pending SOB rule: " + d.totalMin + " to " + d.totalMax : d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocationConfirmed ? d.allocation : "PENDING SOB DECISION (nothing assumed)" });
+      { unpaidInterest: d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: "INTEREST_FIRST (SOB rule: unpaid interest first, then principal)" });
   }
   function approvals(db) {
     const rows = [].concat((db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).map((t) => ({ kind: "Ledger entry", ref: t.id, member: name(db, t.memberId), detail: t.type + " " + t.amount + " on " + dates.toDisplay(t.date), enteredBy: t.createdBy })),
       (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).map((l) => ({ kind: "Loan", ref: l.id, member: name(db, l.memberId), detail: "Loan " + l.loanAmount, enteredBy: l.reviewedBy })),
-      (db.securities || []).filter((x) => x.status === "Proposed").map((x) => ({ kind: "Exceptional security", ref: x.id, member: name(db, x.memberId), detail: x.kind + ": " + x.description, enteredBy: x.proposedBy })));
+      (db.securities || []).filter((x) => x.status === "Proposed").map((x) => ({ kind: "Exceptional security", ref: x.id, member: name(db, x.memberId), detail: x.kind + ": " + x.description, enteredBy: x.proposedBy })),
+      (db.approvalRequests || []).filter((x) => x.status === "Pending").map((x) => ({ kind: x.label, ref: x.id, member: "", detail: x.summary + (x.reason ? " — " + x.reason : ""), enteredBy: x.requestedBy })));
     return R("Awaiting Chairperson approval", ["kind", "ref", "member", "detail", "enteredBy"], rows, { waiting: rows.length });
   }
   function savings(db) {
@@ -1589,7 +1619,6 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
     return R("Profit distribution " + d.period, ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], d.rows, { pool: d.pool, distributed: d.distributed, undistributed: d.undistributed, basis: d.basis, formula: d.formula });
   }
   function repaymentAllocation(db) {
-    if (!L.confirmedAllocation(db)) return { blocked: true, title: "Interest vs principal received", reason: "PENDING_SOB_DECISION: repayments go to interest first or principal first - awaiting SOB. Nothing is assumed; no balance or guarantee depends on it until it is confirmed." };
     const rows = L.activeLoans(db).map((l) => { const p = L.loanInterestPosition(l, db, dates.todayISO()); return { loanId: l.id, member: name(db, l.memberId), repaid: p.totalRepaid, toInterest: p.interestPaid, toPenalties: p.penaltiesPaid, toPrincipal: p.principalPaid }; });
     return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
@@ -1645,6 +1674,8 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     guarantees: { sheet: "Guarantees", cols: ["id","loanId","guarantorId","amount","status","dateCommitted","dateReleased","releaseReason","committedBy"] },
     securities: { sheet: "Securities", cols: [] },
     policy: { sheet: "Policy", cols: [] },
+    approvalRequests: { sheet: "ApprovalRequests", cols: [] },
+    historicalNotes: { sheet: "HistoricalNotes", cols: [] },
     yearCycles: { sheet: "YearCycles", cols: ["year","status","openedDate","closedDate","shareOutId"] },
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },

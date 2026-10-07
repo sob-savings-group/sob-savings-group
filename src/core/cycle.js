@@ -62,7 +62,7 @@
     if (!dates.isISO(date) || dates.yearOf(date) !== year) throw new Error("INVALID: share-out date must fall in " + year);
     if (date.slice(5, 7) !== "12" && !(o.force && o.reason)) throw new Error("OUTSIDE_DECEMBER: share-out is a December event (force requires a reason)");
     const pv = previewShareOut(db, year, date);
-    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
+    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "SEPARATE", note: "Profit is distributed only through the Chairperson-approved profit distribution" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
     pv.rows.filter((r) => ["WITHDRAW_FULL", "WITHDRAW_AVAILABLE"].includes(r.savingsAction)).forEach((r) => {
       const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.withdraw, type: "Share-Out", purpose: "December share-out " + year + (r.retained ? " (UGX " + r.retained + " stays committed to guarantees)" : ""), shareOutId: event.id });
       event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.withdraw, committedRetained: r.retained, entryId: t.id });

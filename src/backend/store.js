@@ -13,6 +13,8 @@
     guarantees: { sheet: "Guarantees", cols: ["id","loanId","guarantorId","amount","status","dateCommitted","dateReleased","releaseReason","committedBy"] },
     securities: { sheet: "Securities", cols: [] },
     policy: { sheet: "Policy", cols: [] },
+    approvalRequests: { sheet: "ApprovalRequests", cols: [] },
+    historicalNotes: { sheet: "HistoricalNotes", cols: [] },
     yearCycles: { sheet: "YearCycles", cols: ["year","status","openedDate","closedDate","shareOutId"] },
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },

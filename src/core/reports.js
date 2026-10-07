@@ -34,14 +34,15 @@
   }
   function interestReceivable(db, asOf) {
     const d = K.interestReceivable(db, asOf);
-    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest === null ? "pending SOB rule: " + r.unpaidInterestRange.min + " to " + r.unpaidInterestRange.max : r.unpaidInterest, outstanding: r.outstanding }));
+    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding }));
     return R("Interest Receivable (unpaid interest on outstanding loans)", ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"], rows,
-      { unpaidInterest: d.total === null ? "pending SOB rule: " + d.totalMin + " to " + d.totalMax : d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocationConfirmed ? d.allocation : "PENDING SOB DECISION (nothing assumed)" });
+      { unpaidInterest: d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: "INTEREST_FIRST (SOB rule: unpaid interest first, then principal)" });
   }
   function approvals(db) {
     const rows = [].concat((db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).map((t) => ({ kind: "Ledger entry", ref: t.id, member: name(db, t.memberId), detail: t.type + " " + t.amount + " on " + dates.toDisplay(t.date), enteredBy: t.createdBy })),
       (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).map((l) => ({ kind: "Loan", ref: l.id, member: name(db, l.memberId), detail: "Loan " + l.loanAmount, enteredBy: l.reviewedBy })),
-      (db.securities || []).filter((x) => x.status === "Proposed").map((x) => ({ kind: "Exceptional security", ref: x.id, member: name(db, x.memberId), detail: x.kind + ": " + x.description, enteredBy: x.proposedBy })));
+      (db.securities || []).filter((x) => x.status === "Proposed").map((x) => ({ kind: "Exceptional security", ref: x.id, member: name(db, x.memberId), detail: x.kind + ": " + x.description, enteredBy: x.proposedBy })),
+      (db.approvalRequests || []).filter((x) => x.status === "Pending").map((x) => ({ kind: x.label, ref: x.id, member: "", detail: x.summary + (x.reason ? " — " + x.reason : ""), enteredBy: x.requestedBy })));
     return R("Awaiting Chairperson approval", ["kind", "ref", "member", "detail", "enteredBy"], rows, { waiting: rows.length });
   }
   function savings(db) {
@@ -82,7 +83,6 @@
     return R("Profit distribution " + d.period, ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], d.rows, { pool: d.pool, distributed: d.distributed, undistributed: d.undistributed, basis: d.basis, formula: d.formula });
   }
   function repaymentAllocation(db) {
-    if (!L.confirmedAllocation(db)) return { blocked: true, title: "Interest vs principal received", reason: "PENDING_SOB_DECISION: repayments go to interest first or principal first - awaiting SOB. Nothing is assumed; no balance or guarantee depends on it until it is confirmed." };
     const rows = L.activeLoans(db).map((l) => { const p = L.loanInterestPosition(l, db, dates.todayISO()); return { loanId: l.id, member: name(db, l.memberId), repaid: p.totalRepaid, toInterest: p.interestPaid, toPenalties: p.penaltiesPaid, toPrincipal: p.principalPaid }; });
     return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
