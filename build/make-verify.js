@@ -9,7 +9,7 @@ const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <label>Admin ID</label><input id="aid" type="text" value="ADMIN"><label>Admin PIN</label><input id="apin" type="password">
 <button id="b-smoke">1. Run smoke check (safe, read-only)</button>
 <fieldset><legend>2. Write test (SCRATCH deployment only)</legend><small>Needs a Chairperson, because the Super Admin's void must be approved by someone else.</small>
-<label>Chairperson ID</label><input id="cid" type="text" value="CHAIR"><label>Chairperson starting PIN (6+ characters)</label><input id="cslip" type="password"><label>Chairperson's own new PIN (4+ characters, used once)</label><input id="cown" type="password">
+<label>Chairperson ID</label><input id="cid" type="text" value="CHAIR"><label>Chairperson starting PIN (6+ characters)</label><input id="cslip" type="password"><label>Chairperson's own new PIN (6+ characters, used once)</label><input id="cown" type="password">
 <button id="b-chair">2a. Create Chairperson sign-in</button><br><label><input id="scratch" type="checkbox"> This is a scratch deployment, not production</label><button id="b-write">2b. Run write test</button></fieldset>
 <button id="b-copy">Copy results</button><pre id="out">Results appear here.</pre><script>${js.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
 fs.writeFileSync(path.join(root, "dist/verify.html"), page); console.log("built dist/verify.html", page.length, "bytes");

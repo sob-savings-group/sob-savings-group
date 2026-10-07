@@ -23,5 +23,6 @@ vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code
   await pg.fill("#cslip", "Chair-Slip-91"); await pg.fill("#cown", "Chair-Own-5512"); await pg.click("#b-chair"); await wait(); t = await pg.innerText("#out"); assert.ok(/RESULT: PASS/.test(t), "chair");
   await pg.click("#b-write"); await wait(); t = await pg.innerText("#out"); assert.ok(/stopped/.test(t) && /scratch/.test(t), "write refused without the scratch tick");
   await pg.check("#scratch"); await pg.click("#b-write"); await pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent) && /audit trail/.test(document.getElementById("out").textContent), null, { timeout: 60000 }); t = await pg.innerText("#out"); console.log(t); assert.ok(/RESULT: PASS/.test(t) && !/FAIL/.test(t), "write");
+  await pg.click("#b-write"); await pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent) && /audit trail/.test(document.getElementById("out").textContent), null, { timeout: 60000 }); t = await pg.innerText("#out"); assert.ok(/RESULT: PASS/.test(t) && !/FAIL/.test(t), "write test must pass when run a second time too (existing test member and entries)");
   assert.deepEqual(errs, []); await br.close(); srv.close(); console.log("verify page e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });

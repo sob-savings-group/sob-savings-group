@@ -5,7 +5,7 @@
 <label>Admin ID</label><input id="aid" type="text" value="ADMIN"><label>Admin PIN</label><input id="apin" type="password">
 <button id="b-smoke">1. Run smoke check (safe, read-only)</button>
 <fieldset><legend>2. Write test (SCRATCH deployment only)</legend><small>Needs a Chairperson, because the Super Admin's void must be approved by someone else.</small>
-<label>Chairperson ID</label><input id="cid" type="text" value="CHAIR"><label>Chairperson starting PIN (6+ characters)</label><input id="cslip" type="password"><label>Chairperson's own new PIN (4+ characters, used once)</label><input id="cown" type="password">
+<label>Chairperson ID</label><input id="cid" type="text" value="CHAIR"><label>Chairperson starting PIN (6+ characters)</label><input id="cslip" type="password"><label>Chairperson's own new PIN (6+ characters, used once)</label><input id="cown" type="password">
 <button id="b-chair">2a. Create Chairperson sign-in</button><br><label><input id="scratch" type="checkbox"> This is a scratch deployment, not production</label><button id="b-write">2b. Run write test</button></fieldset>
 <button id="b-copy">Copy results</button><pre id="out">Results appear here.</pre><script>/* src/core/dates.js */
 /* SOB core/dates — EAT (UTC+3, no DST). Internal format YYYY-MM-DD; display DD/MM/YYYY.
@@ -1746,16 +1746,17 @@
     start(); try {
       if (!$("scratch").checked) throw new Error("Tick the box: this writes a test entry, ONLY for a scratch deployment, never production");
       const t = (await login($("aid").value.trim(), $("apin").value)).token, led = must(await api({ action: "getLedger", token: t }), "getLedger").db;
-      if (!led.members.length) { must(await api({ action: "command", token: t, name: "addMember", args: { id: "SOB-999", name: "Smoke Test Member", regDate: "" } }), "add test member"); add("empty scratch ledger: test member SOB-999 added", true); led.members.push({ id: "SOB-999" }); }
-      const m = led.members[0], before = led.members.length === 1 && m.id === "SOB-999" ? 0 : L.memberSavings(led, m.id);
+      if (!led.members.length) { must(await api({ action: "command", token: t, name: "addMember", args: { id: "SOB-999", name: "Smoke Test Member", regDate: "" } }), "add test member"); add("empty scratch ledger: test member SOB-999 added", true); led.transactions = led.transactions || []; led.members.push({ id: "SOB-999" }); }
+      const m = led.members[0], before = L.memberSavings(led, m.id);
       const r = must(await api({ action: "command", token: t, name: "createEntry", args: { date: D.todayISO(), memberId: m.id, amount: 1234, type: "Savings", purpose: "smoke test" } }), "createEntry");
       add("entry saved", L.memberSavings(r.db, m.id) === before + 1234);
       const back = must(await api({ action: "getLedger", token: t }), "re-read").db; add("entry persisted in the Sheet", L.memberSavings(back, m.id) === before + 1234);
       const rq = must(await api({ action: "command", token: t, name: "voidEntry", args: { id: r.result.id, reason: "smoke test cleanup" } }), "void request");
       add("Super Admin's void only creates a request; balance unchanged", !!(rq.result && rq.result.pendingApproval) && L.memberSavings(rq.db, m.id) === before + 1234);
       const self = await api({ action: "command", token: t, name: "approveRequest", args: { id: rq.result.requestId } }); add("Super Admin cannot approve their own request", !self.ok && /FORBIDDEN|SEPARATION/.test(self.error || ""));
-      const lc = must(await api({ action: "login", id: $("cid").value.trim(), pin: $("cslip").value }), "Chairperson sign-in");
-      let ct = lc.token; if (lc.user.mustChangePin) { must(await api({ action: "setPin", token: ct, oldPin: $("cslip").value, newPin: $("cown").value }), "Chairperson set PIN"); }
+      if (String($("cown").value).length < 6) throw new Error("The Chairperson's own PIN must be at least 6 characters");
+      let ct, tryOwn = await api({ action: "login", id: $("cid").value.trim(), pin: $("cown").value });   // already changed on an earlier run?
+      if (tryOwn.ok) ct = tryOwn.token; else { const lc = must(await api({ action: "login", id: $("cid").value.trim(), pin: $("cslip").value }), "Chairperson sign-in"); ct = lc.token; if (lc.user.mustChangePin) must(await api({ action: "setPin", token: ct, oldPin: $("cslip").value, newPin: $("cown").value }), "Chairperson set PIN"); }
       const v = must(await api({ action: "command", token: ct, name: "approveRequest", args: { id: rq.result.requestId } }), "Chairperson approve");
       add("Chairperson approval voids it; balance restored, record kept", L.memberSavings(v.db, m.id) === before && v.db.transactions.some((x) => x.id === r.result.id && x.voided));
       add("audit trail has the actions", v.db.auditLog.some((a) => a.entityId === r.result.id && /oid/.test(a.action)) && v.db.auditLog.some((a) => a.entityType === "ApprovalRequest"));
