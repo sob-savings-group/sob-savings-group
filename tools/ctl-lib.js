@@ -1,6 +1,8 @@
 /* SOB deployment/verification library. Every function takes `api(body) -> parsed JSON` so the SAME code runs against a real deployed
    Apps Script URL (sobctl) and against the local test server (tests/ctl.test.js). Nothing here bypasses the server's own checks. */
-const fs = require("fs");
+const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const B = require("../src/backend/backup.js");
+const localEnv = { now: () => new Date().toISOString(), hash: (x) => crypto.createHash("sha256").update(x).digest("hex") };
 const M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js"), I = require("../src/core/integrity.js"), D = require("../src/core/dates.js");
 
 const must = (r, what) => { if (!r || !r.ok) throw new Error(what + " failed: " + (r && r.error)); return r; };
@@ -96,4 +98,38 @@ async function applyPlan(api, o) {
   return { ok: c.ok, checks: c.list };
 }
 async function verify(api, o) { const t = await login(api, o.adminId, o.adminPin), db = must(await api({ action: "getLedger", token: t }), "getLedger").db, asOf = o.asOf || D.todayISO(); return { totals: L.computeGroupTotals(db, asOf), integrity: I.check(db, asOf), counts: { members: db.members.length, transactions: db.transactions.length, loans: db.loans.length, audit: db.auditLog.length, openDiscrepancies: (db.discrepancies || []).filter((d) => d.status === "Open").length } }; }
-module.exports = { login, smokeReadOnly, smokeWrite, importLedger, importUsers, registerDiscrepancies, applyPlan, verify };
+/* Offline backup: a verified, credential-free export written OUTSIDE the repository (it contains members' personal data). */
+async function backupToFile(api, o) {
+  const out = path.resolve(o.outPath || ""), repo = path.resolve(__dirname, "..");
+  if (!o.outPath) throw new Error("usage: backup <out.json>");
+  if (out === repo || out.startsWith(repo + path.sep)) throw new Error("REFUSED: write backups outside the repository (they contain personal data)");
+  const t = await login(api, o.adminId, o.adminPin), ex = must(await api({ action: "exportBackup", token: t }), "exportBackup").backup, v = B.verifyExport(localEnv, ex), c = checks();
+  c.add("export checksum and record counts verify", v.ok, v.error);
+  if (!v.ok) return { ok: false, checks: c.list };
+  const integ = I.check(v.db, o.asOf || D.todayISO());
+  fs.writeFileSync(out, JSON.stringify(ex), { mode: 0o600 });
+  c.add("written " + out + " (" + v.counts.members + " members, " + v.counts.transactions + " transactions, " + v.counts.loans + " loans, " + v.counts.auditLog + " audit records)", true);
+  c.add("integrity findings of the backed-up state: " + integ.errors + " error(s), " + integ.warnings + " warning(s) (reported, not blocking)", true);
+  return { ok: c.ok, checks: c.list };
+}
+function backupVerifyFile(o) {
+  const ex = JSON.parse(fs.readFileSync(o.path, "utf8")), v = B.verifyExport(localEnv, ex), c = checks();
+  c.add("checksum and counts verify", v.ok, v.error);
+  if (v.ok) { const integ = I.check(v.db, o.asOf || D.todayISO()); c.add("file is restorable (valid ledger, " + v.counts.transactions + " transactions); integrity: " + integ.errors + " error(s)", true); }
+  return { ok: c.ok, checks: c.list };
+}
+/* Recovery into a NEW, EMPTY deployment: verify the file, import it, then prove the Sheet equals the file. Sign-ins are re-provisioned afterwards. */
+async function restoreBackup(api, o) {
+  const ex = JSON.parse(fs.readFileSync(o.path, "utf8")), v = B.verifyExport(localEnv, ex), c = checks(), asOf = o.asOf || D.todayISO();
+  c.add("backup file verifies", v.ok, v.error); if (!v.ok) return { ok: false, checks: c.list };
+  const db = v.db, t = await login(api, o.adminId, o.adminPin);
+  must(await api({ action: "importSnapshot", token: t, db }), "importSnapshot");
+  const back = must(await api({ action: "getLedger", token: t }), "readback").db;
+  c.add("record counts equal the backup", back.members.length === db.members.length && back.transactions.length === db.transactions.length && back.loans.length === db.loans.length && back.auditLog.length === db.auditLog.length);
+  c.add("every transaction, loan and audit id preserved", ["transactions", "loans", "auditLog"].every((k) => db[k].every((x) => back[k].find((y) => y.id === x.id))));
+  c.add("group savings identical", L.computeGroupTotals(back, asOf).groupSavings === L.computeGroupTotals(db, asOf).groupSavings);
+  c.add("every member's savings identical", db.members.every((m) => L.memberSavings(back, m.id) === L.memberSavings(db, m.id)));
+  c.add("every loan balance identical", db.loans.every((l) => L.loanOutstanding(back.loans.find((x) => x.id === l.id), back, asOf) === L.loanOutstanding(l, db, asOf)));
+  return { ok: c.ok, checks: c.list };
+}
+module.exports = { backupToFile, backupVerifyFile, restoreBackup, login, smokeReadOnly, smokeWrite, importLedger, importUsers, registerDiscrepancies, applyPlan, verify };

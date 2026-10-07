@@ -6,11 +6,11 @@ execSync("node " + path.join(root, "build/build-gs.js"));
 const sheets = {}, cache = {}, props = { SOB_INITIAL_ADMIN_PIN: "Adm1n-Setup-77" };
 const mk = () => { const d = []; return { getLastRow: () => d.length, getLastColumn: () => d.reduce((a, r) => Math.max(a, r.length), 0), getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (d[r - 1 + i] && d[r - 1 + i][c - 1 + j] !== undefined ? d[r - 1 + i][c - 1 + j] : ""))), setValues: (v) => v.forEach((row, i) => row.forEach((x, j) => { d[r - 1 + i] = d[r - 1 + i] || []; d[r - 1 + i][c - 1 + j] = x; })), clearContent: () => { for (let i = 0; i < nr; i++) if (d[r - 1 + i]) for (let j = 0; j < nc; j++) d[r - 1 + i][c - 1 + j] = ""; } }; } }; };
 const sb = { SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk()) }) }, LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-  PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, deleteProperty() {} }) }, UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
+  UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
   Utilities: { DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 }, computeDigest: (a, s) => Array.from(crypto.createHash("sha256").update(s).digest()).map((b) => (b > 127 ? b - 256 : b)), getUuid: () => crypto.randomUUID() },
   PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, deleteProperty: (k) => { delete props[k]; } }) }, ContentService: { MimeType: { JSON: "json" }, createTextOutput: (s) => ({ s, setMimeType() { return this; } }) }, console };
-vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code_Ledger.gs"), "utf8") + "\nthis.doPost=doPost;this.initAdmin=initAdmin;this.setupAdmin=setupAdmin;", sb);
+vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code_Ledger.gs"), "utf8") + "\nthis.doPost=doPost;this.initAdmin=initAdmin;this.setupAdmin=setupAdmin;this.dailyBackup=dailyBackup;this.restoreFromProperty=restoreFromProperty;", sb);
 const srv = http.createServer((q, r) => { let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(sb.doPost({ postData: { contents: b } }).s); }); });
 const run = (args, env) => new Promise((res) => { const p = spawn("node", [path.join(root, "tools/sobctl.js")].concat(args), { env: Object.assign({}, process.env, env) }); let out = ""; p.stdout.on("data", (d) => (out += d)); p.stderr.on("data", (d) => (out += d)); p.on("close", (code) => res({ code, out })); });
 const rawLegacy = JSON.parse(fs.readFileSync(legacy, "utf8")), rawTx = rawLegacy.transactions.length, expectedSavings = require("../src/core/ledger.js").computeGroupTotals(require("../src/core/migrate.js").migrateLegacy(rawLegacy, "2026-10-07"), "2026-10-07").groupSavings;
@@ -59,9 +59,39 @@ let f = 0; const tests = []; const t = (n, fn) => tests.push([n, fn]);
     const r = await run(["apply-plan", path.join(tmp, "recon/reconciliation.json"), "--approved-by", "Test Approver, Chairperson, 2026-10-07"], base); assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out);
     const v = JSON.parse((await run(["verify"], base)).out); assert.equal(v.totals.groupSavings, expectedSavings);
   });
+  t("offline backup: verified export written outside the repo (mode 600), refused inside it, restorable and tamper-evident", async () => {
+    const out = path.join(tmp, "backup.json");
+    const bad = await run(["backup", path.join(root, "oops-backup.json")], base); assert.notEqual(bad.code, 0); assert.match(bad.out, /REFUSED/); assert.ok(!fs.existsSync(path.join(root, "oops-backup.json")));
+    const r = await run(["backup", out], base); assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out); assert.equal(fs.statSync(out).mode & 0o077, 0, "file readable by owner only");
+    const ex = JSON.parse(fs.readFileSync(out, "utf8")); assert.ok(!ex.payload.includes("pinHash"), "no credentials in a backup");
+    const v = await run(["backup-verify", out], base); assert.equal(v.code, 0, v.out);
+    const tampered = path.join(tmp, "tampered.json"); fs.writeFileSync(tampered, JSON.stringify(Object.assign({}, ex, { payload: ex.payload.replace(/"amount":(\d+)/, '"amount":9$1') })));
+    const tv = await run(["backup-verify", tampered], base); assert.notEqual(tv.code, 0); assert.match(tv.out, /CHECKSUM_MISMATCH/);
+    const again = await run(["restore-backup", out], base); assert.notEqual(again.code, 0); assert.match(again.out, /NOT_EMPTY/, "restore only into an empty deployment");
+  });
+  t("in-sheet backups through the web API: Admin only; list/verify; scheduled dailyBackup; editor-only restore with a pre-restore snapshot", async () => {
+    const call = (b) => JSON.parse(sb.doPost({ postData: { contents: JSON.stringify(b) } }).s); const tok = call({ action: "login", id: "ADMIN", pin: adminPin }).token;
+    const m = slipFor("SOB-002"), mt = call({ action: "login", id: m[0], pin: m[3] }).token;
+    for (const a of ["backupNow", "listBackups", "exportBackup", "verifyBackup"]) assert.match(call({ action: a, token: mt }).error, /FORBIDDEN/);
+    const b = call({ action: "backupNow", token: tok }); assert.ok(b.ok && b.id, JSON.stringify(b)); assert.ok(call({ action: "backupNow", token: tok }).skipped, "unchanged ledger not duplicated");
+    assert.ok(call({ action: "verifyBackup", token: tok, id: b.id }).ok); assert.equal(call({ action: "verifyBackup", token: tok, id: "BK-nope" }).error, "NOT_FOUND");
+    const before = call({ action: "getLedger", token: tok }).db.transactions.length;
+    assert.ok(call({ action: "command", token: tok, name: "createEntry", args: { date: "2026-10-07", memberId: "SOB-002", amount: 1234, type: "Savings" } }).ok);
+    assert.ok(JSON.parse(sb.dailyBackup()).ok); props.SOB_RESTORE_BACKUP_ID = b.id; const rr = JSON.parse(sb.restoreFromProperty()); assert.ok(rr.ok, JSON.stringify(rr)); assert.equal(props.SOB_RESTORE_BACKUP_ID, undefined);
+    assert.equal(call({ action: "getLedger", token: tok }).db.transactions.length, before, "ledger back at the snapshot"); assert.ok(call({ action: "listBackups", token: tok }).backups.some((x) => /^pre-restore/.test(x.label)));
+    assert.throws(() => sb.restoreFromProperty(), /Set Script Property/);
+    assert.equal(call({ action: "login", id: "ADMIN", pin: adminPin }).ok, true, "sign-ins survive a restore");
+  });
   t("smoke-write is refused unless explicitly allowed; passes on a scratch deployment", async () => {
     assert.notEqual((await run(["smoke-write"], base)).code, 0);
     const r = await run(["smoke-write"], Object.assign({}, base, { SOB_ALLOW_WRITE_TESTS: "yes" })); assert.equal(r.code, 0, r.out);
+  });
+  t("DISASTER RECOVERY: a brand-new empty deployment is rebuilt from the offline backup with every figure identical", async () => {
+    const out = path.join(tmp, "backup.json"), ex = JSON.parse(fs.readFileSync(out, "utf8")), orig = JSON.parse(ex.payload);
+    Object.keys(sheets).forEach((k) => delete sheets[k]); Object.keys(cache).forEach((k) => delete cache[k]); props.SOB_INITIAL_ADMIN_PIN = adminPin; sb.setupAdmin();
+    const r = await run(["restore-backup", out], base); assert.equal(r.code, 0, r.out); assert.ok(!/FAIL/.test(r.out), r.out); assert.match(r.out, /every loan balance identical/);
+    const v = JSON.parse((await run(["verify"], base)).out); assert.equal(v.counts.transactions, orig.transactions.length); assert.equal(v.counts.audit, orig.auditLog.length);
+    const u = await run(["import-users", path.join(tmp, "users.json")], base); assert.equal(u.code, 0, "sign-ins re-provisioned after recovery: " + u.out);
   });
   for (const [n, fn] of tests) { try { await fn(); console.log("  ok  " + n); } catch (e) { f++; console.log("FAIL  " + n + "\n      " + String(e.message).split("\n").slice(0, 6).join("\n      ")); } }
   srv.close(); fs.rmSync(dataDir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); console.log(f ? f + " FAILED" : tests.length + " ctl tests passed"); process.exit(f ? 1 : 0);

@@ -58,3 +58,21 @@ function initAdmin(id, pin){
   S.writeCollection(env.ss, "users", users);
   return "Admin created";
 }
+
+/* ---- Backups. dailyBackup() is what the trigger runs; it never throws away data (see backend/backup.js retention). ---- */
+function dailyBackup(){
+  var env = __env(), lock = env.lock; lock.waitLock(30000);
+  try { return JSON.stringify(__M['backend/backup'].snapshot(env.ss, env, "daily")); } finally { lock.releaseLock(); }
+}
+/* Run once from the editor: schedules dailyBackup() every day around 02:00 (Africa/Kampala). Safe to run again (replaces the old trigger). */
+function installBackupTrigger(){
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === "dailyBackup") ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger("dailyBackup").timeBased().everyDays(1).atHour(2).create();
+  return "dailyBackup scheduled";
+}
+/* Disaster recovery (editor only): set Script Property SOB_RESTORE_BACKUP_ID to a Backups-sheet id, then Run > restoreFromProperty. The property is cleared afterwards. */
+function restoreFromProperty(){
+  var p = PropertiesService.getScriptProperties(), id = p.getProperty("SOB_RESTORE_BACKUP_ID"); if (!id) throw new Error("Set Script Property SOB_RESTORE_BACKUP_ID first");
+  var env = __env(); env.lock.waitLock(30000);
+  try { var r = __M['backend/backup'].restore(env.ss, env, id, "Owner (editor)"); if (r.ok) p.deleteProperty("SOB_RESTORE_BACKUP_ID"); return JSON.stringify(r); } finally { env.lock.releaseLock(); }
+}

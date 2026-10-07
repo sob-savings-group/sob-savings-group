@@ -2,7 +2,8 @@
 /* sobctl — deploy/verify the SOB platform against the REAL deployed Apps Script web app.
    env: SOB_URL (web-app /exec URL), SOB_ADMIN_ID, SOB_ADMIN_PIN, optional SOB_MEMBER_ID/SOB_MEMBER_PIN, SOB_AS_OF
    commands: ping | smoke | smoke-write | import-ledger <legacy.json> [--dry-run] | import-users <users.json> | register-discrepancies <reconciliation.json> |
-             apply-plan <reconciliation.json> --approved-by "<name, role, date>" | verify | report <out.md> (after smoke/verify) */
+             apply-plan <reconciliation.json> --approved-by "<name, role, date>" | verify | report <out.md> (after smoke/verify) |
+             backup <out.json> (offline, outside the repo) | backup-verify <file> | restore-backup <file> (into a NEW EMPTY deployment) | backup-now | backup-list */
 const lib = require("./ctl-lib.js");
 const argv = process.argv.slice(2), cmd = argv[0], arg = argv[1], flag = (n) => argv.includes(n), val = (n) => { const i = argv.indexOf(n); return i > 0 ? argv[i + 1] : undefined; };
 const E = process.env, o = { adminId: E.SOB_ADMIN_ID, adminPin: E.SOB_ADMIN_PIN, memberId: E.SOB_MEMBER_ID, memberPin: E.SOB_MEMBER_PIN, asOf: E.SOB_AS_OF };
@@ -21,5 +22,9 @@ const show = (r) => { (r.checks || []).forEach((c) => console.log((c.pass ? "PAS
   if (cmd === "register-discrepancies") return console.log(JSON.stringify(await lib.registerDiscrepancies(api, Object.assign({ reconPath: arg }, o)), null, 1));
   if (cmd === "apply-plan") return show(await lib.applyPlan(api, Object.assign({ reconPath: arg, approvedBy: val("--approved-by") }, o)));
   if (cmd === "verify") { const r = await lib.verify(api, o); console.log(JSON.stringify(r, null, 1)); process.exitCode = r.integrity.ok ? 0 : 1; return; }
+  if (cmd === "backup") return show(await lib.backupToFile(api, Object.assign({ outPath: arg }, o)));
+  if (cmd === "backup-verify") return show(lib.backupVerifyFile({ path: arg, asOf: o.asOf }));
+  if (cmd === "restore-backup") return show(await lib.restoreBackup(api, Object.assign({ path: arg }, o)));
+  if (cmd === "backup-now" || cmd === "backup-list") { const t = await lib.login(api, o.adminId, o.adminPin); return console.log(JSON.stringify(await api({ action: cmd === "backup-now" ? "backupNow" : "listBackups", token: t, force: flag("--force") }), null, 1)); }
   console.log("usage: see header of tools/sobctl.js"); process.exitCode = 2;
 })().catch((e) => { console.error("ERROR: " + e.message); process.exit(1); });

@@ -4,9 +4,9 @@
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B) {
   const fail = (error) => ({ ok: false, error });
   const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
@@ -72,6 +72,17 @@
           const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
           S.writeChanged(env.ss, before, db);
           return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
+        } finally { env.lock.releaseLock(); }
+      }
+      /* Backups (Admin only). exportBackup streams a verified, credential-free export for offline safekeeping; restore is NOT a web action. */
+      if (["backupNow", "listBackups", "exportBackup", "verifyBackup"].includes(body.action)) {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may use backups");
+        env.lock.waitLock(20000);
+        try {
+          if (body.action === "backupNow") return Object.assign({ ok: true }, B.snapshot(env.ss, env, "manual by " + user.id, { force: !!body.force }));
+          if (body.action === "listBackups") return { ok: true, backups: B.list(env.ss) };
+          if (body.action === "exportBackup") return { ok: true, backup: B.makeExport(env, S.readAll(env.ss), "export by " + user.id) };
+          const r = B.read(env.ss, env, body.id); return r.ok ? { ok: true, id: r.id, revision: r.revision, counts: r.counts } : fail(r.error);
         } finally { env.lock.releaseLock(); }
       }
       if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone
