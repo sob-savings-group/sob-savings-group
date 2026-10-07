@@ -1,6 +1,7 @@
 /* Live-mode E2E: the real UI talks (over HTTP) to the real backend code running against a mock Sheet. Proves sign-in, server-side
    role enforcement even when the browser is tampered with, and that members only receive their own data. */
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
+const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.click("[data-tab=Admin]"); await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.click("[data-tab=Member]"); await pg.fill("#one", id + " " + pin); } };
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
 const root = path.join(__dirname, ".."), raw = JSON.parse(fs.readFileSync(process.env.SEED || path.join(root, "app/demo-seed.json"), "utf8"));
@@ -26,7 +27,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   pg.on("pageerror", (e) => errs.push(e.message));
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
   ok((await pg.locator("#demo-go").count()) === 0, "live mode shows a real sign-in, not the demo role picker");
-  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "wrong"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "wrong PIN is refused");
+  await signin(pg, "ADMIN", "wrong"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "wrong PIN is refused");
   await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 9, "admin signs in and sees the 9 KPI cards (server-computed ledger view)");
   await pg.click('[data-nav="ledger"]'); await pg.click("#add-entry"); await pg.selectOption('.modal select[name="m"]', mem.id); await pg.fill('.modal input[name="amount"]', "3000"); await pg.click("[data-submit]");
   await pg.waitForSelector(".toast:not(.bad)"); ok(L.memberSavings(S.readAll(env.ss), mem.id) === L.memberSavings(db0, mem.id) + 3000, "an entry made in the UI is persisted by the server");
@@ -42,12 +43,12 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click('.modal [data-act="void"]'); await pg.fill('.modal input[name="reason"]', "e2e void"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
   ok(/Chairperson/.test(await pg.locator(".toast").last().innerText()) && S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore && (S.readAll(env.ss).approvalRequests || []).length === 1, "Super Admin's void is only a request; nothing changed");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "CHAIR"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "CHAIR", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   await pg.click('[data-nav="approvals"]'); await pg.waitForSelector("[data-approve]"); ok((await pg.locator('[data-nav="ledger"] ~ * , #add-entry').count()) >= 0 && (await pg.locator("#add-entry").count()) === 0, "Chairperson has no entry buttons");
   await pg.click("[data-approve]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForTimeout(150);
   ok(S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore - 1 && S.readAll(env.ss).approvalRequests[0].status === "Approved" && S.readAll(env.ss).transactions.length >= txBefore, "the Chairperson's approval executes the void; the original transaction is kept");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
-  await pg.fill("#mid", mem.id); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
+  await signin(pg, mem.id, "1234"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
   ok((await pg.locator('[data-nav="ledger"]').count()) === 0, "member sees member navigation only");
   const hack = await pg.evaluate(async () => { const tk = sessionStorage.getItem("sob.session");
     const call = async (body) => (await (await fetch("/api", { method: "POST", body: JSON.stringify(Object.assign({ token: tk }, body)) })).json());
@@ -64,11 +65,11 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.fill('.modal input[name="n"]', "7777"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
   await pg.reload(); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "refresh keeps the session; sign-out ends it");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
-  await pg.fill("#mid", mem.id); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "old PIN no longer works after the change");
-  await pg.fill("#pin", "7777"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "new PIN works");
+  await signin(pg, mem.id, "1234"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "old PIN no longer works after the change");
+  await signin(pg, mem.id, "7777"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "new PIN works");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
   /* ---- airtime: member requests in the UI, server enforces, Admin fulfils ---- */
-  await pg.fill("#mid", airMem.id); await pg.fill("#pin", "2468"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
+  await signin(pg, airMem.id, "2468"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
   const before = L.memberSavings(S.readAll(env.ss), airMem.id);
   await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("20,000"), "member sees the UGX 20,000 monthly allowance");
   await pg.click("#request-airtime"); await pg.fill('.modal input[name="amount"]', "25000"); await pg.fill('.modal input[name="phone"]', "0772123456"); await pg.click("[data-submit]");
@@ -78,7 +79,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("15,000"), "remaining allowance updates to UGX 15,000");
   ok((await pg.locator('[data-nav="messages"]').count()) === 0 && (await pg.locator('[data-nav="system"]').count()) === 0, "member has no Messages/System screens");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
-  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("[data-fulfil]"); await pg.click("[data-fulfil]"); await pg.waitForSelector(".toast:not(.bad)");
   ok(L.memberSavings(S.readAll(env.ss), airMem.id) === before - 5200, "fulfilling debits airtime + UGX 200 fee from the member's savings, once");
   /* ---- messages: dry-run only ---- */
@@ -93,10 +94,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   /* ---- Admin creates a sign-in; the member is forced to choose their own PIN ---- */
   await pg.click('[data-nav="members"]'); await pg.locator("#main tbody tr", { hasText: newMem.id }).first().click(); await pg.click('.modal [data-act="create-signin"]'); await pg.fill('.modal input[name="n"]', "3141"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click("#logout"); await pg.waitForSelector("#login-go");
-  await pg.fill("#mid", newMem.id); await pg.fill("#pin", "3141"); await pg.click("#login-go"); await pg.waitForSelector("#force-pin"); ok((await pg.locator("[data-nav]").count()) === 0, "a fresh sign-in sees only the choose-your-PIN screen");
+  await signin(pg, newMem.id, "3141"); await pg.click("#login-go"); await pg.waitForSelector("#force-pin"); ok((await pg.locator("[data-nav]").count()) === 0, "a fresh sign-in sees only the choose-your-PIN screen");
   await pg.fill("#fp-old", "3141"); await pg.fill("#fp-new", "2718"); await pg.fill("#fp-new2", "2719"); await pg.click("#fp-go"); await pg.waitForSelector(".toast.bad"); ok(true, "mismatched new PINs are refused");
   await pg.fill("#fp-new2", "2718"); await pg.click("#fp-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "after choosing a PIN the member reaches their portal");
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs.join("|") : ""));
   await b.close(); srv.close(); console.log(fails ? fails + " FAILED" : "live e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });

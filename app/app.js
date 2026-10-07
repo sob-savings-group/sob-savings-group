@@ -30,19 +30,20 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
       let tab = "Member";
-      const mid = h("input", { id: "mid", placeholder: "SOB-015", autocapitalize: "characters", autocomplete: "username" }), nm = h("input", { id: "nm", placeholder: "e.g. Aaron", autocomplete: "off" }), pin = h("input", { type: "password", id: "pin", autocomplete: "current-password" });
+      const mid = h("input", { id: "mid", placeholder: "SOB-015", autocapitalize: "characters", autocomplete: "username" }), one = h("input", { id: "one", placeholder: "SOB-015 Aaron", autocapitalize: "none", autocomplete: "off" }), pin = h("input", { type: "password", id: "pin", autocomplete: "current-password" });
       const go = async () => {
         try {
-          const secret = tab === "Member" && !pin.value.trim() ? nm.value.trim() : pin.value.trim();
-          await st.store.login(mid.value.trim(), secret); st.user = st.store.user; st.view = null; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } render();
+          let id = mid.value.trim(), secret = pin.value.trim();
+          if (tab === "Member") { const m = /^\s*(\S+)[\s,;:]+(.+?)\s*$/.exec(one.value); if (!m) throw Object.assign(new Error("Type your SOB ID, a space, then any one of your names (e.g. SOB-015 Aaron)"), { code: "FORMAT" }); id = m[1]; secret = m[2]; }
+          await st.store.login(id, secret); st.user = st.store.user; st.view = null; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } render();
         } catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "Wrong ID, or the name / PIN does not match" : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
       };
-      [mid, nm, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [one, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       const fields = h("div", null), tabs = h("div", { class: "tabs" });
       const draw = () => {
         tabs.replaceChildren(...["Member", "Admin"].map((t) => h("button", { type: "button", class: t === tab ? "on" : "", "data-tab": t, onclick: () => { tab = t; draw(); } }, t === "Admin" ? "Admin / Officer" : t)));
         fields.replaceChildren(...(tab === "Member"
-          ? [h("label", null, "Member ID (e.g. SOB-015)"), mid, h("label", null, "First or last name"), nm, h("label", null, "PIN (needed to request airtime or accept guarantees)"), pin, h("p", { class: "mute", style: "font-size:12px" }, "ID + name = view-only (balances, statements). Add your PIN for full access. Sign-in never depends on your subscription status.")]
+          ? [h("label", null, "Your SOB ID and any one of your names"), one, h("p", { class: "mute", style: "font-size:12px" }, "Example: SOB-015 Aaron (first or last name). This is view-only: balances and statements. To request airtime or accept guarantees, type your PIN instead of the name (SOB-015 4821). Sign-in never depends on your subscription status.")]
           : [h("label", null, "Staff ID"), mid, h("label", null, "PIN"), pin]));
       };
       draw();

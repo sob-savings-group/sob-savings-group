@@ -1,5 +1,6 @@
 /* Drives dist/verify.html (the no-Node deployment check) in a real browser against the bundled Code_Ledger.gs behind a local HTTP server. */
 const assert = require("assert"), fs = require("fs"), vm = require("vm"), path = require("path"), http = require("http"), crypto = require("crypto"), { execSync } = require("child_process"), { chromium } = require("playwright");
+const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.click("[data-tab=Admin]"); await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.click("[data-tab=Member]"); await pg.fill("#one", id + " " + pin); } };
 const root = path.join(__dirname, ".."), synth = require("../tests/helpers/synth.js"), dataDir = synth.writeTmp(), legacy = path.join(dataDir, "legacy.json");
 execSync("node " + path.join(root, "build/build-gs.js")); execSync("node " + path.join(root, "build/make-verify.js"));
 const sheets = {}, cache = {}, props = { SOB_INITIAL_ADMIN_PIN: "Adm1n-Setup-77" };
@@ -25,7 +26,7 @@ vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code
   await pg.check("#scratch"); await pg.click("#b-write"); await pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent) && /audit trail/.test(document.getElementById("out").textContent), null, { timeout: 60000 }); t = await pg.innerText("#out"); console.log(t); assert.ok(/RESULT: PASS/.test(t) && !/FAIL/.test(t), "write");
   await pg.click("#b-write"); await pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent) && /audit trail/.test(document.getElementById("out").textContent), null, { timeout: 60000 }); t = await pg.innerText("#out"); assert.ok(/RESULT: PASS/.test(t) && !/FAIL/.test(t), "write test must pass when run a second time too (existing test member and entries)");
   execSync("node " + path.join(root, "build/make-app-file.js"), { stdio: "pipe" }); const ap = await br.newPage(); const aerr = []; ap.on("pageerror", (e) => aerr.push(e.message));
-  await ap.goto("file://" + path.join(root, "dist/sob-app.html") + "?url=" + encodeURIComponent(url)); await ap.waitForSelector("#login-go"); await ap.fill("#mid", "ADMIN"); await ap.fill("#pin", "Adm1n-Setup-77"); await ap.click("#login-go"); await ap.waitForSelector("#kpis", { timeout: 20000 });
+  await ap.goto("file://" + path.join(root, "dist/sob-app.html") + "?url=" + encodeURIComponent(url)); await ap.waitForSelector("#login-go"); await signin(ap, "ADMIN", "Adm1n-Setup-77"); await ap.click("#login-go"); await ap.waitForSelector("#kpis", { timeout: 20000 });
   console.log("single-file app opens from disk and signs in"); assert.deepEqual(aerr, []);
   assert.deepEqual(errs, []); await br.close(); srv.close(); console.log("verify page e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });
