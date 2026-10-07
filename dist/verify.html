@@ -1711,7 +1711,7 @@
   let done = false;
   const url = () => $("url").value.trim();
   const api = async (body) => {
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url()) && !/^http:\/\/localhost/.test(url())) throw new Error("Paste the web-app URL ending in /exec");
+    const u = url(); if (!/^https:\/\/script\.google\.com\/.+\/exec(\?.*)?$/.test(u) && !/^http:\/\/localhost/.test(u)) throw new Error("The URL box contains: [" + u.slice(0, 40) + "..." + u.slice(-12) + "] (" + u.length + " characters). It must start with https://script.google.com/ and end with /exec. Copy it again from Deploy > Manage deployments.");
     const res = await fetch(url(), { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body), redirect: "follow" });
     const text = await res.text(); try { return JSON.parse(text); } catch (e) { throw new Error("Not a JSON answer (HTTP " + res.status + "). Check the deployment is 'Anyone' access and the URL is the /exec one. " + text.slice(0, 120)); }
   };
