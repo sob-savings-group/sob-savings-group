@@ -1,6 +1,6 @@
 # Real-Google walkthrough (scratch deployment)
 
-Use the scratch Sheet + `Code.gs` deployed as a **New version**, and open `sob-app.html?url=<your /exec URL>`.
+Use the scratch Sheet + `Code.gs` deployed as a **New version**, and open `sob-app.html` (the backend address is built in; nothing to type or paste).
 Tick each line. Report only what fails (screenshot + the words on screen).
 
 ## Admin (Super Admin) — the only role that enters or edits figures

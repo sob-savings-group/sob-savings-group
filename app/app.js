@@ -409,6 +409,7 @@
 
   /* ---------- boot ---------- */
   async function boot() {
+    if (CFG.notConfigured) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
     app.append(State("loading"));
     try {
       if (st.live) {

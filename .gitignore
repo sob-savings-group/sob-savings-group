@@ -12,3 +12,4 @@ backups/
 history-pack*.json
 REPORT_private*
 hist-*/
+config/production-url.txt

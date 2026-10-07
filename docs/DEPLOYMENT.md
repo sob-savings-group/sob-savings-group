@@ -14,7 +14,7 @@ The only thing the automated rehearsal cannot do is talk to Google, so run the *
 
 **No Node/computer setup?** Run `npm run build && node build/make-verify.js` once (or take `dist/verify.html` from the release) and open `dist/verify.html` in any browser: paste the `/exec` URL and the Admin PIN, run the smoke check, then (scratch only) create the Chairperson and run the write test. It performs the same checks as `sobctl smoke` / `smoke-write`.
 
-**Using the app without hosting:** `node build/make-app-file.js` builds `dist/sob-app.html`, the whole web client in one file. Open it from your computer in Chrome; it asks once for the `/exec` URL (or open it with `?url=<exec url>`). The `/exec` URL itself is only the API and shows `{"ok":true,...}` when opened directly.
+**Using the app without hosting:** `node build/make-app-file.js` builds `dist/sob-app.html`, the whole web client in one file. Open it from your computer in Chrome; the production `/exec` URL is built in so members just open it and sign in. Build it with `SOB_URL=https://script.google.com/macros/s/<id>/exec node build/make-app-file.js` (or put that one line in the gitignored `config/production-url.txt`). Developers/testers can point one page load at another backend with `sob-app.html?dev=<url>`; it is never remembered and only accepts a Google `/exec` or localhost address. A build with no URL shows a plain "not switched on yet" message with the officers' phone numbers.
 
 ## B. Production
 1. Same steps 1–5 with a new Sheet named **SOB Ledger**. Do NOT run `smoke-write` here.
