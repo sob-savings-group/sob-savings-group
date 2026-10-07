@@ -18,7 +18,8 @@
     discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },
     users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
-    airtimeRequests: { sheet: "Airtime", cols: [] },
+    airtimeRequests: { sheet: "Airtime", cols: ["id","date","memberId","memberName","phone","airtimeAmount","fee","total","status","fulfilledDate","fulfilledBy","entryId","rejectReason"] },
+    outbox: { sheet: "Outbox", cols: ["id","createdAt","memberId","to","channel","template","body","status","reason","attempts","lastAttemptAt","mode","providerRef","dedupeKey","createdBy"] },
     reconciliations: { sheet: "Reconciliations", cols: [] },
     smsFailures: { sheet: "SmsFailures", cols: [] },
     legacyAdministration: { sheet: "LegacyAdministration", cols: [] }

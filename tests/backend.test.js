@@ -165,6 +165,7 @@ t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox
   require("child_process").execSync("node " + path.join(__dirname, "../build/build-gs.js"));
   const ss = mockSS(), cache = {};
   const sandbox = { SpreadsheetApp: { getActiveSpreadsheet: () => ss }, LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, deleteProperty() {} }) }, UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
     Utilities: { DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 }, computeDigest: (a, s) => Array.from(crypto.createHash("sha256").update(s).digest()).map((b) => (b > 127 ? b - 256 : b)), getUuid: () => crypto.randomUUID() },
     ContentService: { MimeType: { JSON: "json" }, createTextOutput: (s) => ({ s, setMimeType() { return this; } }) }, console };
@@ -182,5 +183,24 @@ t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox
   assert.ok(call({ action: "command", token: tk, name: "createEntry", args: { date: "2026-02-01", memberId: memberWith.id, amount: 1, type: "Savings" } }).ok);
   assert.equal(JSON.parse(sandbox.doPost({ postData: { contents: "not json" } }).s).error, "INVALID_REQUEST");
   assert.equal(JSON.parse(sandbox.doGet().s).ok, true);
+});
+t("notifications + airtime through the server: members see only their own, only Admin dispatches, nothing is SENT without a live gateway", () => {
+  const w = world();
+  const gw = (live) => { w.env.gateways = { adminPhone: "0772000000", SMS: live ? { live: true, send: () => ({ ok: true }) } : null }; };
+  gw(false);
+  const sav = L.memberSavings(db0, memberWith.id);
+  const r = cmd(w, w.member, "requestAirtime", { memberId: otherMember.id, amount: 1000, phone: "0772123456" });
+  if (L.memberHasOutstandingLoan(db0, memberWith.id, AS_OF) || sav < 1200) { assert.ok(!r.ok); return; }
+  assert.ok(r.ok, r.error); assert.equal(r.result.memberId, memberWith.id);
+  const mine = w.call({ action: "getLedger", token: w.member }).db;
+  assert.equal(mine.airtimeRequests.length, 1); assert.deepEqual(mine.outbox, []); assert.equal(mine.airtime.used, 1000);
+  assert.equal(w.call({ action: "getLedger", token: w.other }).db.airtimeRequests.length, 0);
+  assert.deepEqual(w.call({ action: "getLedger", token: w.comm }).db.outbox, []);
+  for (const tk of [w.member, w.comm]) { assert.match(w.call({ action: "dispatchOutbox", token: tk }).error, /FORBIDDEN/); assert.match(w.call({ action: "gatewayStatus", token: tk }).error, /FORBIDDEN/); }
+  assert.match(cmd(w, w.member, "fulfilAirtime", { id: r.result.id }).error, /FORBIDDEN/);
+  const d = w.call({ action: "dispatchOutbox", token: w.admin }); assert.ok(d.ok); assert.equal(d.result.sent, 0); assert.ok(d.result.dryRun >= 1); assert.equal(d.summary.SENT, 0);
+  assert.equal(w.call({ action: "gatewayStatus", token: w.admin }).live.SMS, false);
+  gw(true); const d2 = w.call({ action: "dispatchOutbox", token: w.admin }); assert.ok(d2.result.sent >= 1); assert.equal(d2.live.SMS, true);
+  assert.ok(cmd(w, w.admin, "fulfilAirtime", { id: r.result.id }).ok);
 });
 (async () => { for (const [n, f] of tests) { try { await f(); console.log("  ok  " + n); } catch (e) { failed++; console.log("FAIL  " + n + "\n      " + (e.stack || e.message).split("\n").slice(0, 3).join("\n      ")); } } console.log(failed ? failed + " FAILED" : tests.length + " backend tests passed"); if (failed) process.exitCode = 1; })();

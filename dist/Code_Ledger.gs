@@ -187,7 +187,7 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
   const ALL = ["ledger.create", "ledger.void", "ledger.restore", "ledger.approve", "loan.apply", "loan.review", "loan.disburse",
     "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage", "subscription.record", "shareout.preview",
-    "shareout.execute", "reconcile.manage", "member.manage", "report.view", "audit.view", "system.admin"];
+    "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "report.view", "audit.view", "system.admin"];
 
   // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions.
   const config = {
@@ -198,7 +198,7 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
   const PERMS = {
     Admin: () => ALL,
     Committee: () => config.committeePermissions || ["report.view", "shareout.preview"],
-    Member: () => ["self.view", "loan.apply", "report.self"]
+    Member: () => ["self.view", "loan.apply", "report.self", "airtime.request"]
   };
   const can = (ctx, action) => !!ctx && (PERMS[ctx.role] || (() => []))().includes(action);
   function require_(ctx, action) {
@@ -626,14 +626,227 @@ __M['core/reconcile'] = (function(){ const module = {exports:{}}; const require 
 });
 
 return module.exports; })();
+__M['core/notify'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/notify — SMS / WhatsApp notification framework. SAFE BY DEFAULT: every message is rendered into an OUTBOX record; nothing leaves the
+   system unless a gateway adapter reports `live: true` (which needs real credentials set server-side). Without one, messages are marked
+   DRY_RUN ("rendered, NOT sent"). A message is only ever marked SENT after a live adapter confirmed it. Failures are logged, never hidden. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.notify = api; }
+})(typeof self !== "undefined" ? self : this, function (G, D) {
+  const CHANNELS = ["SMS", "WHATSAPP"];
+  const MAX_ATTEMPTS = 3;
+  const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
+  const TEMPLATES = {
+    receipt: (v) => "SOB: we received " + money(v.amount) + " (" + v.type + ") on " + D.toDisplay(v.date) + ". Ref " + v.ref + ".",
+    loanApproved: (v) => "SOB: your loan application of " + money(v.amount) + " has been approved. Ref " + v.ref + ".",
+    loanDeclined: (v) => "SOB: your loan application of " + money(v.amount) + " was not approved." + (v.reason ? " Reason: " + v.reason : "") + " Ref " + v.ref + ".",
+    loanDisbursed: (v) => "SOB: loan " + v.ref + " of " + money(v.amount) + " has been disbursed.",
+    repaymentReceived: (v) => "SOB: loan repayment of " + money(v.amount) + " received on " + D.toDisplay(v.date) + ". Loan " + v.ref + ".",
+    shareOut: (v) => "SOB: December " + v.year + " share-out recorded. Your savings withdrawn: " + money(v.amount) + ".",
+    airtimeRequested: (v) => "SOB: airtime request " + v.ref + " of " + money(v.amount) + " received (fee " + money(v.fee) + "). Awaiting approval.",
+    airtimeAdminAlert: (v) => "SOB Airtime request: " + v.name + " (" + v.memberId + ") wants " + money(v.amount) + " to " + v.phone + ". Open the app to fulfil.",
+    airtimeFulfilled: (v) => "SOB: your airtime request of " + money(v.amount) + " has been fulfilled. Thank you.",
+    airtimeRejected: (v) => "SOB: your airtime request " + v.ref + " was not approved." + (v.reason ? " Reason: " + v.reason : ""),
+    repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
+    signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
+    custom: (v) => String(v.text || "").slice(0, 320)
+  };
+  /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
+  function normalizePhone(p) {
+    const s = String(p == null ? "" : p).replace(/[\s\-().]/g, "");
+    let m;
+    if ((m = /^\+?256(\d{9})$/.exec(s))) return "+256" + m[1];
+    if ((m = /^0(\d{9})$/.exec(s))) return "+256" + m[1];
+    return null;
+  }
+  function render(template, vars) {
+    if (!Object.prototype.hasOwnProperty.call(TEMPLATES, template)) throw new Error("UNKNOWN_TEMPLATE: " + template);
+    return TEMPLATES[template](vars || {});
+  }
+  /* Internal: create an outbox record. Never throws for "cannot deliver" cases — those become SKIPPED with a visible reason. */
+  function queue(db, ctx, o) {
+    const channel = (o.channel || "SMS").toUpperCase();
+    if (!CHANNELS.includes(channel)) throw new Error("INVALID: channel");
+    const outbox = (db.outbox = db.outbox || []);
+    if (o.dedupeKey) { const ex = outbox.find((x) => x.dedupeKey === o.dedupeKey && x.status !== "CANCELLED"); if (ex) return ex; }
+    const member = o.memberId ? (db.members || []).find((m) => m.id === o.memberId) : null;
+    let to = o.to === "ADMIN" ? "ADMIN" : normalizePhone(o.to || (member && member.phone));
+    let status = "QUEUED", reason = "";
+    if (member && member.notifyOptOut) { status = "SKIPPED"; reason = "OPTED_OUT"; }
+    else if (!to) { status = "SKIPPED"; reason = "NO_VALID_PHONE"; }
+    const rec = { id: G.uid("MSG"), createdAt: ctx.now, createdBy: ctx.by, memberId: o.memberId || "", to: to || "", channel, template: o.template,
+      body: render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+    outbox.push(rec);
+    return rec;
+  }
+  /* Dispatch: gateways = { SMS: adapter|null, WHATSAPP: adapter|null, adminPhone }. adapter = { live:boolean, send(msg)->{ok,providerRef?,error?} }. */
+  function dispatch(db, ctx, gateways, o) {
+    G.require(ctx, "notify.manage");
+    gateways = gateways || {};
+    const limit = (o && o.limit) || 100;
+    const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
+    const todo = (db.outbox || []).filter((m) => m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    todo.forEach((m) => {
+      const ad = gateways[m.channel];
+      const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
+      m.lastAttemptAt = ctx.now;
+      if (!to) { m.status = "SKIPPED"; m.reason = "NO_VALID_PHONE"; out.skipped++; return; }
+      if (!ad || ad.live !== true) { m.status = "DRY_RUN"; m.mode = "DRY_RUN"; m.reason = "NO_LIVE_GATEWAY"; out.dryRun++; return; }
+      m.attempts = (m.attempts || 0) + 1;
+      let r;
+      try { r = ad.send({ id: m.id, to, body: m.body, channel: m.channel }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+      if (r && r.ok === true) { m.status = "SENT"; m.mode = "LIVE"; m.providerRef = r.providerRef || ""; m.reason = ""; out.sent++; }
+      else {
+        m.status = "FAILED"; m.reason = String((r && r.error) || "UNKNOWN_ERROR").slice(0, 300); out.failed++;
+        (db.smsFailures = db.smsFailures || []).push({ id: G.uid("SMF"), date: ctx.today, context: m.template + " -> " + (m.memberId || "admin") + " (" + m.channel + ")", error: m.reason });
+      }
+    });
+    if (todo.length) G.audit(db, ctx, "Outbox", "dispatch", "Dispatch run", null, out);
+    return out;
+  }
+  function cancel(db, ctx, id, reason) {
+    G.require(ctx, "notify.manage"); G.need(reason, "reason");
+    const m = (db.outbox || []).find((x) => x.id === id);
+    if (!m) throw new Error("NOT_FOUND: " + id);
+    if (m.status === "SENT") throw new Error("ALREADY_SENT: " + id);
+    const prev = m.status; m.status = "CANCELLED"; m.reason = reason.trim();
+    G.audit(db, ctx, "Outbox", id, "Cancelled", prev, "CANCELLED", reason);
+    return m;
+  }
+  /* Manual message to a member (Admin). */
+  function send(db, ctx, o) {
+    G.require(ctx, "notify.manage"); G.need(o.memberId, "memberId"); G.need(o.text, "text");
+    if (!(db.members || []).some((m) => m.id === o.memberId)) throw new Error("UNKNOWN_MEMBER: " + o.memberId);
+    const rec = queue(db, ctx, { memberId: o.memberId, template: "custom", vars: { text: o.text }, channel: o.channel });
+    G.audit(db, ctx, "Outbox", rec.id, "Queued", null, { memberId: o.memberId, template: "custom" });
+    return rec;
+  }
+  function setOptOut(db, ctx, memberId, optOut, reason) {
+    if (!(G.can(ctx, "notify.manage") || (ctx.role === "Member" && ctx.memberId === memberId))) throw new Error("FORBIDDEN: role '" + ctx.role + "' may not change notification consent for " + memberId);
+    const m = (db.members || []).find((x) => x.id === memberId);
+    if (!m) throw new Error("UNKNOWN_MEMBER: " + memberId);
+    const prev = !!m.notifyOptOut; m.notifyOptOut = !!optOut;
+    G.audit(db, ctx, "Member", memberId, optOut ? "Notifications opted out" : "Notifications opted in", prev, m.notifyOptOut, reason);
+    return m;
+  }
+  /* Automatic, best-effort notices after a successful command. Never allowed to break the command itself. */
+  function onCommand(db, ctx, name, args, result) {
+    try {
+      const q = (memberId, template, vars, key) => queue(db, ctx, { memberId, template, vars, dedupeKey: key });
+      if (name === "createEntry" && result && result.memberId && result.approvalStatus === "Approved" && ["Savings", "Repayment", "Subscription", "Withdraw"].includes(result.type)) {
+        q(result.memberId, "receipt", { amount: result.amount, type: result.type === "Withdraw" ? "Withdrawal" : result.type, date: result.date, ref: result.id }, "receipt:" + result.id);
+      } else if (name === "approveLoan" || name === "declineLoan" || name === "disburseLoan") {
+        const loan = (db.loans || []).find((l) => l.id === args.loanId);
+        if (loan) {
+          const tpl = name === "approveLoan" ? "loanApproved" : name === "declineLoan" ? "loanDeclined" : "loanDisbursed";
+          q(loan.memberId, tpl, { amount: loan.loanAmount, ref: loan.id, reason: args.reason }, tpl + ":" + loan.id);
+        }
+      } else if (name === "repayLoan") {
+        const loan = (db.loans || []).find((l) => l.id === args.loanId);
+        if (loan) q(loan.memberId, "repaymentReceived", { amount: args.amount, date: args.date || ctx.today, ref: loan.id }, null);
+      } else if (name === "executeShareOut" && result && result.entries) {
+        result.entries.forEach((e) => q(e.memberId, "shareOut", { year: result.year, amount: e.savingsWithdrawn }, "shareout:" + result.id + ":" + e.memberId));
+      }
+    } catch (e) { /* notification trouble must never block a financial command */ }
+  }
+  function summary(db) {
+    const s = { QUEUED: 0, DRY_RUN: 0, SENT: 0, FAILED: 0, SKIPPED: 0, CANCELLED: 0 };
+    (db.outbox || []).forEach((m) => { s[m.status] = (s[m.status] || 0) + 1; });
+    return s;
+  }
+  return { CHANNELS, MAX_ATTEMPTS, TEMPLATES, normalizePhone, render, queue, dispatch, cancel, send, setOptOut, onCommand, summary };
+});
+
+return module.exports; })();
+__M['core/airtime'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/airtime — emergency airtime requests (rules carried over from the legacy system):
+   UGX 20,000 total airtime per member per calendar month; blocked while the member has any unpaid loan; flat UGX 200 two-way SMS fee
+   shown before submission; the member's savings (airtime + fee) are debited by a normal, audited Withdraw entry only when Admin FULFILS.
+   Pending requests reserve the member's available savings (savings minus live guarantees minus other pending requests). */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger,
+    isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./notify.js") : root.SOB.notify);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.airtime = api; }
+})(typeof self !== "undefined" ? self : this, function (G, D, L, LN, N) {
+  const MONTHLY_CAP = 20000, SMS_FEE = 200;
+  const COUNTS = ["Pending", "Approved", "Fulfilled"];
+  const list = (db) => (db.airtimeRequests = db.airtimeRequests || []);
+  const usedThisMonth = (db, memberId, date) => list(db).filter((r) => r.memberId === memberId && COUNTS.includes(r.status) && String(r.date).slice(0, 7) === String(date).slice(0, 7))
+    .reduce((a, r) => a + Number(r.airtimeAmount), 0);
+  const reserved = (db, memberId, exceptId) => list(db).filter((r) => r.memberId === memberId && r.status === "Pending" && r.id !== exceptId).reduce((a, r) => a + Number(r.total), 0);
+  function eligibility(db, memberId, date) {
+    const used = usedThisMonth(db, memberId, date);
+    const blockedByLoan = L.memberHasOutstandingLoan(db, memberId, date);
+    const available = LN.guarantorAvailable(db, memberId) - reserved(db, memberId);
+    return { monthlyCap: MONTHLY_CAP, fee: SMS_FEE, used, remaining: Math.max(0, MONTHLY_CAP - used), blockedByLoan, availableSavings: available };
+  }
+  function request(db, ctx, a) {
+    let memberId;
+    if (ctx.role === "Member") { G.require(ctx, "airtime.request"); memberId = ctx.memberId; }   // a Member can only ever request for themselves
+    else { G.require(ctx, "airtime.manage"); memberId = G.need(a.memberId, "memberId"); }
+    const member = (db.members || []).find((m) => m.id === memberId);
+    if (!member || member.status === "Inactive") throw new Error("UNKNOWN_MEMBER: " + memberId);
+    const amount = Number(a.amount);
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("INVALID: airtime amount must be a whole number of UGX above zero");
+    const e = eligibility(db, memberId, ctx.today);
+    if (e.blockedByLoan) throw new Error("BLOCKED_BY_LOAN: airtime is not available while you have an unpaid loan");
+    if (amount > e.remaining) throw new Error("OVER_MONTHLY_CAP: only UGX " + e.remaining.toLocaleString("en-US") + " of the UGX " + MONTHLY_CAP.toLocaleString("en-US") + " monthly limit remains");
+    const total = amount + SMS_FEE;
+    if (total > e.availableSavings) throw new Error("INSUFFICIENT_SAVINGS: airtime plus fee (UGX " + total.toLocaleString("en-US") + ") exceeds available savings (UGX " + Math.max(0, e.availableSavings).toLocaleString("en-US") + ")");
+    const phone = N.normalizePhone(a.phone || member.phone);
+    if (!phone) throw new Error("INVALID: a valid Uganda phone number is required (e.g. 0772123456)");
+    const req = { id: G.uid("AIR"), date: ctx.today, memberId, memberName: member.name, phone, airtimeAmount: amount, fee: SMS_FEE, total, status: "Pending", createdBy: ctx.by };
+    list(db).push(req);
+    G.audit(db, ctx, "Airtime", req.id, "Requested", null, { memberId, amount, fee: SMS_FEE, phone });
+    N.queue(db, ctx, { memberId, template: "airtimeRequested", vars: { amount, fee: SMS_FEE, ref: req.id }, dedupeKey: "airreq:" + req.id });
+    N.queue(db, ctx, { to: "ADMIN", template: "airtimeAdminAlert", vars: { name: member.name, memberId, amount, phone }, dedupeKey: "airadmin:" + req.id });
+    return req;
+  }
+  const find = (db, id) => { const r = list(db).find((x) => x.id === id); if (!r) throw new Error("NOT_FOUND: " + id); return r; };
+  function fulfil(db, ctx, id) {
+    G.require(ctx, "airtime.manage");
+    const r = find(db, id);
+    if (r.status !== "Pending") throw new Error("NOT_PENDING: " + id + " is " + r.status);
+    if (r.total > LN.guarantorAvailable(db, r.memberId) - reserved(db, r.memberId, r.id)) throw new Error("INSUFFICIENT_SAVINGS: available savings no longer cover this request");
+    if (L.memberHasOutstandingLoan(db, r.memberId, ctx.today)) throw new Error("BLOCKED_BY_LOAN: member now has an unpaid loan");
+    const t = G.createEntry(db, ctx, { date: ctx.today, memberId: r.memberId, amount: r.total, type: "Withdraw", purpose: "Airtime purchase (UGX " + r.airtimeAmount.toLocaleString("en-US") + " to " + r.phone + ") + UGX " + r.fee + " notification fee", airtimeRequestId: r.id });
+    Object.assign(r, { status: "Fulfilled", fulfilledDate: ctx.today, fulfilledBy: ctx.by, entryId: t.id });
+    G.audit(db, ctx, "Airtime", id, "Fulfilled", "Pending", "Fulfilled", "entry " + t.id);
+    N.queue(db, ctx, { memberId: r.memberId, template: "airtimeFulfilled", vars: { amount: r.airtimeAmount }, dedupeKey: "airful:" + r.id });
+    return r;
+  }
+  function reject(db, ctx, id, reason) {
+    G.require(ctx, "airtime.manage"); G.need(reason, "reason");
+    const r = find(db, id);
+    if (r.status !== "Pending") throw new Error("NOT_PENDING: " + id + " is " + r.status);
+    Object.assign(r, { status: "Rejected", rejectedDate: ctx.today, rejectedBy: ctx.by, rejectReason: reason.trim() });
+    G.audit(db, ctx, "Airtime", id, "Rejected", "Pending", "Rejected", reason);
+    N.queue(db, ctx, { memberId: r.memberId, template: "airtimeRejected", vars: { ref: r.id, reason: reason.trim() }, dedupeKey: "airrej:" + r.id });
+    return r;
+  }
+  function cancel(db, ctx, id) {
+    const r = find(db, id);
+    if (!(G.can(ctx, "airtime.manage") || (ctx.role === "Member" && ctx.memberId === r.memberId && G.can(ctx, "airtime.request")))) throw new Error("FORBIDDEN: not your request");
+    if (r.status !== "Pending") throw new Error("NOT_PENDING: " + id + " is " + r.status);
+    r.status = "Cancelled"; r.cancelledDate = ctx.today;
+    G.audit(db, ctx, "Airtime", id, "Cancelled", "Pending", "Cancelled");
+    return r;
+  }
+  return { MONTHLY_CAP, SMS_FEE, usedThisMonth, eligibility, request, fulfil, reject, cancel };
+});
+
+return module.exports; })();
 __M['core/commands'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
 /* SOB core/commands — the ONLY ways to change the ledger. A closed whitelist: the server (and the demo UI) run exactly these,
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
@@ -656,12 +869,21 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
-    executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason })
+    executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason }),
+    requestAirtime: (db, ctx, a) => AT.request(db, ctx, { memberId: a.memberId, amount: a.amount, phone: a.phone }),
+    fulfilAirtime: (db, ctx, a) => AT.fulfil(db, ctx, a.id),
+    rejectAirtime: (db, ctx, a) => AT.reject(db, ctx, a.id, a.reason),
+    cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
+    sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
+    cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
+    setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
   };
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
-    return COMMANDS[name](db, ctx, args || {});
+    const result = COMMANDS[name](db, ctx, args || {});
+    N.onCommand(db, ctx, name, args || {}, result);   // best-effort outbox notices; never blocks the command
+    return result;
   }
   return { COMMANDS, names: Object.keys(COMMANDS), run };
 });
@@ -869,7 +1091,8 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },
     users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
-    airtimeRequests: { sheet: "Airtime", cols: [] },
+    airtimeRequests: { sheet: "Airtime", cols: ["id","date","memberId","memberName","phone","airtimeAmount","fee","total","status","fulfilledDate","fulfilledBy","entryId","rejectReason"] },
+    outbox: { sheet: "Outbox", cols: ["id","createdAt","memberId","to","channel","template","body","status","reason","attempts","lastAttemptAt","mode","providerRef","dedupeKey","createdBy"] },
     reconciliations: { sheet: "Reconciliations", cols: [] },
     smsFailures: { sheet: "SmsFailures", cols: [] },
     legacyAdministration: { sheet: "LegacyAdministration", cols: [] }
@@ -1008,16 +1231,19 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N) {
   const fail = (error) => ({ ok: false, error });
+  const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
     if (user.role === "Admin" || user.role === "Committee") {
       const full = Object.assign({}, base, db, { users: user.role === "Admin" ? (db.users || []).map(A.publicUser) : [] });
+      if (user.role !== "Admin") full.outbox = [];
+      full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
       if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
       full.kpis = K.dashboard(db, asOf); full.pipeline = K.pipeline(db); return full;
     }
@@ -1030,7 +1256,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
       members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
       transactions: (db.transactions || []).filter((t) => t.memberId === me || mine.some((l) => l.id === t.loanId)),
       loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)),
-      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
 
@@ -1064,6 +1290,17 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
         } finally { env.lock.releaseLock(); }
       }
 
+      if (body.action === "gatewayStatus") { if (user.role !== "Admin") return fail("FORBIDDEN"); return { ok: true, live: gwStatus(env), note: "No channel is live unless real gateway credentials are configured AND a live test has passed." }; }
+      if (body.action === "dispatchOutbox") {   // Admin only; with no live gateway this only marks messages DRY_RUN (rendered, NOT sent)
+        env.lock.waitLock(20000);
+        try {
+          const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
+          const before = JSON.parse(JSON.stringify(db));
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          S.writeChanged(env.ss, before, db);
+          return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
+        } finally { env.lock.releaseLock(); }
+      }
       if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone
         env.lock.waitLock(20000);
         try {
@@ -1134,8 +1371,33 @@ var __cacheImpl = {
   put: function(k, v, ttl){ CacheService.getScriptCache().put(k, String(v), Math.min(ttl, 21600)); },
   remove: function(k){ CacheService.getScriptCache().remove(k); }
 };
+/* Gateways are OFF unless real credentials are in Script Properties AND the *_LIVE switch is set to "yes-tested" (set it only after
+   testSms()/testWhatsApp() from the editor succeeded on your own phone). Nothing here has been run against a real gateway by the developer. */
+function __gateways(){
+  var p = PropertiesService.getScriptProperties(), g = { adminPhone: p.getProperty("SOB_ADMIN_PHONE") || "" };
+  var smsKey = p.getProperty("SOB_SMS_GATEWAY_KEY"), smsUrl = p.getProperty("SOB_SMS_GATEWAY_URL") || "https://www.traccar.org/sms/";
+  g.SMS = { live: !!smsKey && p.getProperty("SOB_SMS_LIVE") === "yes-tested", send: function(m){
+    var r = UrlFetchApp.fetch(smsUrl, { method: "post", contentType: "application/json", headers: { Authorization: smsKey }, payload: JSON.stringify({ to: m.to, message: m.body }), muteHttpExceptions: true });
+    var c = r.getResponseCode(); return c >= 200 && c < 300 ? { ok: true, providerRef: "" } : { ok: false, error: "HTTP " + c + " " + String(r.getContentText()).slice(0, 120) };
+  } };
+  var waTok = p.getProperty("SOB_WA_TOKEN"), waId = p.getProperty("SOB_WA_PHONE_ID");
+  g.WHATSAPP = { live: !!waTok && !!waId && p.getProperty("SOB_WA_LIVE") === "yes-tested", send: function(m){
+    var r = UrlFetchApp.fetch("https://graph.facebook.com/v19.0/" + waId + "/messages", { method: "post", contentType: "application/json", headers: { Authorization: "Bearer " + waTok },
+      payload: JSON.stringify({ messaging_product: "whatsapp", to: String(m.to).replace("+", ""), type: "text", text: { body: m.body } }), muteHttpExceptions: true });
+    var c = r.getResponseCode(); return c >= 200 && c < 300 ? { ok: true, providerRef: "" } : { ok: false, error: "HTTP " + c + " " + String(r.getContentText()).slice(0, 120) };
+  } };
+  return g;
+}
+function __gwTest(ch){
+  var g = __gateways(), to = g.adminPhone; if (!to) throw new Error("Add Script Property SOB_ADMIN_PHONE (your own number) first");
+  var n = __M['core/notify'].normalizePhone(to); if (!n) throw new Error("SOB_ADMIN_PHONE is not a valid Uganda number");
+  var a = g[ch]; var saved = a.live; a.live = true;   // test path only: sends one message to the admin's own phone
+  var r = a.send({ to: n, body: "SOB test message - gateway check" }); a.live = saved; return JSON.stringify(r);
+}
+function testSms(){ return __gwTest("SMS"); }
+function testWhatsApp(){ return __gwTest("WHATSAPP"); }
 function __env(){
-  return { ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
+  return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
 function doPost(e){

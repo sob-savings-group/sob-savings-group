@@ -9,8 +9,33 @@ var __cacheImpl = {
   put: function(k, v, ttl){ CacheService.getScriptCache().put(k, String(v), Math.min(ttl, 21600)); },
   remove: function(k){ CacheService.getScriptCache().remove(k); }
 };
+/* Gateways are OFF unless real credentials are in Script Properties AND the *_LIVE switch is set to "yes-tested" (set it only after
+   testSms()/testWhatsApp() from the editor succeeded on your own phone). Nothing here has been run against a real gateway by the developer. */
+function __gateways(){
+  var p = PropertiesService.getScriptProperties(), g = { adminPhone: p.getProperty("SOB_ADMIN_PHONE") || "" };
+  var smsKey = p.getProperty("SOB_SMS_GATEWAY_KEY"), smsUrl = p.getProperty("SOB_SMS_GATEWAY_URL") || "https://www.traccar.org/sms/";
+  g.SMS = { live: !!smsKey && p.getProperty("SOB_SMS_LIVE") === "yes-tested", send: function(m){
+    var r = UrlFetchApp.fetch(smsUrl, { method: "post", contentType: "application/json", headers: { Authorization: smsKey }, payload: JSON.stringify({ to: m.to, message: m.body }), muteHttpExceptions: true });
+    var c = r.getResponseCode(); return c >= 200 && c < 300 ? { ok: true, providerRef: "" } : { ok: false, error: "HTTP " + c + " " + String(r.getContentText()).slice(0, 120) };
+  } };
+  var waTok = p.getProperty("SOB_WA_TOKEN"), waId = p.getProperty("SOB_WA_PHONE_ID");
+  g.WHATSAPP = { live: !!waTok && !!waId && p.getProperty("SOB_WA_LIVE") === "yes-tested", send: function(m){
+    var r = UrlFetchApp.fetch("https://graph.facebook.com/v19.0/" + waId + "/messages", { method: "post", contentType: "application/json", headers: { Authorization: "Bearer " + waTok },
+      payload: JSON.stringify({ messaging_product: "whatsapp", to: String(m.to).replace("+", ""), type: "text", text: { body: m.body } }), muteHttpExceptions: true });
+    var c = r.getResponseCode(); return c >= 200 && c < 300 ? { ok: true, providerRef: "" } : { ok: false, error: "HTTP " + c + " " + String(r.getContentText()).slice(0, 120) };
+  } };
+  return g;
+}
+function __gwTest(ch){
+  var g = __gateways(), to = g.adminPhone; if (!to) throw new Error("Add Script Property SOB_ADMIN_PHONE (your own number) first");
+  var n = __M['core/notify'].normalizePhone(to); if (!n) throw new Error("SOB_ADMIN_PHONE is not a valid Uganda number");
+  var a = g[ch]; var saved = a.live; a.live = true;   // test path only: sends one message to the admin's own phone
+  var r = a.send({ to: n, body: "SOB test message - gateway check" }); a.live = saved; return JSON.stringify(r);
+}
+function testSms(){ return __gwTest("SMS"); }
+function testWhatsApp(){ return __gwTest("WHATSAPP"); }
 function __env(){
-  return { ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
+  return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
 function doPost(e){

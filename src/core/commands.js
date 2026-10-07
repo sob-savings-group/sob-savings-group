@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
@@ -27,12 +27,21 @@
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
-    executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason })
+    executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason }),
+    requestAirtime: (db, ctx, a) => AT.request(db, ctx, { memberId: a.memberId, amount: a.amount, phone: a.phone }),
+    fulfilAirtime: (db, ctx, a) => AT.fulfil(db, ctx, a.id),
+    rejectAirtime: (db, ctx, a) => AT.reject(db, ctx, a.id, a.reason),
+    cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
+    sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
+    cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
+    setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
   };
   function run(db, ctx, name, args) {
     if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
     if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
-    return COMMANDS[name](db, ctx, args || {});
+    const result = COMMANDS[name](db, ctx, args || {});
+    N.onCommand(db, ctx, name, args || {}, result);   // best-effort outbox notices; never blocks the command
+    return result;
   }
   return { COMMANDS, names: Object.keys(COMMANDS), run };
 });

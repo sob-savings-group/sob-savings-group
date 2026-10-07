@@ -4,7 +4,7 @@ const root = path.join(__dirname, ".."); execSync("node " + path.join(root, "bui
 const src = fs.readFileSync(path.join(root, "dist/Code_Ledger.gs"), "utf8"); let f = 0; const t = (n, fn) => { try { fn(); console.log("  ok  " + n); } catch (e) { f++; process.exitCode = 1; console.log("FAIL  " + n + "\n      " + e.message); } };
 t("bundle parses as a plain script (no import/export, no top-level await)", () => { new vm.Script(src); assert.ok(!/^\s*(import|export)\s/m.test(src)); });
 t("no Node/browser-only globals are used outside the module shim", () => {
-  const body = src.replace(/function __req[\s\S]*?\n/, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"); // shim + comments ignored
+  const body = src.replace(/function __req[\s\S]*?\n/, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/UrlFetchApp\.fetch/g, "UrlFetchApp_fetch").replace(/(^|[^:])\/\/.*$/gm, "$1"); // shim + comments ignored
   for (const bad of [/\bprocess\./, /\bBuffer\b/, /\bsetTimeout\b/, /\bfetch\(/, /\bwindow\./, /\bdocument\./, /\blocalStorage\b/, /require\("fs"\)|require\("crypto"\)|require\('fs'\)/, /\bconsole\.log\(/]) assert.ok(!bad.test(body), "found " + bad);
 });
 t("bundle size is well under Apps Script file limits", () => { assert.ok(src.length < 600000, "size " + src.length); });

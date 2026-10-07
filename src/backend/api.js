@@ -4,16 +4,19 @@
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N) {
   const fail = (error) => ({ ok: false, error });
+  const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
     if (user.role === "Admin" || user.role === "Committee") {
       const full = Object.assign({}, base, db, { users: user.role === "Admin" ? (db.users || []).map(A.publicUser) : [] });
+      if (user.role !== "Admin") full.outbox = [];
+      full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
       if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
       full.kpis = K.dashboard(db, asOf); full.pipeline = K.pipeline(db); return full;
     }
@@ -26,7 +29,7 @@
       members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
       transactions: (db.transactions || []).filter((t) => t.memberId === me || mine.some((l) => l.id === t.loanId)),
       loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)),
-      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
 
@@ -60,6 +63,17 @@
         } finally { env.lock.releaseLock(); }
       }
 
+      if (body.action === "gatewayStatus") { if (user.role !== "Admin") return fail("FORBIDDEN"); return { ok: true, live: gwStatus(env), note: "No channel is live unless real gateway credentials are configured AND a live test has passed." }; }
+      if (body.action === "dispatchOutbox") {   // Admin only; with no live gateway this only marks messages DRY_RUN (rendered, NOT sent)
+        env.lock.waitLock(20000);
+        try {
+          const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
+          const before = JSON.parse(JSON.stringify(db));
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          S.writeChanged(env.ss, before, db);
+          return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
+        } finally { env.lock.releaseLock(); }
+      }
       if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone
         env.lock.waitLock(20000);
         try {
