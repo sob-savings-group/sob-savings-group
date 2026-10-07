@@ -1,6 +1,8 @@
 /* SOB core/loans — application -> review -> approval/decline -> disbursement -> repayment -> clearance/reversal,
    plus guarantor exposure. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
-   Rules awaiting SOB (qualifying savings, guarantor sufficiency) are read from ledger.CONFIG_PENDING and BLOCK, never guessed. */
+   Confirmed: ONE guarantor per loan, who must have enough AVAILABLE savings (lifetime savings minus guarantees already committed)
+   to cover the guaranteed amount, which is the full loan. Still blocked (ledger.CONFIG_PENDING): qualifying savings (3x cap basis),
+   repayment allocation. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
@@ -19,9 +21,9 @@
     if (!L.CONFIG_PENDING.qualifyingSavingsRule) throw new Error("PENDING_SOB_DECISION: qualifying-savings definition (Open Q2)");
     return L.CONFIG_PENDING.qualifyingSavingsRule(db, memberId);
   }
+  /* CONFIRMED rule: available = the guarantor's savings less what they have already guaranteed on other live loans. */
   function guarantorAvailable(db, guarantorId) {
-    if (!L.CONFIG_PENDING.guarantorSufficiencyRule) throw new Error("PENDING_SOB_DECISION: guarantor sufficiency rule (Open Q3)");
-    return L.CONFIG_PENDING.guarantorSufficiencyRule({ qualifying: qualifyingSavings(db, guarantorId), committed: committed(db, guarantorId) });
+    return L.memberSavings(db, guarantorId) - committed(db, guarantorId);
   }
   function exposureReport(db) {
     return db.members.map((m) => ({ memberId: m.id, name: m.name, committed: committed(db, m.id),
@@ -31,14 +33,23 @@
   function addGuarantee(db, ctx, loanId, guarantorId, amount) {
     G.require(ctx, "guarantee.manage");
     const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
-    amount = Number(amount); if (!(amount > 0)) throw new Error("INVALID: guarantee amount");
+    if (loanCover(db, loanId) > 0) throw new Error("ONE_GUARANTOR_ONLY: this loan already has a guarantor; release it first to change");
+    amount = amount === undefined || amount === "" || amount === null ? loan.loanAmount : Number(amount);
+    if (amount !== Number(loan.loanAmount)) throw new Error("INVALID: the guarantor covers the full loan amount (" + loan.loanAmount + ")");
     if (guarantorId === loan.memberId) throw new Error("INVALID: a member cannot guarantee their own loan");
     if (!db.members.some((m) => m.id === guarantorId)) throw new Error("UNKNOWN_MEMBER: " + guarantorId);
-    if (amount > guarantorAvailable(db, guarantorId)) throw new Error("INSUFFICIENT_GUARANTOR: requested " + amount + " exceeds available capacity");
+    const avail = guarantorAvailable(db, guarantorId);
+    if (amount > avail) throw new Error("INSUFFICIENT_GUARANTOR: guarantee of " + amount + " exceeds the guarantor's available savings (" + avail + ")");
     const g = { id: G.uid("GUA"), loanId, guarantorId, amount, status: "Active", dateCommitted: ctx.today, committedBy: ctx.by };
     (db.guarantees = db.guarantees || []).push(g);
     G.audit(db, ctx, "Guarantee", g.id, "Committed", null, { loanId, guarantorId, amount });
     return g;
+  }
+  /* Admin replaces the guarantor (e.g. guarantor withdrew savings): release then add, both audited. */
+  function releaseGuarantor(db, ctx, loanId, reason) {
+    G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
+    releaseGuarantees(db, ctx, loanId, reason);
   }
   function releaseGuarantees(db, ctx, loanId, why) {
     (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).forEach((g) => {
@@ -156,8 +167,8 @@
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), guaranteed: loanCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
-  return { committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantees, applyForLoan, approveLoan,
+  return { committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
     declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });

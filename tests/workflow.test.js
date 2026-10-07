@@ -18,8 +18,7 @@ const fresh = () => ({ members: ["A", "B", "C"].map((x, i) => ({ id: "SOB-00" + 
 const seed = (db, id, amt, day) => G.createEntry(db, ctxAt(day || "2026-01-05"), { date: day || "2026-01-05", memberId: id, amount: amt, type: "Savings" });
 const withRules = (fn) => { // test-only stand-ins; production leaves these null (SOB undecided)
   L.CONFIG_PENDING.qualifyingSavingsRule = (db, id) => L.memberSavings(db, id);
-  L.CONFIG_PENDING.guarantorSufficiencyRule = ({ qualifying, committed }) => qualifying - committed;
-  try { fn(); } finally { L.CONFIG_PENDING.qualifyingSavingsRule = null; L.CONFIG_PENDING.guarantorSufficiencyRule = null; }
+  try { fn(); } finally { L.CONFIG_PENDING.qualifyingSavingsRule = null; }
 };
 
 console.log("governance");
@@ -71,11 +70,7 @@ t("a Pending loan is not booked: no balance, no exposure", () => {
   const db = fresh(); seed(db, "SOB-001", 50000); LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 100000);
   assert.equal(L.computeGroupTotals(db, "2026-06-01").loansOutstanding, 0);
 });
-t("approval is BLOCKED while SOB has not defined qualifying savings (no guessing)", () => {
-  const db = fresh(); seed(db, "SOB-001", 50000); const l = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 100000);
-  throwsMsg(() => LN.approveLoan(db, ctxAt("2026-02-02"), l.id), /PENDING_SOB_DECISION/);
-  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), l.id, "SOB-002", 100000), /PENDING_SOB_DECISION/);
-});
+
 t("full lifecycle: apply > guarantee > approve > disburse > repay > clear (rules injected for test only)", () => withRules(() => {
   const db = fresh(); seed(db, "SOB-001", 40000); seed(db, "SOB-002", 500000);
   const l = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 100000);
@@ -95,15 +90,49 @@ t("full lifecycle: apply > guarantee > approve > disburse > repay > clear (rules
   assert.equal(L.loanOutstanding(l, db, "2027-12-31"), 0, "a cleared loan must not accrue again");
   assert.equal(LN.committed(db, "SOB-002"), 0, "guarantee released on clearance");
 }));
-t("guarantor exposure cannot be committed twice (same capacity used up)", () => withRules(() => {
+t("one guarantor per loan, covering the full loan, from the guarantor's available savings (confirmed rules)", () => {
   const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-003", 10000); seed(db, "SOB-002", 100000);
   const a = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 60000), b = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-003", 60000);
   LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-002", 60000);
-  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), b.id, "SOB-002", 60000), /INSUFFICIENT_GUARANTOR/);
-  LN.addGuarantee(db, ctxAt("2026-02-02"), b.id, "SOB-002", 40000);
-  assert.equal(LN.committed(db, "SOB-002"), 100000);
-  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-001", 1), /INVALID/); // cannot guarantee own loan
-}));
+  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-003", 60000), /ONE_GUARANTOR_ONLY/);
+  assert.equal(LN.guarantorAvailable(db, "SOB-002"), 40000);
+  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), b.id, "SOB-002", 60000), /INSUFFICIENT_GUARANTOR/); // only 40,000 left
+  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), b.id, "SOB-002", 40000), /full loan amount/);     // no partial cover
+  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-001", 60000), /ONE_GUARANTOR_ONLY|INVALID/);
+  throwsMsg(() => LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 1000), /ALREADY_APPLIED/);
+});
+t("guarantor cannot guarantee own loan; releasing the guarantor frees capacity and allows a replacement", () => {
+  const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 100000); seed(db, "SOB-003", 100000);
+  const a = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 60000);
+  throwsMsg(() => LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-001", 60000), /own loan/);
+  LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-002");  // amount defaults to the full loan
+  throwsMsg(() => LN.releaseGuarantor(db, ctxAt("2026-02-03"), a.id, ""), /REQUIRED/);
+  LN.releaseGuarantor(db, ctxAt("2026-02-03"), a.id, "guarantor withdrew");
+  assert.equal(LN.guarantorAvailable(db, "SOB-002"), 100000);
+  LN.addGuarantee(db, ctxAt("2026-02-04"), a.id, "SOB-003");
+  assert.equal(LN.committed(db, "SOB-003"), 60000);
+});
+t("approval still BLOCKED until qualifying savings is defined, even with a valid guarantor", () => {
+  const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 100000);
+  const a = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 20000); LN.addGuarantee(db, ctxAt("2026-02-02"), a.id, "SOB-002");
+  throwsMsg(() => LN.approveLoan(db, ctxAt("2026-02-03"), a.id), /PENDING_SOB_DECISION/);
+});
+t("repayment allocation is BLOCKED (interest-first vs principal-first); repayments still reduce the balance in total", () => {
+  throwsMsg(() => L.allocateRepayment({}, {}, 1000), /PENDING_SOB_DECISION/);
+  const db = fresh(); seed(db, "SOB-001", 10000);
+  const loan = LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-001", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 0 });
+  LN.repayLoan(db, ctxAt("2026-03-01"), loan.id, 10000, "2026-03-01");
+  assert.equal(LN.loanView(db, loan, "2026-03-01").repaymentAllocation, "PENDING_SOB_DECISION");
+  assert.equal(L.loanOutstanding(loan, db, "2026-03-01"), 50000 + 2 * 5000 - 10000);
+  assert.equal(loan.principalPaid, undefined, "no split is recorded until SOB decides");
+});
+t("subscription is group income: cash up, member savings untouched, listed under income", () => {
+  const db = fresh(); const before = L.computeGroupTotals(db, "2026-02-01");
+  C.recordSubscription(db, ctxAt("2026-02-01"), "SOB-001", 2026);
+  assert.equal(L.memberSavings(db, "SOB-001"), 0);
+  assert.equal(L.computeGroupTotals(db, "2026-02-01").groupSavings, before.groupSavings);
+  assert.equal(L.classifyTransaction(db.transactions[0]).cashflow, 5000);
+});
 t("3x cap enforced at approval", () => withRules(() => {
   const db = fresh(); seed(db, "SOB-001", 10000); seed(db, "SOB-002", 900000);
   const l = LN.applyForLoan(db, ctxAt("2026-02-01"), "SOB-001", 31000);
@@ -152,28 +181,27 @@ t("annual subscription is UGX 5,000, once per member per year, with compliance v
   assert.equal(c.collected, 5000); assert.equal(c.unpaid.length, 2); assert.equal(c.expected, 15000);
   assert.equal(L.memberSavings(db, "SOB-001"), 0, "subscription does not touch savings");
 });
-t("share-out preview: loan holders are not profit-eligible; their savings action is held for SOB", () => {
+t("share-out preview: loan holders may withdraw savings but are not profit-eligible (confirmed)", () => {
   const db = fresh(); seed(db, "SOB-001", 100000); seed(db, "SOB-002", 200000);
   LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3 });
   const p = C.previewShareOut(db, 2026, "2026-12-10");
   assert.equal(p.rows.find((r) => r.memberId === "SOB-001").savingsAction, "WITHDRAW_FULL");
-  const b = p.rows.find((r) => r.memberId === "SOB-002"); assert.equal(b.eligibleForProfit, false); assert.equal(b.savingsAction, "PENDING_SOB_DECISION");
+  const b = p.rows.find((r) => r.memberId === "SOB-002"); assert.equal(b.eligibleForProfit, false); assert.equal(b.savingsAction, "WITHDRAW_FULL"); assert.equal(b.outstandingLoan > 0, true);
   assert.equal(p.rows.every((r) => r.profit === "PENDING_SOB_FORMULA"), true);
 });
-t("share-out execution: blocked on undecided loan-holder savings, then closes the year and opens the next WITHOUT deleting history", () => {
+t("share-out execution: loan holders withdraw too (loan stays payable), closes the year and opens the next WITHOUT deleting history", () => {
   const db = fresh(); seed(db, "SOB-001", 100000, "2026-03-01"); seed(db, "SOB-002", 200000, "2026-03-01"); seed(db, "SOB-003", 7000, "2026-03-01");
   LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3 });
-  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-10"), 2026, { date: "2026-12-10" }), /PENDING_SOB_DECISION/);
-  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-06-10"), 2026, { date: "2026-06-10", onLoanHolders: "carry_forward" }), /OUTSIDE_DECEMBER/);
-  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-10", committee), 2026, { date: "2026-12-10", onLoanHolders: "carry_forward" }), /FORBIDDEN/);
+  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-06-10"), 2026, { date: "2026-06-10" }), /OUTSIDE_DECEMBER/);
+  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-10", committee), 2026, { date: "2026-12-10" }), /FORBIDDEN/);
   const before = db.transactions.length, hist = L.memberLifetimeHistory(db, "SOB-001").length;
-  const ev = C.executeShareOut(db, ctxAt("2026-12-10"), 2026, { date: "2026-12-10", onLoanHolders: "carry_forward" });
-  assert.equal(ev.totalWithdrawn, 107000); assert.equal(ev.profit.status, "PENDING_SOB_FORMULA");
-  assert.equal(L.memberSavings(db, "SOB-001"), 0); assert.equal(L.memberSavings(db, "SOB-002"), 200000, "loan holder savings untouched");
-  assert.equal(db.transactions.length, before + 2, "only Share-Out entries were added; nothing deleted");
+  const ev = C.executeShareOut(db, ctxAt("2026-12-10"), 2026, { date: "2026-12-10" });
+  assert.equal(ev.totalWithdrawn, 307000); assert.equal(ev.profit.status, "PENDING_SOB_FORMULA");
+  assert.equal(L.memberSavings(db, "SOB-001"), 0); assert.equal(L.memberSavings(db, "SOB-002"), 0, "loan holder withdrew savings"); assert.ok(L.loanOutstanding(db.loans[0], db, "2026-12-10") > 0, "their loan is still payable"); assert.deepEqual(ev.loanHolders, ["SOB-002"]);
+  assert.equal(db.transactions.length, before + 3, "only Share-Out entries were added; nothing deleted");
   assert.equal(L.memberLifetimeHistory(db, "SOB-001").length, hist + 1, "lifetime history intact + the withdrawal");
   assert.equal(db.yearCycles.find((c) => c.year === 2026).status, "Closed"); assert.equal(db.yearCycles.find((c) => c.year === 2027).status, "Open");
-  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-11"), 2026, { date: "2026-12-11", onLoanHolders: "carry_forward" }), /YEAR_CLOSED|ALREADY_EXECUTED/);
+  throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-11"), 2026, { date: "2026-12-11" }), /YEAR_CLOSED|ALREADY_EXECUTED/);
   seed(db, "SOB-001", 5000, "2027-01-15"); assert.equal(L.memberSavings(db, "SOB-001"), 5000, "next cycle starts clean");
   assert.equal(L.memberLifetimeHistory(db, "SOB-001", { year: 2026 }).length, 2);
 });

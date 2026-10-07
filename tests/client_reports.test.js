@@ -3,31 +3,35 @@ const C = require("../src/client/store.js"), R = require("../src/core/reports.js
 const raw = JSON.parse(fs.readFileSync(process.env.SEED || "/mnt/user-data/outputs/SOB_FINAL_DATA_V2.json", "utf8"));
 const AS_OF = "2026-03-31"; const db0 = M.migrateLegacy(raw, AS_OF);
 const tests = []; const t = (n, f) => tests.push([n, f]);
-const memStorage = () => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = v; }, m }; };
-function fakeServer() { const s = { db: JSON.parse(JSON.stringify(db0)), rev: 3, down: false, calls: [] };
-  s.fetch = async (url, o) => { const b = JSON.parse(o.body); s.calls.push(b.action); if (s.down) throw new Error("network");
-    if (b.action === "getLedger") return { json: async () => ({ ok: true, db: Object.assign({}, s.db, { revision: s.rev }) }) };
-    if (b.baseRevision !== s.rev) return { json: async () => ({ ok: false, error: "CONFLICT" }) };
-    s.db = b.db; s.rev++; return { json: async () => ({ ok: true, revision: s.rev }) }; };
+const memStorage = () => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = v; }, removeItem: (k) => { delete m[k]; }, m }; };
+function fakeServer() { const s = { calls: [], auth: false, fail: null };
+  s.fetch = async (url, o) => { const b = JSON.parse(o.body); s.calls.push(b); const J = (x) => ({ json: async () => x });
+    if (b.action === "login") return b.pin === "good" ? J({ ok: true, token: "TOK", user: { id: "A", role: "Admin" } }) : J({ ok: false, error: "BAD_CREDENTIALS" });
+    if (b.token !== "TOK") return J({ ok: false, error: "UNAUTHENTICATED" });
+    if (b.action === "whoami") return J({ ok: true, user: { id: "A", role: "Admin" } });
+    if (b.action === "getLedger") return J({ ok: true, db: { members: [] } });
+    if (b.action === "command") return b.name === "bad" ? J({ ok: false, error: "FORBIDDEN: no" }) : J({ ok: true, result: { id: "R1" }, db: { members: [1] } });
+    return J({ ok: true }); };
   return s; }
-t("load: server copy replaces cache; cache written", async () => {
-  const sv = fakeServer(), st = memStorage(), c = C.create({ url: "u", key: "k", fetch: sv.fetch, storage: st });
-  const r = await c.load(); assert.equal(r.source, "server"); assert.equal(c.revision, 3); assert.ok(st.m["sob.ledger.v2"]);
+t("login stores the token in the SESSION storage only (never localStorage-style persistence of the ledger)", async () => {
+  const sv = fakeServer(), ss = memStorage(), c = C.create({ url: "u", fetch: sv.fetch, session: ss });
+  await assert.rejects(() => c.login("A", "bad"), (e) => e.code === "BAD_CREDENTIALS"); assert.equal(c.signedIn, false);
+  await c.login("A", "good"); assert.equal(ss.m["sob.session"], "TOK"); await c.load(); assert.deepEqual(Object.keys(ss.m), ["sob.session"], "ledger is not cached");
 });
-t("load: offline with cache falls back to cache; offline without cache errors", async () => {
-  const sv = fakeServer(), st = memStorage(); await C.create({ url: "u", fetch: sv.fetch, storage: st }).load(); sv.down = true;
-  const c = C.create({ url: "u", fetch: sv.fetch, storage: st }); assert.equal((await c.load()).source, "cache"); assert.equal(c.status, "offline-cache");
-  await assert.rejects(() => C.create({ url: "u", fetch: sv.fetch, storage: memStorage() }).load());
+t("commands carry only name/args plus the token; server result replaces the local view", async () => {
+  const sv = fakeServer(), c = C.create({ url: "u", fetch: sv.fetch, session: memStorage() }); await c.login("A", "good");
+  const r = await c.command("createEntry", { amount: 1 }); assert.deepEqual(r, { id: "R1" }); assert.deepEqual(c.db.members, [1]);
+  const sent = sv.calls[sv.calls.length - 1]; assert.deepEqual(Object.keys(sent).sort(), ["action", "args", "name", "token"], "no role/identity fields are sent");
 });
-t("mutate: saves with baseRevision and advances revision", async () => {
-  const sv = fakeServer(), c = C.create({ url: "u", fetch: sv.fetch, storage: memStorage() }); await c.load();
-  await c.mutate((db) => { db.members[0].name = "Changed"; }); assert.equal(sv.db.members[0].name, "Changed"); assert.equal(c.revision, 4);
+t("a refused command surfaces the server's error and leaves the local ledger unchanged", async () => {
+  const sv = fakeServer(), c = C.create({ url: "u", fetch: sv.fetch, session: memStorage() }); await c.login("A", "good"); await c.load();
+  await assert.rejects(() => c.command("bad", {}), (e) => e.code === "FORBIDDEN"); assert.deepEqual(c.db, { members: [] });
 });
-t("mutate: CONFLICT rolls the in-memory change back and surfaces the error", async () => {
-  const sv = fakeServer(), c = C.create({ url: "u", fetch: sv.fetch, storage: memStorage() }); await c.load(); sv.rev = 9;
-  const orig = c.db.members[0].name;
-  await assert.rejects(() => c.mutate((db) => { db.members[0].name = "X"; }), (e) => e.code === "CONFLICT");
-  assert.equal(c.db.members[0].name, orig); assert.equal(c.status, "conflict");
+t("expired/invalid session signs the client out and clears the stored token", async () => {
+  const sv = fakeServer(), ss = memStorage(), c = C.create({ url: "u", fetch: sv.fetch, session: ss }); await c.login("A", "good");
+  ss.m["sob.session"] = "TOK"; const c2 = C.create({ url: "u", fetch: async (u, o) => ({ json: async () => ({ ok: false, error: "UNAUTHENTICATED" }) }), session: ss });
+  assert.equal(await c2.resume(), null); assert.equal(ss.m["sob.session"], undefined);
+  await c.logout(); assert.equal(c.signedIn, false); assert.equal(ss.m["sob.session"], undefined);
 });
 t("reports: savings and loan book reconcile with the engine", () => {
   const s = R.savings(db0); assert.equal(s.totals.total, L.computeGroupTotals(db0, AS_OF).groupSavings);

@@ -1,12 +1,14 @@
 /* SOB core/cycle — annual subscription, year cycles and the December share-out.
-   Confirmed: UGX 5,000 annual subscription; FULL savings withdrawn/shared out in December; members with an outstanding loan
-   are not eligible for PROFIT distribution; history is never deleted at share-out.
-   NOT decided by SOB (stays blocked): the profit formula, and what happens to the SAVINGS of members who still owe a loan. */
+   Confirmed: UGX 5,000 annual subscription (group income, never part of savings); FULL savings withdrawn in December for EVERY member,
+   including members with an outstanding loan (the loan stays separately payable); members with an outstanding loan are NOT eligible
+   for PROFIT distribution; history is never deleted at share-out.
+   Still blocked: the profit formula. Flagged, not decided: a guarantor's withdrawn savings can leave a live loan without cover
+   (shown as guaranteeAtRisk in the preview). */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.cycle = api; }
-})(typeof self !== "undefined" ? self : this, function (dates, L, G) {
+})(typeof self !== "undefined" ? self : this, function (dates, L, G, LN) {
   const SUBSCRIPTION_AMOUNT = 5000;
 
   /* --- subscriptions --- */
@@ -39,11 +41,12 @@
       const owing = L.activeLoans(db).filter((l) => l.memberId === m.id).reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, db, asOf)), 0);
       const hasLoan = owing > 0;
       return { memberId: m.id, name: m.name, savings, outstandingLoan: owing, eligibleForProfit: !hasLoan,
-        savingsAction: savings <= 0 ? "NONE" : (hasLoan ? "PENDING_SOB_DECISION" : "WITHDRAW_FULL"), profit: "PENDING_SOB_FORMULA" };
+        savingsAction: savings <= 0 ? "NONE" : "WITHDRAW_FULL", guaranteeAtRisk: savings > 0 ? LN.committed(db, m.id) : 0, profit: "PENDING_SOB_FORMULA" };
     });
     return { year: Number(year), rows,
       totals: { withdrawable: rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
-        heldBack: rows.filter((r) => r.savingsAction === "PENDING_SOB_DECISION").reduce((a, r) => a + r.savings, 0),
+        withdrawableByLoanHolders: rows.filter((r) => r.outstandingLoan > 0 && r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
+        guaranteesAtRisk: rows.filter((r) => r.guaranteeAtRisk > 0).length,
         eligibleMembers: rows.filter((r) => r.eligibleForProfit).length, excludedMembers: rows.filter((r) => !r.eligibleForProfit).length } };
   }
   function executeShareOut(db, ctx, year, o) {
@@ -55,10 +58,7 @@
     if (!dates.isISO(date) || dates.yearOf(date) !== year) throw new Error("INVALID: share-out date must fall in " + year);
     if (date.slice(5, 7) !== "12" && !(o.force && o.reason)) throw new Error("OUTSIDE_DECEMBER: share-out is a December event (force requires a reason)");
     const pv = previewShareOut(db, year, date);
-    const held = pv.rows.filter((r) => r.savingsAction === "PENDING_SOB_DECISION");
-    if (held.length && o.onLoanHolders !== "carry_forward")
-      throw new Error("PENDING_SOB_DECISION: " + held.length + " member(s) with an outstanding loan - SOB has not decided what happens to their savings (explicit onLoanHolders option required)");
-    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolderTreatment: held.length ? "carry_forward" : "n/a" };
+    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
     pv.rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").forEach((r) => {
       const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.savings, type: "Share-Out", purpose: "December share-out " + year, shareOutId: event.id });
       event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.savings, entryId: t.id });
@@ -67,7 +67,7 @@
     (db.shareOutEvents = db.shareOutEvents || []).push(event);
     Object.assign(cycle, { status: "Closed", closedDate: date, shareOutId: event.id });
     ensureCycle(db, year + 1, dates.addDays(date, 1)); // next cycle begins automatically; nothing is deleted
-    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolderTreatment: event.loanHolderTreatment }, o.reason);
+    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolders: event.loanHolders.length, guaranteesAtRisk: pv.totals.guaranteesAtRisk }, o.reason);
     return event;
   }
   /* Profit distribution is blocked until SOB approves a formula; this never guesses. */

@@ -8,12 +8,11 @@
   const isStaff = () => st.user && st.user.role !== "Member";
   const nameOf = (id) => ((st.db.members.find((m) => m.id === id)) || {}).name || id;
 
-  /* Every write goes through commit(): in live mode it persists to the Sheet (rolled back on conflict), in demo mode it stays in memory. */
-  async function commit(fn) {
-    try {
-      const res = st.live ? await st.store.mutate(fn) : fn(st.db);
-      st.db = st.live ? st.store.db : st.db; render(); return res;
-    } catch (e) { throw e; }
+  /* Every write is a named command. Live: the SERVER runs it as the signed-in user (and may refuse). Demo: the same command table runs in memory. */
+  async function commit(name, args) {
+    const res = st.live ? await st.store.command(name, args) : S.commands.run(st.db, ctx(), name, args);
+    if (st.live) st.db = st.store.db;
+    render(); return res;
   }
   const act = (fn, okMsg) => async (...a) => { try { await fn(...a); if (okMsg) toast(okMsg); } catch (e) { toast(friendly(e), true); throw e; } };
 
@@ -28,16 +27,10 @@
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
-      const pin = h("input", { type: "password", id: "pin", placeholder: "PIN" }), mid = h("input", { id: "mid", placeholder: "Member ID (leave blank for staff)" });
-      box.append(h("label", null, "Member ID"), mid, h("label", null, "PIN"), pin, h("div", { class: "row" }, h("button", { class: "primary", onclick: async () => {
-        try {
-          const staff = !mid.value.trim();
-          const r = await (await fetch(CFG.authUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ key: CFG.authKey, action: staff ? "checkStaffPin" : "checkPin", pin: pin.value, memberId: mid.value.trim() }) })).json();
-          if (!r.ok) throw new Error(r.error || "Sign-in failed");
-          if (staff) st.user = { id: r.matchedRole, name: r.matchedRole, role: CFG.staffRoleMap[r.matchedRole] || "Committee" };
-          else { const m = st.db.members.find((x) => x.id === mid.value.trim().toUpperCase()); if (!m) throw new Error("Unknown member"); st.user = { id: m.id, name: m.name, role: "Member", memberId: m.id }; }
-          st.view = null; render();
-        } catch (e) { toast(friendly(e), true); }
+      const pin = h("input", { type: "password", id: "pin", placeholder: "PIN", autocomplete: "current-password" }), mid = h("input", { id: "mid", placeholder: "Member ID or staff ID", autocapitalize: "characters" });
+      box.append(h("label", null, "ID"), mid, h("label", null, "PIN"), pin, h("div", { class: "row" }, h("button", { class: "primary", id: "login-go", onclick: async () => {
+        try { await st.store.login(mid.value.trim(), pin.value); await st.store.load(); st.db = st.store.db; st.user = st.store.user; st.view = null; render(); }
+        catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "Wrong ID or PIN" : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
       } }, "Sign in")));
     }
     return box;
@@ -51,7 +44,7 @@
     if (!st.user) { app.append(loginScreen()); return; }
     const nav = isStaff() ? NAV_STAFF : NAV_MEMBER; st.view = st.view || nav[0][0];
     app.append(h("header", null, h("h1", null, "SOB " + (isStaff() ? "Admin" : "Member")), h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV"), h("span", { class: "pill" }, st.user.role + " · " + st.user.name),
-      h("button", { id: "logout", onclick: () => { st.user = null; st.view = null; render(); } }, "Sign out")),
+      h("button", { id: "logout", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, "Sign out")),
       h("nav", null, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l))));
     const main = h("main", { id: "main" }); app.append(main);
     try { main.append(VIEWS[st.view]()); } catch (e) { main.append(State("error", "Could not show this screen: " + friendly(e))); }
@@ -96,7 +89,7 @@
       h("h2", { class: "sec" }, "Lifetime history"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "Savings after", num: 1, render: (t) => num(t.runningSavings) }], hist.slice(0, 50))));
   }
   function members() {
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "member.manage") ? h("button", { class: "primary", id: "add-member", onclick: () => Form("Add member", [{ name: "name", label: "Full name" }, { name: "phone", label: "Phone" }], act(async (v) => commit((db) => G.addMember(db, ctx(), { name: v.name, phone: v.phone })), "Member added")) }, "Add member") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "member.manage") ? h("button", { class: "primary", id: "add-member", onclick: () => Form("Add member", [{ name: "name", label: "Full name" }, { name: "phone", label: "Phone" }], act(async (v) => commit("addMember", { name: v.name, phone: v.phone }), "Member added")) }, "Add member") : null),
       Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Savings", num: 1, render: (m) => num(L.memberSavings(st.db, m.id)) }], st.db.members, (m) => openMember(m.id)));
   }
 
@@ -111,30 +104,31 @@
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
     const row = h("div", { class: "row" }); const M = () => document.querySelector(".modal-bg");
     const add = (label, cond, fn, cls) => cond && row.append(h("button", { class: cls || "", "data-act": label, onclick: fn }, label));
-    add("Add guarantor", G.can(c, "guarantee.manage") && ["Pending", "Approved"].includes(loan.status), () => Form("Add guarantor", [{ name: "g", label: "Guarantor", options: st.db.members.filter((m) => m.id !== loan.memberId).map((m) => ({ value: m.id, label: m.name })) }, { name: "amount", label: "Amount (UGX)", type: "number" }], act(async (f) => { await commit((db) => LN.addGuarantee(db, ctx(), id, f.g, f.amount)); M().remove(); openLoan(id); }, "Guarantee added")));
-    add("Approve", G.can(c, "loan.review") && loan.status === "Pending", act(async () => { await commit((db) => LN.approveLoan(db, ctx(), id)); M().remove(); openLoan(id); }, "Loan approved"), "primary");
-    add("Decline", G.can(c, "loan.review") && ["Pending", "Approved"].includes(loan.status), () => Form("Decline loan", [{ name: "reason", label: "Reason" }], act(async (f) => { await commit((db) => LN.declineLoan(db, ctx(), id, f.reason)); M().remove(); }, "Loan declined")));
-    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, { name: "grace", label: "Grace months", type: "number", value: 3 }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }], act(async (f) => { await commit((db) => LN.disburseLoan(db, ctx(), id, { assignedMonthlyInterest: f.rate, graceMonths: f.grace, date: f.date })); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
-    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date", value: today() }], act(async (f) => { await commit((db) => LN.repayLoan(db, ctx(), id, f.amount, f.date)); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
-    add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit((db) => LN.editAssignedInterest(db, ctx(), id, f.amt, f.reason)); M().remove(); openLoan(id); }, "Interest updated and audited")));
-    add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit((db) => (loan.voided ? LN.restoreLoan : LN.voidLoan)(db, ctx(), id, f.reason)); M().remove(); }, "Done")), "danger");
+    add("Add guarantor", G.can(c, "guarantee.manage") && ["Pending", "Approved"].includes(loan.status) && !LN.loanCover(st.db, id), () => Form("Add guarantor (one per loan, covers the full " + ugx(loan.loanAmount) + ")", [{ name: "g", label: "Guarantor", options: st.db.members.filter((m) => m.id !== loan.memberId).map((m) => ({ value: m.id, label: m.name + " — available " + num(LN.guarantorAvailable(st.db, m.id)) })) }], act(async (f) => { await commit("addGuarantee", { loanId: id, guarantorId: f.g }); M().remove(); openLoan(id); }, "Guarantee added")));
+    add("Replace guarantor", G.can(c, "guarantee.manage") && ["Pending", "Approved"].includes(loan.status) && LN.loanCover(st.db, id) > 0, () => Form("Release guarantor", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantor released")));
+    add("Approve", G.can(c, "loan.review") && loan.status === "Pending", act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Loan approved"), "primary");
+    add("Decline", G.can(c, "loan.review") && ["Pending", "Approved"].includes(loan.status), () => Form("Decline loan", [{ name: "reason", label: "Reason" }], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
+    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, { name: "grace", label: "Grace months", type: "number", value: 3 }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, graceMonths: f.grace, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
+    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date", value: today() }], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
+    add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
+    add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     b.append(row); Modal("Loan " + id, b);
   }
   function loans() {
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") || isStaff() ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit((db) => LN.applyForLoan(db, ctx(), f.m, f.amt)), "Application recorded")) }, "New application") : null),
-      Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Approval of any loan is blocked until SOB defines qualifying savings and guarantor sufficiency (Open Q2, Q3)."));
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") || isStaff() ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt }), "Application recorded")) }, "New application") : null),
+      Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Approval of any loan is blocked until SOB defines qualifying savings (the 3× limit basis). Each loan needs one guarantor with enough available savings."));
   }
 
   /* ---------- ledger ---------- */
   function ledger() {
     const rows = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 200);
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }, { name: "purpose", label: "Purpose" }], act(async (f) => commit((db) => G.createEntry(db, ctx(), { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose })), "Entry recorded")) }, "New entry") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "date", label: "Date (YYYY-MM-DD)", value: today() }, { name: "purpose", label: "Purpose" }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
       Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id)));
   }
   function openEntry(id) {
     const t = st.db.transactions.find((x) => x.id === id), c = ctx(), row = h("div", { class: "row" });
-    const fn = t.voided ? G.restoreEntry : G.voidEntry, perm = t.voided ? "ledger.restore" : "ledger.void";
-    if (G.can(c, perm)) row.append(h("button", { class: "danger", "data-act": "void", onclick: () => Form(t.voided ? "Restore entry" : "Void entry", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit((db) => fn(db, ctx(), id, f.reason)); document.querySelector(".modal-bg").remove(); }, "Done")) }, t.voided ? "Restore" : "Void"));
+    const perm = t.voided ? "ledger.restore" : "ledger.void";
+    if (G.can(c, perm)) row.append(h("button", { class: "danger", "data-act": "void", onclick: () => Form(t.voided ? "Restore entry" : "Void entry", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(t.voided ? "restoreEntry" : "voidEntry", { id, reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Done")) }, t.voided ? "Restore" : "Void"));
     const aud = (st.db.auditLog || []).filter((a) => a.entityId === id);
     drill("Entry " + id, null, h("div", null, h("p", null, nameOf(t.memberId), " · ", t.type, " · ", ugx(t.amount), " · ", D.toDisplay(t.date)), t.voided ? h("p", { class: "err" }, "Voided: " + (t.voidReason || "")) : null, row, h("h2", { class: "sec" }, "Audit trail"), Table([{ label: "When", key: "date" }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], aud)));
   }
@@ -143,15 +137,15 @@
   function subs() {
     const y = today().slice(0, 4), c = C.subscriptionCompliance(st.db, y);
     return h("div", null, h("div", { class: "grid" }, Card("Collected", ugx(c.collected), "of " + ugx(c.expected)), Card("Paid", String(c.paid.length)), Card("Unpaid", String(c.unpaid.length))),
-      Table([{ label: "Member", render: (m) => m.name }, { label: "Status", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); act(async () => commit((db) => C.recordSubscription(db, ctx(), m.id, y)), "Recorded UGX 5,000")(); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
+      Table([{ label: "Member", render: (m) => m.name }, { label: "Status", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); act(async () => commit("recordSubscription", { memberId: m.id, year: y }), "Recorded UGX 5,000")(); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
   }
   function shareout() {
     const y = Number(today().slice(0, 4)), p = C.previewShareOut(st.db, y, today());
     const done = (st.db.shareOutEvents || []).find((e) => e.year === y);
-    return h("div", null, h("div", { class: "blocked" }, "Profit distribution is blocked until SOB approves the formula (Open Q1). Loan-holders' savings are held until SOB decides their treatment."),
-      h("div", { class: "grid" }, Card("Savings to withdraw in full", ugx(p.totals.withdrawable)), Card("Held back (loan-holders)", ugx(p.totals.heldBack)), Card("Profit-eligible members", String(p.totals.eligibleMembers)), Card("Excluded (outstanding loan)", String(p.totals.excludedMembers))),
+    return h("div", null, h("div", { class: "blocked" }, "Profit distribution is blocked until SOB approves the formula. Every member withdraws their full savings, including members with a loan; members with an outstanding loan are not eligible for profit."),
+      h("div", { class: "grid" }, Card("Savings to withdraw in full", ugx(p.totals.withdrawable)), Card("Of which loan-holders", ugx(p.totals.withdrawableByLoanHolders), "Loans stay payable"), Card("Guarantors withdrawing", String(p.totals.guaranteesAtRisk), "Live guarantees may lose cover"), Card("Profit-eligible members", String(p.totals.eligibleMembers)), Card("Excluded (outstanding loan)", String(p.totals.excludedMembers))),
       Table([{ label: "Member", key: "name" }, { label: "Savings", num: 1, render: (r) => num(r.savings) }, { label: "Loan owed", num: 1, render: (r) => num(r.outstandingLoan) }, { label: "Savings action", key: "savingsAction" }, { label: "Profit", key: "profit" }], p.rows, (r) => openMember(r.memberId)),
-      done ? h("p", { class: "mute" }, "Share-out for " + y + " executed on " + D.toDisplay(done.date) + ".") : G.can(ctx(), "shareout.execute") ? h("div", { class: "row" }, h("button", { class: "danger", id: "exec-shareout", onclick: act(async () => { if (!confirm("Execute the " + y + " share-out? This closes the year.")) return; await commit((db) => C.executeShareOut(db, ctx(), y, {})); }, "Share-out executed") }, "Execute share-out")) : null);
+      done ? h("p", { class: "mute" }, "Share-out for " + y + " executed on " + D.toDisplay(done.date) + ".") : G.can(ctx(), "shareout.execute") ? h("div", { class: "row" }, h("button", { class: "danger", id: "exec-shareout", onclick: act(async () => { if (!confirm("Execute the " + y + " share-out? This closes the year.")) return; await commit("executeShareOut", { year: y }); }, "Share-out executed") }, "Execute share-out")) : null);
   }
   const REPORTS = { "Savings by member": () => R.savings(st.db), "Loan book": () => R.loans(st.db, today()), "Loan repayments": () => R.repayments(st.db, null), "Guarantor exposure": () => R.guarantors(st.db), "Subscriptions": () => R.subscriptions(st.db, today().slice(0, 4)), "Income & expenses": () => R.incomeExpenses(st.db, null), "December share-out": () => R.shareOut(st.db, today().slice(0, 4), today()), "Annual summary": () => R.annualSummary(st.db, today().slice(0, 4)), "Quarterly distribution": () => R.quarterlyDistribution(st.db, { year: Number(today().slice(0, 4)), quarter: 1 }) };
   function reports() {
@@ -177,7 +171,7 @@
   }
   function myLoans() {
     const mine = K.loanBook(st.db, today()).filter((v) => st.db.loans.find((l) => l.id === v.id).memberId === me());
-    return h("div", null, h("div", { class: "row" }, h("button", { class: "primary", id: "apply", onclick: () => Form("Apply for a loan", [{ name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit((db) => LN.applyForLoan(db, ctx(), me(), f.amt)), "Application sent")) }, "Apply for a loan")),
+    return h("div", null, h("div", { class: "row" }, h("button", { class: "primary", id: "apply", onclick: () => Form("Apply for a loan", [{ name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: me(), amount: f.amt }), "Application sent")) }, "Apply for a loan")),
       Table(loanCols.filter((c) => c.label !== "Member"), mine, (v) => openLoan(v.id)), h("p", { class: "mute" }, "Interest is assigned by the Admin for each loan and recalculated monthly until the loan is settled."));
   }
   const VIEWS = { dash: dashboard, members, loans, ledger, subs, shareout, reports, audit, home, savings: mySavings, myloans: myLoans };
@@ -186,7 +180,11 @@
   async function boot() {
     app.append(State("loading"));
     try {
-      if (st.live) { st.store = S.client.create({ url: CFG.ledgerUrl, key: CFG.ledgerKey, fetch: window.fetch.bind(window), storage: window.localStorage }); await st.store.load(); st.db = st.store.db; }
+      if (st.live) {
+        st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
+        st.db = { members: [], transactions: [], loans: [] };
+        if (await st.store.resume()) { await st.store.load(); st.db = st.store.db; st.user = st.store.user; }
+      }
       else { const raw = await (await fetch("demo-seed.json")).json(); st.db = S.migrate.migrateLegacy(raw, today()); }
       window.__SOB = st; render();
     } catch (e) { app.replaceChildren(State("error", "Could not load data: " + friendly(e))); }

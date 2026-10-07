@@ -1,4 +1,3 @@
-/* DEV configuration. Live mode needs the deployed Code_Ledger.gs URL + secret; leave empty to run in DEMO mode (in-memory, seeded). */
-window.SOB_CONFIG = { ledgerUrl: "", ledgerKey: "", authUrl: "", authKey: "",
-  /* Staff PIN role -> platform role. Treasurer/Oversight permissions are an open SOB decision (Q5): safe read-only default. */
-  staffRoleMap: { admin: "Admin", treasurer: "Committee", oversight: "Committee" } };
+/* DEV configuration. Live mode needs only the deployed Code_Ledger.gs web-app URL (no secret is embedded in the browser;
+   sign-in is per user and every permission is enforced by the server). Leave empty for DEMO mode (in-memory, seeded, no server). */
+window.SOB_CONFIG = { ledgerUrl: "" };

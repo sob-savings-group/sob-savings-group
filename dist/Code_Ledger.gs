@@ -56,7 +56,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   const CONFIG_PENDING = {
     profitFormula: null,           // Open Q1
     qualifyingSavingsRule: null,   // Open Q2
-    guarantorSufficiencyRule: null,// Open Q3
+    repaymentAllocation: null,     // interest-first vs principal-first: awaiting SOB (split is not recorded until decided)
     interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
   };
 
@@ -77,7 +77,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
       case "Loan Disbursement": return { savings: 0, loan: -amt, profit: 0, cashflow: -amt };
       case "Loan Repayment": return { savings: 0, loan: amt, profit: 0, cashflow: amt };
       // Group-level movements: they change cash, never a member's savings.
-      // (Subscription treated as group income, not a deduction from savings: ASSUMPTION, see Open Q8.)
+      // (CONFIRMED by SOB: the UGX 5,000 annual subscription is group income, separate from member savings.)
       case "Subscription":
       case "Income": return { savings: 0, loan: 0, profit: 0, cashflow: amt };
       case "Expense": return { savings: 0, loan: 0, profit: 0, cashflow: -amt };
@@ -161,10 +161,14 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     return { qualifyingSavings: q, maxLoan: 3 * q }; // 3x cap is confirmed
   }
   /* Eligibility for distribution — the loan-exclusion rule IS confirmed, independent of the formula. */
+  function allocateRepayment() {
+    if (!CONFIG_PENDING.repaymentAllocation) throw new Error("PENDING_SOB_DECISION: repayment allocation - interest first or principal first (awaiting SOB)");
+    return CONFIG_PENDING.repaymentAllocation.apply(null, arguments);
+  }
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, CONFIG_PENDING, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
@@ -287,7 +291,9 @@ return module.exports; })();
 __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
 /* SOB core/loans — application -> review -> approval/decline -> disbursement -> repayment -> clearance/reversal,
    plus guarantor exposure. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
-   Rules awaiting SOB (qualifying savings, guarantor sufficiency) are read from ledger.CONFIG_PENDING and BLOCK, never guessed. */
+   Confirmed: ONE guarantor per loan, who must have enough AVAILABLE savings (lifetime savings minus guarantees already committed)
+   to cover the guaranteed amount, which is the full loan. Still blocked (ledger.CONFIG_PENDING): qualifying savings (3x cap basis),
+   repayment allocation. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
@@ -306,9 +312,9 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     if (!L.CONFIG_PENDING.qualifyingSavingsRule) throw new Error("PENDING_SOB_DECISION: qualifying-savings definition (Open Q2)");
     return L.CONFIG_PENDING.qualifyingSavingsRule(db, memberId);
   }
+  /* CONFIRMED rule: available = the guarantor's savings less what they have already guaranteed on other live loans. */
   function guarantorAvailable(db, guarantorId) {
-    if (!L.CONFIG_PENDING.guarantorSufficiencyRule) throw new Error("PENDING_SOB_DECISION: guarantor sufficiency rule (Open Q3)");
-    return L.CONFIG_PENDING.guarantorSufficiencyRule({ qualifying: qualifyingSavings(db, guarantorId), committed: committed(db, guarantorId) });
+    return L.memberSavings(db, guarantorId) - committed(db, guarantorId);
   }
   function exposureReport(db) {
     return db.members.map((m) => ({ memberId: m.id, name: m.name, committed: committed(db, m.id),
@@ -318,14 +324,23 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   function addGuarantee(db, ctx, loanId, guarantorId, amount) {
     G.require(ctx, "guarantee.manage");
     const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
-    amount = Number(amount); if (!(amount > 0)) throw new Error("INVALID: guarantee amount");
+    if (loanCover(db, loanId) > 0) throw new Error("ONE_GUARANTOR_ONLY: this loan already has a guarantor; release it first to change");
+    amount = amount === undefined || amount === "" || amount === null ? loan.loanAmount : Number(amount);
+    if (amount !== Number(loan.loanAmount)) throw new Error("INVALID: the guarantor covers the full loan amount (" + loan.loanAmount + ")");
     if (guarantorId === loan.memberId) throw new Error("INVALID: a member cannot guarantee their own loan");
     if (!db.members.some((m) => m.id === guarantorId)) throw new Error("UNKNOWN_MEMBER: " + guarantorId);
-    if (amount > guarantorAvailable(db, guarantorId)) throw new Error("INSUFFICIENT_GUARANTOR: requested " + amount + " exceeds available capacity");
+    const avail = guarantorAvailable(db, guarantorId);
+    if (amount > avail) throw new Error("INSUFFICIENT_GUARANTOR: guarantee of " + amount + " exceeds the guarantor's available savings (" + avail + ")");
     const g = { id: G.uid("GUA"), loanId, guarantorId, amount, status: "Active", dateCommitted: ctx.today, committedBy: ctx.by };
     (db.guarantees = db.guarantees || []).push(g);
     G.audit(db, ctx, "Guarantee", g.id, "Committed", null, { loanId, guarantorId, amount });
     return g;
+  }
+  /* Admin replaces the guarantor (e.g. guarantor withdrew savings): release then add, both audited. */
+  function releaseGuarantor(db, ctx, loanId, reason) {
+    G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
+    releaseGuarantees(db, ctx, loanId, reason);
   }
   function releaseGuarantees(db, ctx, loanId, why) {
     (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).forEach((g) => {
@@ -443,23 +458,25 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), guaranteed: loanCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
-  return { committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantees, applyForLoan, approveLoan,
+  return { committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
     declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });
 
 return module.exports; })();
 __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
 /* SOB core/cycle — annual subscription, year cycles and the December share-out.
-   Confirmed: UGX 5,000 annual subscription; FULL savings withdrawn/shared out in December; members with an outstanding loan
-   are not eligible for PROFIT distribution; history is never deleted at share-out.
-   NOT decided by SOB (stays blocked): the profit formula, and what happens to the SAVINGS of members who still owe a loan. */
+   Confirmed: UGX 5,000 annual subscription (group income, never part of savings); FULL savings withdrawn in December for EVERY member,
+   including members with an outstanding loan (the loan stays separately payable); members with an outstanding loan are NOT eligible
+   for PROFIT distribution; history is never deleted at share-out.
+   Still blocked: the profit formula. Flagged, not decided: a guarantor's withdrawn savings can leave a live loan without cover
+   (shown as guaranteeAtRisk in the preview). */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.cycle = api; }
-})(typeof self !== "undefined" ? self : this, function (dates, L, G) {
+})(typeof self !== "undefined" ? self : this, function (dates, L, G, LN) {
   const SUBSCRIPTION_AMOUNT = 5000;
 
   /* --- subscriptions --- */
@@ -492,11 +509,12 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
       const owing = L.activeLoans(db).filter((l) => l.memberId === m.id).reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, db, asOf)), 0);
       const hasLoan = owing > 0;
       return { memberId: m.id, name: m.name, savings, outstandingLoan: owing, eligibleForProfit: !hasLoan,
-        savingsAction: savings <= 0 ? "NONE" : (hasLoan ? "PENDING_SOB_DECISION" : "WITHDRAW_FULL"), profit: "PENDING_SOB_FORMULA" };
+        savingsAction: savings <= 0 ? "NONE" : "WITHDRAW_FULL", guaranteeAtRisk: savings > 0 ? LN.committed(db, m.id) : 0, profit: "PENDING_SOB_FORMULA" };
     });
     return { year: Number(year), rows,
       totals: { withdrawable: rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
-        heldBack: rows.filter((r) => r.savingsAction === "PENDING_SOB_DECISION").reduce((a, r) => a + r.savings, 0),
+        withdrawableByLoanHolders: rows.filter((r) => r.outstandingLoan > 0 && r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
+        guaranteesAtRisk: rows.filter((r) => r.guaranteeAtRisk > 0).length,
         eligibleMembers: rows.filter((r) => r.eligibleForProfit).length, excludedMembers: rows.filter((r) => !r.eligibleForProfit).length } };
   }
   function executeShareOut(db, ctx, year, o) {
@@ -508,10 +526,7 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
     if (!dates.isISO(date) || dates.yearOf(date) !== year) throw new Error("INVALID: share-out date must fall in " + year);
     if (date.slice(5, 7) !== "12" && !(o.force && o.reason)) throw new Error("OUTSIDE_DECEMBER: share-out is a December event (force requires a reason)");
     const pv = previewShareOut(db, year, date);
-    const held = pv.rows.filter((r) => r.savingsAction === "PENDING_SOB_DECISION");
-    if (held.length && o.onLoanHolders !== "carry_forward")
-      throw new Error("PENDING_SOB_DECISION: " + held.length + " member(s) with an outstanding loan - SOB has not decided what happens to their savings (explicit onLoanHolders option required)");
-    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolderTreatment: held.length ? "carry_forward" : "n/a" };
+    const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
     pv.rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").forEach((r) => {
       const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.savings, type: "Share-Out", purpose: "December share-out " + year, shareOutId: event.id });
       event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.savings, entryId: t.id });
@@ -520,7 +535,7 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
     (db.shareOutEvents = db.shareOutEvents || []).push(event);
     Object.assign(cycle, { status: "Closed", closedDate: date, shareOutId: event.id });
     ensureCycle(db, year + 1, dates.addDays(date, 1)); // next cycle begins automatically; nothing is deleted
-    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolderTreatment: event.loanHolderTreatment }, o.reason);
+    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolders: event.loanHolders.length, guaranteesAtRisk: pv.totals.guaranteesAtRisk }, o.reason);
     return event;
   }
   /* Profit distribution is blocked until SOB approves a formula; this never guesses. */
@@ -530,6 +545,43 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
   }
 
   return { SUBSCRIPTION_AMOUNT, subscriptionEntry, recordSubscription, subscriptionCompliance, ensureCycle, previewShareOut, executeShareOut, distributeProfit };
+});
+
+return module.exports; })();
+__M['core/commands'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/commands — the ONLY ways to change the ledger. A closed whitelist: the server (and the demo UI) run exactly these,
+   with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
+})(typeof self !== "undefined" ? self : this, function (G, LN, C) {
+  const COMMANDS = {
+    createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
+    voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
+    restoreEntry: (db, ctx, a) => G.restoreEntry(db, ctx, a.id, a.reason),
+    approveEntry: (db, ctx, a) => G.approveEntry(db, ctx, a.id, a.decision, a.reason),
+    addMember: (db, ctx, a) => G.addMember(db, ctx, { name: a.name, phone: a.phone, email: a.email, location: a.location }),
+    applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
+    addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
+    releaseGuarantor: (db, ctx, a) => LN.releaseGuarantor(db, ctx, a.loanId, a.reason),
+    approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
+    declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
+    disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, date: a.date }),
+    recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, remarks: a.remarks }),
+    repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
+    editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
+    voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
+    restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
+    recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
+    executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason })
+  };
+  function run(db, ctx, name, args) {
+    if (!Object.prototype.hasOwnProperty.call(COMMANDS, name)) throw new Error("UNKNOWN_COMMAND: " + name);
+    if (args !== undefined && (args === null || typeof args !== "object" || Array.isArray(args))) throw new Error("INVALID: args must be an object");
+    return COMMANDS[name](db, ctx, args || {});
+  }
+  return { COMMANDS, names: Object.keys(COMMANDS), run };
 });
 
 return module.exports; })();
@@ -639,6 +691,78 @@ __M['core/migrate'] = (function(){ const module = {exports:{}}; const require = 
 });
 
 return module.exports; })();
+__M['core/reports'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/reports — every report is derived from the ledger and returns {title, columns, rows, totals} so the same data feeds
+   the on-screen table, CSV export and print-ready HTML. Blocked (pending SOB decision) reports return {blocked:true, reason}. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./kpis.js") : root.SOB.kpis);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reports = api; }
+})(typeof self !== "undefined" ? self : this, function (dates, L, LN, C, K) {
+  const name = (db, id) => (db.members.find((m) => m.id === id) || {}).name || id;
+  const sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const R = (title, columns, rows, totals) => ({ title, columns, rows, totals: totals || {} });
+
+  function memberStatement(db, memberId, period) {
+    const h = L.memberLifetimeHistory(db, memberId, period);
+    const rows = h.map((r) => ({ date: dates.toDisplay(r.date), type: r.type, purpose: r.purpose || "", amount: r.amount, savingsEffect: L.classifyTransaction(r).savings, balance: r.runningSavings }));
+    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0 });
+  }
+  function savings(db) {
+    const rows = db.members.map((m) => ({ memberId: m.id, name: m.name, savings: L.memberSavings(db, m.id) }));
+    return R("Savings by member", ["memberId", "name", "savings"], rows, { total: sum(rows, "savings") });
+  }
+  function loans(db, asOf) {
+    const rows = K.loanBook(db, asOf).map((v) => ({ loanId: v.id, member: name(db, (db.loans.find((l) => l.id === v.id) || {}).memberId), principal: v.principal, interest: v.accumulatedInterest, repaid: v.repaid, balance: v.balance, status: v.status }));
+    return R("Loan book", ["loanId", "member", "principal", "interest", "repaid", "balance", "status"], rows, { principal: sum(rows, "principal"), balance: sum(rows, "balance") });
+  }
+  function repayments(db, period) {
+    const rows = L.activeTransactions(db).filter((t) => t.type === "Loan Repayment" && L.inPeriod(t, period)).map((t) => ({ date: dates.toDisplay(t.date), member: name(db, t.memberId), loanId: t.loanId, amount: t.amount }));
+    return R("Loan repayments", ["date", "member", "loanId", "amount"], rows, { total: sum(rows, "amount") });
+  }
+  function guarantors(db) {
+    const rows = (db.guarantees || []).map((g) => ({ guarantor: name(db, g.guarantorId), loanId: g.loanId, amount: g.amount, status: g.status }));
+    return R("Guarantor exposure", ["guarantor", "loanId", "amount", "status"], rows, { activeTotal: sum(rows.filter((r) => r.status === "Active"), "amount") });
+  }
+  function subscriptions(db, year) {
+    const c = C.subscriptionCompliance(db, year);
+    const rows = db.members.filter((m) => m.status !== "Inactive").map((m) => ({ memberId: m.id, name: m.name, paid: c.paid.includes(m.id) ? "Paid" : "Unpaid" }));
+    return R("Subscriptions " + year, ["memberId", "name", "paid"], rows, { collected: c.collected, expected: c.expected });
+  }
+  function incomeExpenses(db, period) {
+    const live = L.activeTransactions(db).filter((t) => L.inPeriod(t, period));
+    const rows = live.filter((t) => ["Expense", "Subscription", "Income", "Profit"].includes(t.type)).map((t) => ({ date: dates.toDisplay(t.date), type: t.type, purpose: t.purpose || "", amount: t.amount }));
+    return R("Income & expenses", ["date", "type", "purpose", "amount"], rows, { income: sum(rows.filter((r) => r.type !== "Expense"), "amount"), expenses: sum(rows.filter((r) => r.type === "Expense"), "amount") });
+  }
+  function shareOut(db, year, asOf) {
+    const p = C.previewShareOut(db, year, asOf || year + "-12-31");
+    return R("December share-out " + year + " (preview)", ["memberId", "name", "savings", "outstandingLoan", "savingsAction", "profit"], p.rows, p.totals);
+  }
+  function quarterlyDistribution(db, period) {
+    try { return L.profitShare(db, period); } catch (e) { return { blocked: true, title: "Quarterly profit distribution", reason: String(e.message) }; }
+  }
+  function annualSummary(db, year) {
+    const d = K.dashboard(db, year + "-12-31", { year: Number(year) });
+    return R("Annual summary " + year, ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
+  }
+  const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function toCSV(rep) {
+    if (rep.blocked) throw new Error("BLOCKED: " + rep.reason);
+    const q = (v) => { v = v === undefined || v === null ? "" : String(v); if (/^[=+\-@]/.test(v) && isNaN(Number(v))) v = "'" + v; return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    return [rep.columns.join(",")].concat(rep.rows.map((r) => rep.columns.map((c) => q(r[c])).join(","))).join("\n");
+  }
+  function toPrintHTML(rep, meta) {
+    meta = meta || {};
+    if (rep.blocked) return "<h1>" + esc(rep.title) + "</h1><p>Blocked: " + esc(rep.reason) + "</p>";
+    const t = Object.keys(rep.totals).map((k) => "<tr><th>" + esc(k) + "</th><td>" + esc(rep.totals[k]) + "</td></tr>").join("");
+    return '<!doctype html><meta charset="utf-8"><title>' + esc(rep.title) + "</title><style>body{font:13px sans-serif;margin:24px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:4px 8px;text-align:left}h1{color:#0b1f3a}@media print{body{margin:0}}</style><h1>Sons of Bethel Savings Group</h1><h2>" +
+      esc(rep.title) + "</h2><p>Generated " + esc(meta.generated || "") + "</p><table><thead><tr>" + rep.columns.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>" +
+      rep.rows.map((r) => "<tr>" + rep.columns.map((c) => "<td>" + esc(r[c]) + "</td>").join("") + "</tr>").join("") + "</tbody></table><h3>Totals</h3><table>" + t + "</table>";
+  }
+  return { memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, annualSummary, toCSV, toPrintHTML };
+});
+
+return module.exports; })();
 __M['backend/store'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
 /* SOB backend/store — Sheets <-> ledger-db mapping. Portable: all Sheets access goes through an injected `ss` (SpreadsheetApp-like),
    so the same code is tested against a mock and could target another store later. Every collection has fixed columns plus an
@@ -657,7 +781,7 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
-    users: { sheet: "Users", cols: ["id","name","role","memberId","phone","pinHash"] },
+    users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
     airtimeRequests: { sheet: "Airtime", cols: [] },
     reconciliations: { sheet: "Reconciliations", cols: [] },
@@ -682,15 +806,23 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     if (!sh) { sh = ss.insertSheet(name); if (header) { sh.getRange(1, 1, 1, header.length).setValues([header]); } }
     return sh;
   }
+  function readCollection(ss, k) {
+    const c = COLLECTIONS[k]; const sh = ss.getSheetByName(c.sheet);
+    if (!sh || sh.getLastRow() < 2) return [];
+    const rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues();
+    if (!c.cols.length) return rows.map((r) => dec(r[0])).filter((x) => x !== undefined);
+    return rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
+  }
+  function writeCollection(ss, k, list) {
+    const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]); const sh = sheetOf(ss, c.sheet, header);
+    const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]); const width = c.cols.length + 1;
+    if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
+    sh.getRange(1, 1, 1, width).setValues([header]);
+    if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
+  }
   function readAll(ss) {
     const db = {};
-    Object.keys(COLLECTIONS).forEach((k) => {
-      const c = COLLECTIONS[k]; const sh = ss.getSheetByName(c.sheet);
-      if (!sh || sh.getLastRow() < 2) { db[k] = []; return; }
-      const rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues();
-      if (!c.cols.length) { db[k] = rows.map((r) => dec(r[0])).filter((x) => x !== undefined); return; }
-      db[k] = rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
-    });
+    Object.keys(COLLECTIONS).forEach((k) => { db[k] = readCollection(ss, k); });
     const meta = readMeta(ss); db.schemaVersion = Number(meta.schemaVersion || 2); db.seq = Number(meta.seq || 0); db.revision = Number(meta.revision || 0);
     return db;
   }
@@ -703,17 +835,9 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
       have.forEach((id) => { if (!sent.has(id)) throw new Error("REJECTED: snapshot would remove " + k + " record " + id + " (records are voided, never deleted)"); });
     });
   }
+  /* Users are never part of a ledger snapshot: credentials change only through the auth paths. */
   function writeAll(ss, db) {
-    Object.keys(COLLECTIONS).forEach((k) => {
-      const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]);
-      const sh = sheetOf(ss, c.sheet, header);
-      const list = db[k] || [];
-      const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]);
-      const width = c.cols.length + 1;
-      if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
-      sh.getRange(1, 1, 1, width).setValues([header]);
-      if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
-    });
+    Object.keys(COLLECTIONS).forEach((k) => { if (k !== "users") writeCollection(ss, k, db[k] || []); });
   }
   function readMeta(ss) {
     const sh = ss.getSheetByName(META); const m = {};
@@ -724,52 +848,199 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+  return { COLLECTIONS, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+});
+
+return module.exports; })();
+__M['backend/auth'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB backend/auth — server-side identity. PINs are stored only as salted, stretched SHA-256 hashes; sessions are random tokens held
+   server-side (only a hash of the token is stored); failed logins lock an account. The role ALWAYS comes from the Users sheet at request
+   time, never from the client, so a role change or deactivation takes effect immediately. env: {hash(str)->hex, randomToken(), cache, now(), rand()} */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory();
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.auth = api; }
+})(typeof self !== "undefined" ? self : this, function () {
+  const ROUNDS = 300, MAX_FAILS = 5, LOCK_SECONDS = 900, SESSION_SECONDS = 6 * 3600;
+  const ROLES = ["Admin", "Committee", "Member"];
+  const MIN_PIN = { Admin: 6, Committee: 6, Member: 4 };
+  function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
+  const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
+  const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null });
+  const findUser = (db, id) => (db.users || []).find((u) => String(u.id).toUpperCase() === String(id || "").trim().toUpperCase() && u.status !== "Disabled");
+
+  function makeUser(env, o) {
+    if (!ROLES.includes(o.role)) throw new Error("INVALID: role");
+    if (o.role === "Member" && !o.memberId) throw new Error("INVALID: member users need a memberId");
+    const pin = String(o.pin || ""); if (pin.length < MIN_PIN[o.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[o.role] + " characters for " + o.role);
+    const salt = env.randomToken();
+    return { id: o.id, name: o.name || o.id, role: o.role, memberId: o.memberId || "", phone: o.phone || "", status: "Active", salt, pinHash: stretch(env, salt, pin) };
+  }
+  function login(env, db, id, pin) {
+    const k = "fail:" + String(id || "").toUpperCase();
+    const fails = Number(env.cache.get(k) || 0);
+    if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
+    const u = findUser(db, id);
+    const good = u && u.pinHash && safeEq(stretch(env, u.salt, String(pin || "")), u.pinHash);
+    if (!good) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" }; }
+    env.cache.remove(k);
+    const token = env.randomToken() + env.randomToken();
+    env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
+    return { ok: true, token, user: publicUser(u) };
+  }
+  function session(env, db, token) {
+    if (!token || typeof token !== "string") return null;
+    const id = env.cache.get("sess:" + env.hash(token)); if (!id) return null;
+    const u = findUser(db, id); return u ? publicUser(u) : null;
+  }
+  function logout(env, token) { if (token) env.cache.remove("sess:" + env.hash(token)); }
+  /* Returns the updated user record (caller persists). Admin may set anyone's PIN; everyone may change their own (old PIN required). */
+  function setPin(env, db, actor, targetId, newPin, oldPin) {
+    const t = findUser(db, targetId); if (!t) throw new Error("NOT_FOUND: user");
+    if (actor.role !== "Admin") {
+      if (actor.id !== t.id) throw new Error("FORBIDDEN: you may only change your own PIN");
+      if (!safeEq(stretch(env, t.salt, String(oldPin || "")), t.pinHash)) throw new Error("BAD_CREDENTIALS: current PIN is wrong");
+    }
+    if (String(newPin || "").length < MIN_PIN[t.role]) throw new Error("WEAK_PIN: PIN must be at least " + MIN_PIN[t.role] + " characters for " + t.role);
+    t.salt = env.randomToken(); t.pinHash = stretch(env, t.salt, String(newPin)); return t;
+  }
+  return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser };
 });
 
 return module.exports; })();
 __M['backend/api'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
-/* SOB backend/api — request handling (auth, locking, optimistic concurrency, server-computed KPIs). Environment is injected
-   (`env`: {ss, lock, secret, now, log}) so it runs unchanged in Apps Script and in tests. */
+/* SOB backend/api — the ONLY entry to the ledger. Every action except login needs a valid server-side session; the role comes from the
+   Users sheet; changes happen only through the closed command whitelist (core/commands) run with a server-built ctx; reads are filtered
+   by role. There is no "write a whole snapshot" path for ordinary users. env: {ss, lock, now, hash, randomToken, cache} */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates);
+  const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, K, D) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G) {
+  const fail = (error) => ({ ok: false, error });
+  const strip = (o, keys) => { const c = Object.assign({}, o); keys.forEach((k) => delete c[k]); return c; };
+
+  /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
+  function viewFor(db, user, asOf) {
+    const base = { schemaVersion: db.schemaVersion, revision: db.revision };
+    if (user.role === "Admin" || user.role === "Committee") {
+      const full = Object.assign({}, base, db, { users: user.role === "Admin" ? (db.users || []).map(A.publicUser) : [] });
+      if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
+      full.kpis = K.dashboard(db, asOf); full.pipeline = K.pipeline(db); return full;
+    }
+    const me = user.memberId;
+    const mine = (db.loans || []).filter((l) => l.memberId === me);
+    const guaranteed = (db.guarantees || []).filter((g) => g.guarantorId === me);
+    const guaranteedLoans = (db.loans || []).filter((l) => guaranteed.some((g) => g.loanId === l.id) && l.memberId !== me);
+    const loans = mine.concat(guaranteedLoans);
+    return Object.assign({}, base, {
+      members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
+      transactions: (db.transactions || []).filter((t) => t.memberId === me || mine.some((l) => l.id === t.loanId)),
+      loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)),
+      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+    });
+  }
+
   function handle(env, body) {
-    if (!body || !env.secret || body.key !== env.secret) return { ok: false, error: "UNAUTHORIZED" };
+    if (!body || typeof body !== "object") return fail("INVALID_REQUEST");
     try {
       if (body.action === "ping") return { ok: true, pong: true };
-      if (body.action === "getLedger") {
-        const db = S.readAll(env.ss);
-        return { ok: true, db, kpis: K.dashboard(db, D.todayISO()), pipeline: K.pipeline(db) };
-      }
-      if (body.action === "syncAll") {
-        if (!body.db) return { ok: false, error: "INVALID: db missing" };
+      if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users") }, body.id, body.pin);
+      const usersDb = { users: S.readCollection(env.ss, "users") };
+      const user = A.session(env, usersDb, body.token);
+      if (!user) return fail("UNAUTHENTICATED");
+      const asOf = D.todayISO();
+
+      if (body.action === "logout") { A.logout(env, body.token); return { ok: true }; }
+      if (body.action === "whoami") return { ok: true, user };
+      if (body.action === "getLedger") { const db = S.readAll(env.ss); return { ok: true, user, db: viewFor(db, user, asOf) }; }
+
+      if (body.action === "command") {
         env.lock.waitLock(20000);
         try {
-          const meta = S.readMeta(env.ss), rev = Number(meta.revision || 0);
-          if (body.baseRevision !== undefined && Number(body.baseRevision) !== rev) return { ok: false, error: "CONFLICT", revision: rev };
-          S.guardNoLoss(env.ss, body.db);
-          S.writeAll(env.ss, body.db);
-          S.writeMeta(env.ss, { revision: rev + 1, schemaVersion: body.db.schemaVersion || 2, seq: body.db.seq || 0, lastWrite: env.now() });
-          return { ok: true, revision: rev + 1 };
+          const db = S.readAll(env.ss);
+          const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });  // identity from the SESSION only
+          const before = JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]);
+          const result = CMD.run(db, ctx, body.name, body.args);
+          S.guardNoLoss(env.ss, db);
+          S.writeAll(env.ss, db);
+          const rev = Number(S.readMeta(env.ss).revision || 0) + 1;
+          S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() });
+          db.revision = rev;
+          return { ok: true, result: result === undefined ? null : JSON.parse(JSON.stringify(result)), db: viewFor(db, user, asOf), changed: before !== JSON.stringify([db.transactions.length, db.loans.length, db.members.length, db.auditLog.length]) };
         } finally { env.lock.releaseLock(); }
       }
-      return { ok: false, error: "UNKNOWN_ACTION" };
-    } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+
+      if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users");
+          const t = A.setPin(env, { users }, user, body.userId || user.id, body.newPin, body.oldPin);
+          S.writeCollection(env.ss, "users", users); return { ok: true, id: t.id };
+        } finally { env.lock.releaseLock(); }
+      }
+      if (body.action === "createUser") {   // Admin only
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may create users");
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users"); const o = body.user || {};
+          if (A.findUser({ users }, o.id)) return fail("EXISTS: user id already used");
+          if (o.role === "Member" && !S.readCollection(env.ss, "members").some((m) => m.id === o.memberId)) return fail("UNKNOWN_MEMBER");
+          users.push(A.makeUser(env, o)); S.writeCollection(env.ss, "users", users); return { ok: true };
+        } finally { env.lock.releaseLock(); }
+      }
+      if (body.action === "disableUser") {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may disable users");
+        env.lock.waitLock(20000);
+        try { const users = S.readCollection(env.ss, "users"); const t = users.find((u) => u.id === body.userId); if (!t) return fail("NOT_FOUND");
+          if (t.id === user.id) return fail("INVALID: you cannot disable yourself"); t.status = "Disabled"; S.writeCollection(env.ss, "users", users); return { ok: true }; }
+        finally { env.lock.releaseLock(); }
+      }
+      /* One-time migration: Admin only, and only into an EMPTY ledger. Never available once data exists. */
+      if (body.action === "importSnapshot") {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may import");
+        env.lock.waitLock(20000);
+        try {
+          const cur = S.readAll(env.ss);
+          if (cur.transactions.length || cur.loans.length || cur.members.length) return fail("NOT_EMPTY: import is only allowed into an empty ledger");
+          if (!body.db) return fail("INVALID: db missing");
+          S.writeAll(env.ss, body.db); S.writeMeta(env.ss, { revision: 1, schemaVersion: body.db.schemaVersion || 2, seq: body.db.seq || 0, lastWrite: env.now() });
+          return { ok: true, revision: 1 };
+        } finally { env.lock.releaseLock(); }
+      }
+      return fail("UNKNOWN_ACTION");
+    } catch (e) { return fail(String((e && e.message) || e)); }
   }
-  return { handle };
+  return { handle, viewFor };
 });
 
 return module.exports; })();
-/* Apps Script entry points. Secret lives in Script Properties (key: SOB_LEDGER_SECRET), never in source. */
+/* Apps Script entry points. No secret is embedded in the web app: access is by per-user login (Users sheet, hashed PINs).
+   First-time setup: run initAdmin("ADMIN", "<pin of 6+ characters>") ONCE from the Apps Script editor, then delete the call from history. */
+function __hash(s){
+  var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8);
+  return d.map(function(b){ return ((b < 0 ? b + 256 : b) + 256).toString(16).slice(1); }).join("");
+}
+var __cacheImpl = {
+  get: function(k){ return CacheService.getScriptCache().get(k); },
+  put: function(k, v, ttl){ CacheService.getScriptCache().put(k, String(v), Math.min(ttl, 21600)); },
+  remove: function(k){ CacheService.getScriptCache().remove(k); }
+};
 function __env(){
-  return { ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(),
-    secret: PropertiesService.getScriptProperties().getProperty("SOB_LEDGER_SECRET"), now: function(){ return new Date().toISOString(); } };
+  return { ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
+    randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
 function doPost(e){
   var body; try { body = JSON.parse(e.postData.contents); } catch (x) { body = null; }
   return ContentService.createTextOutput(JSON.stringify(__M['backend/api'].handle(__env(), body))).setMimeType(ContentService.MimeType.JSON);
 }
 function doGet(){ return ContentService.createTextOutput(JSON.stringify({ ok: true, service: "SOB Ledger" })).setMimeType(ContentService.MimeType.JSON); }
+function initAdmin(id, pin){
+  var env = __env(), S = __M['backend/store'], A = __M['backend/auth'];
+  var users = S.readCollection(env.ss, "users");
+  if (users.some(function(u){ return u.role === "Admin"; })) throw new Error("An Admin already exists");
+  users.push(A.makeUser(env, { id: id, name: id, role: "Admin", pin: pin }));
+  S.writeCollection(env.ss, "users", users);
+  return "Admin created";
+}

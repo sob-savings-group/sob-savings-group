@@ -15,7 +15,7 @@
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
-    users: { sheet: "Users", cols: ["id","name","role","memberId","phone","pinHash"] },
+    users: { sheet: "Users", cols: ["id","name","role","memberId","phone","status","salt","pinHash"] },
     requests: { sheet: "Requests", cols: ["id","date","memberId","type","amount","note","status"] },
     airtimeRequests: { sheet: "Airtime", cols: [] },
     reconciliations: { sheet: "Reconciliations", cols: [] },
@@ -40,15 +40,23 @@
     if (!sh) { sh = ss.insertSheet(name); if (header) { sh.getRange(1, 1, 1, header.length).setValues([header]); } }
     return sh;
   }
+  function readCollection(ss, k) {
+    const c = COLLECTIONS[k]; const sh = ss.getSheetByName(c.sheet);
+    if (!sh || sh.getLastRow() < 2) return [];
+    const rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues();
+    if (!c.cols.length) return rows.map((r) => dec(r[0])).filter((x) => x !== undefined);
+    return rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
+  }
+  function writeCollection(ss, k, list) {
+    const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]); const sh = sheetOf(ss, c.sheet, header);
+    const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]); const width = c.cols.length + 1;
+    if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
+    sh.getRange(1, 1, 1, width).setValues([header]);
+    if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
+  }
   function readAll(ss) {
     const db = {};
-    Object.keys(COLLECTIONS).forEach((k) => {
-      const c = COLLECTIONS[k]; const sh = ss.getSheetByName(c.sheet);
-      if (!sh || sh.getLastRow() < 2) { db[k] = []; return; }
-      const rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues();
-      if (!c.cols.length) { db[k] = rows.map((r) => dec(r[0])).filter((x) => x !== undefined); return; }
-      db[k] = rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
-    });
+    Object.keys(COLLECTIONS).forEach((k) => { db[k] = readCollection(ss, k); });
     const meta = readMeta(ss); db.schemaVersion = Number(meta.schemaVersion || 2); db.seq = Number(meta.seq || 0); db.revision = Number(meta.revision || 0);
     return db;
   }
@@ -61,17 +69,9 @@
       have.forEach((id) => { if (!sent.has(id)) throw new Error("REJECTED: snapshot would remove " + k + " record " + id + " (records are voided, never deleted)"); });
     });
   }
+  /* Users are never part of a ledger snapshot: credentials change only through the auth paths. */
   function writeAll(ss, db) {
-    Object.keys(COLLECTIONS).forEach((k) => {
-      const c = COLLECTIONS[k]; const header = c.cols.concat(["_extra"]);
-      const sh = sheetOf(ss, c.sheet, header);
-      const list = db[k] || [];
-      const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o), ""]);
-      const width = c.cols.length + 1;
-      if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
-      sh.getRange(1, 1, 1, width).setValues([header]);
-      if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
-    });
+    Object.keys(COLLECTIONS).forEach((k) => { if (k !== "users") writeCollection(ss, k, db[k] || []); });
   }
   function readMeta(ss) {
     const sh = ss.getSheetByName(META); const m = {};
@@ -82,5 +82,5 @@
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+  return { COLLECTIONS, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
 });

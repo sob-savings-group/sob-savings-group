@@ -14,7 +14,7 @@
   const CONFIG_PENDING = {
     profitFormula: null,           // Open Q1
     qualifyingSavingsRule: null,   // Open Q2
-    guarantorSufficiencyRule: null,// Open Q3
+    repaymentAllocation: null,     // interest-first vs principal-first: awaiting SOB (split is not recorded until decided)
     interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
   };
 
@@ -35,7 +35,7 @@
       case "Loan Disbursement": return { savings: 0, loan: -amt, profit: 0, cashflow: -amt };
       case "Loan Repayment": return { savings: 0, loan: amt, profit: 0, cashflow: amt };
       // Group-level movements: they change cash, never a member's savings.
-      // (Subscription treated as group income, not a deduction from savings: ASSUMPTION, see Open Q8.)
+      // (CONFIRMED by SOB: the UGX 5,000 annual subscription is group income, separate from member savings.)
       case "Subscription":
       case "Income": return { savings: 0, loan: 0, profit: 0, cashflow: amt };
       case "Expense": return { savings: 0, loan: 0, profit: 0, cashflow: -amt };
@@ -119,10 +119,14 @@
     return { qualifyingSavings: q, maxLoan: 3 * q }; // 3x cap is confirmed
   }
   /* Eligibility for distribution — the loan-exclusion rule IS confirmed, independent of the formula. */
+  function allocateRepayment() {
+    if (!CONFIG_PENDING.repaymentAllocation) throw new Error("PENDING_SOB_DECISION: repayment allocation - interest first or principal first (awaiting SOB)");
+    return CONFIG_PENDING.repaymentAllocation.apply(null, arguments);
+  }
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, CONFIG_PENDING, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
