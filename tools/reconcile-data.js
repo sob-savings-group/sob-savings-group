@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* Read-only reconciliation of the data set the platform would migrate against the source workbooks.
-   usage: node tools/reconcile-data.js <legacy.json> <SYSTEM-rows.json> <DATABASE-rows.json> <asOf YYYY-MM-DD> <outDir>
+   usage: node tools/reconcile-data.js <legacy.json> <SYSTEM-rows.json> <DATABASE-rows.json> <asOf YYYY-MM-DD> <outDir> [resolutions.json]
    Writes <outDir>/reconciliation.json and <outDir>/RECONCILIATION_REPORT.md. Changes NOTHING: the "plan" it produces is a list of
    audited commands that SOB may approve and apply later with `sobctl apply-plan`. */
 const fs = require("fs"), path = require("path");
@@ -44,12 +44,22 @@ try { steps.forEach((s) => CMD.run(sim, admin, s.name, s.args)); } catch (e) { p
 const impact = db.loans.map((l) => { const s = sim.loans.find((x) => x.id === l.id); return { loanId: l.id, memberId: l.memberId, planned: steps.some((st) => (st.args.loanId === l.id) || (st.args.memberId === l.memberId)), dateNow: l.date, dateAfter: s.date, balanceNow: before[l.id], balanceAfter: L.loanOutstanding(s, sim, asOf) }; });
 const savingsUnchanged = db.members.every((m) => L.memberSavings(db, m.id) === L.memberSavings(sim, m.id));
 
+/* ---- bank-level (Administration) loan rows vs the member ledger ---- */
+const adminLoans = (SYS.admin || []), adminFindings = [];
+adminLoans.forEach((a) => {
+  const sameAmount = db.transactions.filter((t) => !t.voided && t.type === "Loan Disbursement" && t.memberId === a.memberId && Number(t.amount) === Number(a.amount));
+  const wbMatch = SYS.rows.some((r) => r.type === "Loan Disbursement" && r.memberId === a.memberId && Number(r.amount) === Number(a.amount));
+  if (!sameAmount.length && !wbMatch) adminFindings.push({ kind: "MISSING_ENTRY", subject: "ADMIN_LOAN:" + a.memberId + ":" + a.date + ":" + a.amount, summary: "Administration (bank) sheet row " + a.row + " records a loan of " + fmt(a.amount) + " to " + a.memberId + " on " + a.date + " that has no matching disbursement in the member ledger (platform or workbook). The bank-level rows are archived and feed no total, so no figure is affected.", platformValue: null, sourceValue: a.amount, source: SYS.file + " Administration row " + a.row });
+});
 /* ---- discrepancy register items ---- */
 const integrity = I.check(db, asOf), disc = [];
 steps.filter((s) => s.name === "correctLoanDate").forEach((s) => { const l = db.loans.find((x) => x.id === s.args.loanId); disc.push({ kind: "LOAN_DATE", subject: l.id, summary: "Loan of " + l.memberId + " starts " + l.date + " here but " + s.args.date + " in the source workbook", platformValue: l.date, sourceValue: s.args.date, source: s.args.evidence }); });
 excluded.forEach((e) => disc.push({ kind: "LOAN_DATE", subject: e.loanId, summary: e.why, platformValue: null, sourceValue: null, source: SYS.file }));
 integrity.findings.filter((f) => f.severity === "error").forEach((f) => disc.push({ kind: "OTHER", subject: I.findingKey(f), summary: f.code + ": " + f.detail, platformValue: null, sourceValue: null, source: "integrity check" }));
-const result = { asOf, totals: { platform: totalPlat, systemWorkbook: totalSys, databaseWorkbook: totalDb, platformRows: seedRows.length, systemRows: sysRows.length, databaseRows: dbRows.length },
+adminFindings.forEach((f) => disc.push(f));
+const resolutionsIn = process.argv[7] ? JSON.parse(fs.readFileSync(process.argv[7], "utf8")) : [];
+const resolutions = resolutionsIn.filter((r) => disc.some((d) => d.subject === r.subject));
+const result = { adminLoanRows: adminLoans.length, adminUnmatched: adminFindings.length, resolutions, asOf, totals: { platform: totalPlat, systemWorkbook: totalSys, databaseWorkbook: totalDb, platformRows: seedRows.length, systemRows: sysRows.length, databaseRows: dbRows.length },
   savings: { membersChecked: memberIds.length, differVsSystem: savVsSys, differVsDatabase: savVsDb }, rowDiff: { nonLoanRowDifferences: nonLoanDiff, onlyInPlatform: onlySeed, onlyInSystemWorkbook: onlySys },
   databaseVsSystem: { rowsOnlyInDatabase: dbOnly, rowsOnlyInSystem: sysOverDb, databaseLastDate: dbMaxDate, allExtraRowsAfterDatabaseLastDate: sysOverDb.every((k) => k.split("|")[0] > dbMaxDate) },
   plan: { steps, excluded, simulationError: planError, savingsUnchangedBySimulation: savingsUnchanged }, impact, integrity, discrepancies: disc, banners: { system: SYS.banner, database: DBX.banner } };
@@ -64,6 +74,6 @@ const md = ["# Reconciliation report (READ-ONLY — no record was altered)", "",
  "Platform-only rows: " + onlySeed.length + "; workbook-only rows: " + onlySys.length + ".", "", "### Plan prepared (NOT applied) — " + steps.length + " audited commands", "",
  "| Loan | Member | Start now | Start per workbook | Balance now | Balance after plan |", "|---|---|---|---|---|---|"].concat(impact.filter((i) => i.planned).map((i) => "| " + i.loanId + " | " + i.memberId + " | " + i.dateNow + " | " + i.dateAfter + " | " + fmt(i.balanceNow) + " | " + fmt(i.balanceAfter) + " |")).concat(["",
  "Total owed by members now: " + fmt(impact.reduce((a, i) => a + Math.max(0, i.balanceNow), 0)) + "; after plan: " + fmt(impact.reduce((a, i) => a + Math.max(0, i.balanceAfter), 0)) + ". Member savings unchanged by the plan: " + savingsUnchanged + ".", "",
- "### Not in the plan (SOB must decide)", ""]).concat(excluded.length ? excluded.map((e) => "- **" + e.loanId + " (" + e.memberId + ")**: " + e.why) : ["- none"]).concat(["", "## 3. Integrity findings", ""]).concat(integrity.findings.length ? integrity.findings.map((f) => "- [" + f.severity + "] " + f.code + ": " + f.detail) : ["- none"]).concat(["", "## 4. How a difference is closed", "- Open a discrepancy, then resolve it with a decision, reason and evidence. History is never edited to make figures balance; corrections are dated, reasoned and audited. Original dates stay on the record."]);
+ "### Not in the plan (SOB must decide)", ""]).concat(excluded.length ? excluded.map((e) => "- **" + e.loanId + " (" + e.memberId + ")**: " + e.why) : ["- none"]).concat(["", "## 3. Bank-level (Administration) loan rows", "", "Checked " + adminLoans.length + " Administration loan row(s) against the member ledger: " + adminFindings.length + " without a match.", ""].concat(adminFindings.map((f) => "- **" + f.subject + "**: " + f.summary)).concat(["", "## 4. Integrity findings", ""])).concat(integrity.findings.length ? integrity.findings.map((f) => "- [" + f.severity + "] " + f.code + ": " + f.detail) : ["- none"]).concat(["", "## 5. How a difference is closed", "- Open a discrepancy, then resolve it with a decision, reason and evidence. History is never edited to make figures balance; corrections are dated, reasoned and audited. Original dates stay on the record."]);
 fs.writeFileSync(path.join(outDir, "RECONCILIATION_REPORT.md"), md.join("\n") + "\n");
 console.log("savings differ vs system:", savVsSys.length, "| db-only rows:", dbOnly.length, "| plan steps:", steps.length, "| excluded:", excluded.length, "| plan error:", planError, "| integrity errors:", integrity.errors);

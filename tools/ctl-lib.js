@@ -67,7 +67,15 @@ async function importLedger(api, o) {
 async function importUsers(api, o) { const t = await login(api, o.adminId, o.adminPin); const users = JSON.parse(fs.readFileSync(o.usersPath, "utf8")); return must(await api({ action: "importUsers", token: t, users }), "importUsers"); }
 async function registerDiscrepancies(api, o) {
   const t = await login(api, o.adminId, o.adminPin), rec = JSON.parse(fs.readFileSync(o.reconPath, "utf8")), out = [];
-  for (const d of rec.discrepancies) { const r = await api({ action: "command", token: t, name: "openDiscrepancy", args: d }); out.push({ subject: d.subject, ok: !!r.ok, error: r.error }); }
+  let last;
+  for (const d of rec.discrepancies) { const r = await api({ action: "command", token: t, name: "openDiscrepancy", args: d }); out.push({ subject: d.subject, ok: !!r.ok, error: r.error }); if (r.ok) last = r.db; }
+  /* Items SOB has already answered (with evidence) are closed straight away, through the same audited command. */
+  for (const res of rec.resolutions || []) {
+    const led = (last || must(await api({ action: "getLedger", token: t }), "read").db), item = (led.discrepancies || []).find((x) => x.subject === res.subject && x.status === "Open");
+    if (!item) { out.push({ subject: res.subject, resolved: false, error: "no open item" }); continue; }
+    const r = await api({ action: "command", token: t, name: "resolveDiscrepancy", args: { id: item.id, decision: res.decision, reason: res.reason, evidence: res.evidence } });
+    out.push({ subject: res.subject, resolved: !!r.ok, error: r.error });
+  }
   return out;
 }
 /* Applies SOB-approved correction steps through the normal audited commands. Refuses without a named approver. */

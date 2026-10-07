@@ -33,7 +33,8 @@ function build() {
   tx.filter((t) => !["Loan Disbursement", "Loan Repayment"].includes(t.type)).forEach((t) => rows.push({ date: t.date, memberId: t.memberId, amount: t.amount, type: t.type }));
   loans.forEach((l) => { l._wb.forEach(([d, a]) => rows.push({ date: d, memberId: l.memberId, amount: a, type: "Loan Disbursement" })); (wbRepay[l.id] || []).forEach(([d, a]) => rows.push({ date: d, memberId: l.memberId, amount: a, type: "Loan Repayment" })); });
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.memberId < b.memberId ? -1 : 1)); rows.forEach((r) => (r.row = ++row));
-  const system = { file: "SYNTH_SYSTEM.xlsx", banner: "Savings: 1 | Net Loans: 1", rows };
+  const admin = [{ row: 2, date: "2026-01-09", memberId: "SOB-002", amount: 300000, purpose: "Loan", bankedBy: "Demo" }, { row: 3, date: "2026-01-05", memberId: "SOB-005", amount: 400000, purpose: "Loan", bankedBy: "Demo" }];
+  const system = { file: "SYNTH_SYSTEM.xlsx", banner: "Savings: 1 | Net Loans: 1", rows, admin };
   const cut = "2026-07-14", database = { file: "SYNTH_DATABASE.xlsx", banner: "Savings: 2 | Net Loans: 2", rows: rows.filter((r) => r.date <= cut) };
   // make sure the newer workbook really has later rows (like the real pair)
   ["2026-07-15", "2026-07-19", "2026-07-26"].forEach((d, i) => { const m = "SOB-0" + (10 + i); const a = (i + 1) * 10000; tx.push({ id: id(), date: d, memberId: m, memberName: nameOf(m), amount: a, purpose: "Savings", type: "Savings" }); system.rows.push({ row: ++row, date: d, memberId: m, amount: a, type: "Savings" }); });
