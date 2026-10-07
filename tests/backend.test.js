@@ -66,7 +66,8 @@ t("MEMBER cannot run any staff command (server enforces roles, not the browser)"
   const attempts = [["createEntry", { date: "2026-02-01", memberId: memberWith.id, amount: 1000, type: "Savings" }], ["voidEntry", { id: db0.transactions[0].id, reason: "x" }],
     ["approveLoan", { loanId: "x" }], ["disburseLoan", { loanId: "x", assignedMonthlyInterest: 0 }], ["repayLoan", { loanId: db0.loans[0].id, amount: 1 }],
     ["editAssignedInterest", { loanId: db0.loans[0].id, amount: 0, reason: "x" }], ["voidLoan", { loanId: db0.loans[0].id, reason: "x" }], ["addMember", { name: "X" }],
-    ["recordSubscription", { memberId: memberWith.id, year: 2026 }], ["executeShareOut", { year: 2026, date: "2026-12-10" }], ["recordExistingLoan", { memberId: memberWith.id, amount: 5, date: "2026-01-01", assignedMonthlyInterest: 0 }]];
+    ["recordSubscription", { memberId: memberWith.id, year: 2026 }], ["executeShareOut", { year: 2026, date: "2026-12-10" }], ["recordExistingLoan", { memberId: memberWith.id, amount: 5, date: "2026-01-01", assignedMonthlyInterest: 0 }],
+    ["addGuarantee", { loanId: "x", guarantorId: otherMember.id, amount: 5 }], ["proposeSecurity", { loanId: "x" }], ["decideSecurity", { id: "x", decision: "approve" }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "p" }], ["approveEntry", { id: "x", decision: "approve" }]];
   attempts.forEach(([n, a]) => assert.match(cmd(w, w.member, n, a).error, /FORBIDDEN/, n));
   assert.equal(S.readAll(w.env.ss).transactions.length, db0.transactions.length, "nothing changed");
 });
@@ -153,10 +154,10 @@ t("Admin commands persist, audit with the real identity, and totals reconcile th
   assert.ok(again.auditLog.some((a) => a.entityId === r.result.id && a.by === "ADMIN" && a.role === "Admin"));
   assert.equal(again.transactions.length, db0.transactions.length + 1, "voided, never deleted");
 });
-t("business rules hold server-side: blocked decisions stay blocked for Admin too", () => {
+t("business rules hold server-side: a loan beyond the 3x guideline needs backing, even for the Super Admin", () => {
   const w = world(), id = db0.members.find((m) => !db0.loans.some((l) => l.memberId === m.id) && L.memberSavings(db0, m.id) > 0).id;
-  const ap = cmd(w, w.admin, "applyForLoan", { memberId: id, amount: 10000 }); assert.ok(ap.ok);
-  assert.match(cmd(w, w.admin, "approveLoan", { loanId: ap.result.id }).error, /PENDING_SOB_DECISION/);
+  const big = Math.max(L.memberSavings(db0, id) * 3 + 100000, 100000), ap = cmd(w, w.admin, "applyForLoan", { memberId: id, amount: big }); assert.ok(ap.ok);
+  assert.match(cmd(w, w.admin, "approveLoan", { loanId: ap.result.id }).error, /NO_BACKING/, "beyond the 3x guideline needs guarantor/security backing, even for the Super Admin");
   assert.match(cmd(w, w.admin, "createEntry", { date: "bad", memberId: id, amount: 5, type: "Savings" }).error, /INVALID/);
 });
 t("unknown future fields and nested values survive the Sheet round trip", () => {
@@ -216,5 +217,19 @@ t("notifications + airtime through the server: members see only their own, only 
   assert.equal(w.call({ action: "gatewayStatus", token: w.admin }).live.SMS, false);
   gw(true); const d2 = w.call({ action: "dispatchOutbox", token: w.admin }); assert.ok(d2.result.sent >= 1); assert.equal(d2.live.SMS, true);
   assert.ok(cmd(w, w.admin, "fulfilAirtime", { id: r.result.id }).ok);
+});
+t("staff roles over the API: Super Admin inputs; Chairperson second-approves; Treasurer and Chairperson cannot edit figures", () => {
+  const w = world();
+  S.writeCollection(w.env.ss, "users", S.readCollection(w.env.ss, "users").concat([A.makeUser(w.env, { id: "CHAIR", role: "Chairperson", pin: "chair-pin-1" }), A.makeUser(w.env, { id: "TREAS", role: "Treasurer", pin: "treas-pin-1" })]));
+  const chair = w.tok("CHAIR", "chair-pin-1"), treas = w.tok("TREAS", "treas-pin-1");
+  for (const tk of [chair, treas]) {
+    assert.ok(w.call({ action: "getLedger", token: tk }).ok);
+    for (const [n, a] of [["createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "x" }], ["applyForLoan", { memberId: memberWith.id, amount: 1000 }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "x", date: "2026-04-01", pool: 1 }]])
+      assert.match(cmd(w, tk, n, a).error || "", /FORBIDDEN/, n);
+  }
+  assert.match(cmd(w, treas, "approveEntry", { id: "X" }).error || "", /FORBIDDEN/);
+  assert.ok(cmd(w, w.admin, "setPolicy", { key: "approval", values: { requiredTypes: ["Withdraw"] }, reason: "SOB decision (test)" }).ok);
+  const e = cmd(w, w.admin, "createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "Test collector" }); assert.ok(e.ok, e.error);
+  assert.match(cmd(w, w.admin, "approveEntry", { id: "X" }).error || "", /FORBIDDEN/);
 });
 (async () => { for (const [n, f] of tests) { try { await f(); console.log("  ok  " + n); } catch (e) { failed++; console.log("FAIL  " + n + "\n      " + (e.stack || e.message).split("\n").slice(0, 3).join("\n      ")); } } console.log(failed ? failed + " FAILED" : tests.length + " backend tests passed"); if (failed) process.exitCode = 1; })();

@@ -13,16 +13,27 @@
   // Decisions still awaiting SOB (proposal Section 7). Engines read these and refuse to guess.
   const CONFIG_PENDING = {
     profitFormula: null,           // Open Q1
-    qualifyingSavingsRule: null,   // Open Q2
+    qualifyingSavingsRule: null,   // retired: total savings, 3x guideline (loanEligibility)
     repaymentAllocation: null,     // interest-first vs principal-first: awaiting SOB (split is not recorded until decided)
     interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
   };
+
+  /* --- policy: SOB-approved settings kept IN the ledger (db.policy), so they persist and are audited. Nothing here invents a rule:
+     every default is either confirmed by SOB or an explicit, visible, changeable setting. --- */
+  const POLICY_DEFAULTS = {
+    approval: { requiredTypes: [], loanSecondApproval: false },                       // WHICH items need the Chairperson is SOB's call; none by default
+    loan: { guidelineMultiple: 3,                                                      // confirmed: standard guideline up to 3x savings
+            guaranteeCover: "SHORTFALL",                                               // guarantors back the part of a loan beyond the 3x guideline ("FULL_LOAN" = back the whole loan)
+            repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: false },       // how repayments split interest/principal for the Interest Receivable display
+    profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
+  };
+  const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
 
   // Entries awaiting/failed second-person approval never count toward any figure.
   const isCounted = (t) => !t.voided && (t.approvalStatus === undefined || t.approvalStatus === "Approved");
   const activeTransactions = (db) => (db.transactions || []).filter(isCounted);
   // Loans that are not (yet / any longer) booked never count toward outstanding or exposure.
-  const NOT_BOOKED = ["Pending", "Approved", "Declined", "Reversed"];
+  const NOT_BOOKED = ["Pending", "AwaitingApproval", "Approved", "Declined", "Reversed"];
   const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided && !NOT_BOOKED.includes(l.status));
 
   function classifyTransaction(t) {
@@ -77,6 +88,36 @@
     return activeTransactions(db).filter((t) => t.memberId === memberId)
       .reduce((a, t) => a + classifyTransaction(t).savings, 0);
   }
+  /* --- guarantees: the guarantor's own money committed to other people's loans. Committed savings stay in the account (they are still
+     the guarantor's savings) but are NOT available to withdraw until released by repayments / clearance. --- */
+  const guaranteeRemaining = (g) => Math.max(0, Number(g.amount) - Number(g.releasedAmount || 0));
+  const liveGuarantee = (g) => g.status === "Active";
+  const memberCommitted = (db, memberId) => (db.guarantees || []).filter((g) => g.guarantorId === memberId && liveGuarantee(g)).reduce((a, g) => a + guaranteeRemaining(g), 0);
+  const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
+  const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
+
+  /* --- loan interest position: how much of the money repaid went to interest and how much interest is still unpaid.
+     Allocation order is db.policy "loan".repaymentAllocation (INTEREST_FIRST by default); repayments are walked in date order so interest
+     accrued AFTER a payment is still unpaid. Invariant: principalOutstanding + unpaidInterest + unpaidPenalties == loanOutstanding. --- */
+  function loanInterestPosition(loan, db, asOf) {
+    asOf = asOf || dates.todayISO();
+    const policy = getPolicy(db, "loan"), principal = Number(loan.loanAmount) || 0;
+    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= effectiveAsOf(loan, asOf)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
+    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0;
+    reps.forEach((t) => {
+      let amt = Number(t.amount);
+      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
+      const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
+      const principalDue = Math.max(0, principal - principalPaid);
+      const order = policy.repaymentAllocation === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
+      order.forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
+      if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
+    });
+    const e = effectiveAsOf(loan, asOf), accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    return { principal, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid),
+      principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid, allocation: policy.repaymentAllocation, allocationConfirmed: !!policy.allocationConfirmed };
+  }
   const memberHasOutstandingLoan = (db, memberId, asOf) =>
     activeLoans(db).some((l) => l.memberId === memberId && loanOutstanding(l, db, asOf) > 0);
 
@@ -113,10 +154,11 @@
     if (!CONFIG_PENDING.profitFormula) throw new Error("PENDING_SOB_DECISION: profit-distribution formula (Open Q1)");
     return CONFIG_PENDING.profitFormula.apply(null, arguments);
   }
+  /* SOB rule: a member normally qualifies mainly on their TOTAL savings, standard guideline up to 3x. It is a guideline, not a hard stop:
+     a loan beyond it may continue when guarantors / approved security back the shortfall (see loans.assessLoan). */
   function loanEligibility(db, memberId) {
-    if (!CONFIG_PENDING.qualifyingSavingsRule) throw new Error("PENDING_SOB_DECISION: qualifying-savings definition (Open Q2)");
-    const q = CONFIG_PENDING.qualifyingSavingsRule(db, memberId);
-    return { qualifyingSavings: q, maxLoan: 3 * q }; // 3x cap is confirmed
+    const q = memberSavings(db, memberId), mult = Number(getPolicy(db, "loan").guidelineMultiple) || 3;
+    return { qualifyingSavings: q, multiple: mult, maxLoan: mult * q };
   }
   /* Eligibility for distribution — the loan-exclusion rule IS confirmed, independent of the formula. */
   function allocateRepayment() {
@@ -128,6 +170,7 @@
   return {
     RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    POLICY_DEFAULTS, getPolicy, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
   };

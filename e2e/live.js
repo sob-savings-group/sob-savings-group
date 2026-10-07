@@ -27,7 +27,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
   ok((await pg.locator("#demo-go").count()) === 0, "live mode shows a real sign-in, not the demo role picker");
   await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "wrong"); await pg.click("#login-go"); await pg.waitForSelector(".toast.bad"); ok(true, "wrong PIN is refused");
-  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 8, "admin signs in and sees the 8 KPI cards (server-computed ledger view)");
+  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 9, "admin signs in and sees the 9 KPI cards (server-computed ledger view)");
   await pg.click('[data-nav="ledger"]'); await pg.click("#add-entry"); await pg.selectOption('.modal select[name="m"]', mem.id); await pg.fill('.modal input[name="amount"]', "3000"); await pg.click("[data-submit]");
   await pg.waitForSelector(".toast:not(.bad)"); ok(L.memberSavings(S.readAll(env.ss), mem.id) === L.memberSavings(db0, mem.id) + 3000, "an entry made in the UI is persisted by the server");
   

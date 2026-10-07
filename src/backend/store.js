@@ -11,6 +11,8 @@
     transactions: { sheet: "Ledger", cols: ["id","date","memberId","amount","type","purpose","loanId","forYear","shareOutId","receipt","bankedBy","receivedBy","createdBy","approvedBy","approvalStatus","voided","voidReason","voidedAt","voidedBy"] },
     loans: { sheet: "Loans", cols: ["id","date","memberId","loanAmount","assignedMonthlyInterest","graceMonths","status","datePaidFull","legacy","voided","voidReason","purpose","interestHistory","penalties"] },
     guarantees: { sheet: "Guarantees", cols: ["id","loanId","guarantorId","amount","status","dateCommitted","dateReleased","releaseReason","committedBy"] },
+    securities: { sheet: "Securities", cols: [] },
+    policy: { sheet: "Policy", cols: [] },
     yearCycles: { sheet: "YearCycles", cols: ["year","status","openedDate","closedDate","shareOutId"] },
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },

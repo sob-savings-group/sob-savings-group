@@ -120,7 +120,7 @@ t("airtime + fee must fit AVAILABLE savings: pending requests and live guarantee
   throwsMsg(() => CMD.run(db, m, "requestAirtime", { amount: 1000 }), /INSUFFICIENT_SAVINGS/);
   const db2 = fresh(); seed(db2, "SOB-001", 10000); seed(db2, "SOB-002", 100);
   const loan = LN.applyForLoan(db2, mctx("SOB-002"), "SOB-002", 8000);
-  LN.addGuarantee(db2, ctxAt("2026-03-10"), loan.id, "SOB-001", 8000);   // 8,000 of SOB-001's savings now guaranteed
+  const g = LN.addGuarantee(db2, ctxAt("2026-03-10"), loan.id, "SOB-001", 8000); LN.acceptGuarantee(db2, mctx("SOB-001"), g.id);   // accepted: 8,000 of SOB-001's savings now committed
   throwsMsg(() => CMD.run(db2, m, "requestAirtime", { amount: 2000 }), /INSUFFICIENT_SAVINGS/);
   CMD.run(db2, m, "requestAirtime", { amount: 1800 });
 });

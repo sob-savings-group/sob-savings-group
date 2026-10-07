@@ -6,20 +6,27 @@
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.gov = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
-  const ALL = ["ledger.create", "ledger.void", "ledger.restore", "ledger.approve", "loan.apply", "loan.review", "loan.disburse",
-    "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage", "subscription.record", "shareout.preview",
-    "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "report.view", "audit.view", "system.admin"];
+  /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
+     (reviews/approves, never inputs). The Treasurer reviews (read-only on figures). "Committee" is the generic read-only reviewer. */
+  const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
+    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
+  const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
+  const READ = ["report.view", "audit.view", "shareout.preview"];
+  const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];
 
-  // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions.
+  // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions (never write permissions).
   const config = {
     committeePermissions: null,
-    // Approval policy is an OPEN SOB DECISION (Q6). Default: no entry type needs a second person.
+    // WHICH entry types need the Chairperson is SOB's decision: default none. Also settable (and persisted) via db.policy "approval".
     approval: { requiredTypes: [], separateApprover: true }
   };
   const PERMS = {
     Admin: () => ALL,
-    Committee: () => config.committeePermissions || ["report.view", "shareout.preview"],
-    Member: () => ["self.view", "loan.apply", "report.self", "airtime.request"]
+    Chairperson: () => READ.concat(APPROVE, ["self.view"]),
+    Treasurer: () => READ.concat(["self.view"]),
+    Committee: () => (config.committeePermissions || ["report.view", "shareout.preview"]).filter((p) => !WRITE.includes(p) && !APPROVE.includes(p)),
+    Member: () => ["self.view", "loan.apply", "report.self", "airtime.request", "guarantee.accept"]
   };
   const can = (ctx, action) => !!ctx && (PERMS[ctx.role] || (() => []))().includes(action);
   function require_(ctx, action) {
@@ -51,7 +58,12 @@
     if (!dates.isISO(e.date)) throw new Error("INVALID: date must be YYYY-MM-DD");
     need(e.type, "type");
     if (e.memberId && !db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: " + e.memberId);
-    const needsApproval = config.approval.requiredTypes.includes(e.type);
+    if (["Withdraw", "Share-Out", "Bank Charge"].includes(e.type) && e.memberId) {
+      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. */
+      const pos = ledger.memberPosition(db, e.memberId);
+      if (amount > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
+    }
+    const needsApproval = config.approval.requiredTypes.concat(ledger.getPolicy(db, "approval").requiredTypes || []).includes(e.type);
     const entry = Object.assign({}, e, {
       id: e.id || uid("TXN"), amount, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now,
       approvalStatus: needsApproval ? "PendingApproval" : "Approved"
@@ -107,5 +119,34 @@
     return member;
   }
 
-  return { ALL, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember };
+  /* SOB-approved settings, stored in the ledger itself (db.policy) and audited. Only validated, known settings can be changed; every change needs a reason. */
+  const ENTRY_TYPES = ["Savings", "Withdraw", "Profit", "Loan Disbursement", "Loan Repayment", "Subscription", "Income", "Expense", "Share-Out", "Bank Charge", "Interest", "Penalty"];
+  function setPolicy(db, ctx, key, values, reason) {
+    require_(ctx, "policy.manage"); need(reason, "reason");
+    if (!ledger.POLICY_DEFAULTS[key]) throw new Error("INVALID: unknown policy '" + key + "'");
+    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur);
+    const v = values || {};
+    if (key === "approval") {
+      if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
+      if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
+    } else if (key === "loan") {
+      if (v.guaranteeCover !== undefined) { if (!["SHORTFALL", "FULL_LOAN"].includes(v.guaranteeCover)) throw new Error("INVALID: guaranteeCover must be SHORTFALL or FULL_LOAN"); next.guaranteeCover = v.guaranteeCover; }
+      if (v.repaymentAllocation !== undefined) { if (!["INTEREST_FIRST", "PRINCIPAL_FIRST"].includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation"); next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.allocationConfirmed === true; }
+      else if (v.allocationConfirmed !== undefined) next.allocationConfirmed = !!v.allocationConfirmed;
+    } else if (key === "profit") {
+      if (v.addFactor) {
+        const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");
+        if (!/^[A-Z][A-Z0-9_]{2,40}$/.test(f.id)) throw new Error("INVALID: factor id must be UPPER_SNAKE_CASE");
+        if (!["eligibility", "multiplier"].includes(f.kind)) throw new Error("INVALID: factor kind must be eligibility or multiplier");
+        if ((cur.factors || []).some((x) => x.id === f.id)) throw new Error("DUPLICATE: factor " + f.id);
+        next.factors = (cur.factors || []).concat([{ id: f.id, kind: f.kind, name: String(f.name).trim(), approvedBy: String(f.approvedBy).trim(), approvalRef: String(f.approvalRef).trim(), description: String(f.description || "") }]);
+      }
+    }
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === key);
+    if (!rec) { rec = { id: key }; db.policy.push(rec); }
+    Object.assign(rec, next, { id: key, updatedBy: ctx.by, updatedDate: ctx.today });
+    audit(db, ctx, "Policy", key, "Changed", cur, next, reason);
+    return rec;
+  }
+  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember };
 });

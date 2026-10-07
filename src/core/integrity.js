@@ -26,6 +26,12 @@
       const over = L.loanOutstanding(l, db, asOf); if (over < 0) add("error", "OVERPAID", l.id + " balance " + over);
     });
     db.members.forEach((m) => { const s = L.memberSavings(db, m.id); if (s < 0) add("error", "NEGATIVE_SAVINGS", m.id + " " + s); });
+    db.members.forEach((m) => { const c = L.memberCommitted(db, m.id); if (c > 0 && L.memberSavings(db, m.id) < c) add("error", "GUARANTEE_OVERCOMMIT", m.id + " has " + c + " committed to guarantees but savings of only " + L.memberSavings(db, m.id)); });
+    (db.guarantees || []).forEach((g) => {
+      const rel = (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + Number(r.amount), 0);
+      if (rel !== Number(g.releasedAmount || 0)) add("error", "GUARANTEE_RELEASE_MISMATCH", g.id + " releasedAmount " + (g.releasedAmount || 0) + " vs release records " + rel);
+      if (Number(g.releasedAmount || 0) > Number(g.amount)) add("error", "GUARANTEE_OVER_RELEASED", g.id);
+    });
     const audIds = new Set(); (db.auditLog || []).forEach((a) => { if (audIds.has(a.id)) add("error", "DUPLICATE_AUDIT_ID", a.id); audIds.add(a.id); });
     (db.guarantees || []).filter((g) => g.status === "Active").forEach((g) => { const l = db.loans.find((x) => x.id === g.loanId);
       if (!l || l.voided || ["Cleared", "Declined"].includes(l.status)) add("error", "STALE_GUARANTEE", g.id + " on " + g.loanId); });

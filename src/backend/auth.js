@@ -7,8 +7,8 @@
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.auth = api; }
 })(typeof self !== "undefined" ? self : this, function () {
   const ROUNDS = 300, MAX_FAILS = 5, LOCK_SECONDS = 900, SESSION_SECONDS = 6 * 3600;
-  const ROLES = ["Admin", "Committee", "Member"];
-  const MIN_PIN = { Admin: 6, Committee: 6, Member: 4 };
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];  // Admin = Super Admin
+  const MIN_PIN = { Admin: 6, Chairperson: 6, Treasurer: 6, Committee: 6, Member: 4 };
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
   const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });

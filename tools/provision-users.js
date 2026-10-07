@@ -2,7 +2,7 @@
 /* OFFLINE sign-in provisioning. Generates a random PIN for every member and for each staff ID, hashes them exactly as the server does, and writes:
      users.json   pre-hashed users (every one must set their own PIN at first sign-in) (safe to send to the server: `sobctl import-users`)
      pin-slips.csv / pin-slips.html   PLAINTEXT PINs to hand to members. Print, distribute, then DELETE. Never commit or email these.
-   usage: node tools/provision-users.js <legacy-or-ledger.json> <outDir> [--staff "ADMIN:Admin:Name,TREAS:Committee:Name"] */
+   usage: node tools/provision-users.js <legacy-or-ledger.json> <outDir> [--staff "ADMIN:Admin:Super Admin name,CHAIR:Chairperson:Name,TREAS:Treasurer:Name"] */
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const A = require("../src/backend/auth.js");
 const [src, outDir] = process.argv.slice(2); const si = process.argv.indexOf("--staff"), staff = si > 0 ? process.argv[si + 1].split(",").filter(Boolean).map((s) => { const [id, role, name] = s.split(":"); return { id, role, name: name || id }; }) : [];

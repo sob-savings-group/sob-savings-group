@@ -55,16 +55,27 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   // Decisions still awaiting SOB (proposal Section 7). Engines read these and refuse to guess.
   const CONFIG_PENDING = {
     profitFormula: null,           // Open Q1
-    qualifyingSavingsRule: null,   // Open Q2
+    qualifyingSavingsRule: null,   // retired: total savings, 3x guideline (loanEligibility)
     repaymentAllocation: null,     // interest-first vs principal-first: awaiting SOB (split is not recorded until decided)
     interestReceivableBasis: null  // Open Q7 ("accrued_to_date" | "due_today")
   };
+
+  /* --- policy: SOB-approved settings kept IN the ledger (db.policy), so they persist and are audited. Nothing here invents a rule:
+     every default is either confirmed by SOB or an explicit, visible, changeable setting. --- */
+  const POLICY_DEFAULTS = {
+    approval: { requiredTypes: [], loanSecondApproval: false },                       // WHICH items need the Chairperson is SOB's call; none by default
+    loan: { guidelineMultiple: 3,                                                      // confirmed: standard guideline up to 3x savings
+            guaranteeCover: "SHORTFALL",                                               // guarantors back the part of a loan beyond the 3x guideline ("FULL_LOAN" = back the whole loan)
+            repaymentAllocation: "INTEREST_FIRST", allocationConfirmed: false },       // how repayments split interest/principal for the Interest Receivable display
+    profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
+  };
+  const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
 
   // Entries awaiting/failed second-person approval never count toward any figure.
   const isCounted = (t) => !t.voided && (t.approvalStatus === undefined || t.approvalStatus === "Approved");
   const activeTransactions = (db) => (db.transactions || []).filter(isCounted);
   // Loans that are not (yet / any longer) booked never count toward outstanding or exposure.
-  const NOT_BOOKED = ["Pending", "Approved", "Declined", "Reversed"];
+  const NOT_BOOKED = ["Pending", "AwaitingApproval", "Approved", "Declined", "Reversed"];
   const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided && !NOT_BOOKED.includes(l.status));
 
   function classifyTransaction(t) {
@@ -119,6 +130,36 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     return activeTransactions(db).filter((t) => t.memberId === memberId)
       .reduce((a, t) => a + classifyTransaction(t).savings, 0);
   }
+  /* --- guarantees: the guarantor's own money committed to other people's loans. Committed savings stay in the account (they are still
+     the guarantor's savings) but are NOT available to withdraw until released by repayments / clearance. --- */
+  const guaranteeRemaining = (g) => Math.max(0, Number(g.amount) - Number(g.releasedAmount || 0));
+  const liveGuarantee = (g) => g.status === "Active";
+  const memberCommitted = (db, memberId) => (db.guarantees || []).filter((g) => g.guarantorId === memberId && liveGuarantee(g)).reduce((a, g) => a + guaranteeRemaining(g), 0);
+  const memberAvailable = (db, memberId) => memberSavings(db, memberId) - memberCommitted(db, memberId);
+  const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
+
+  /* --- loan interest position: how much of the money repaid went to interest and how much interest is still unpaid.
+     Allocation order is db.policy "loan".repaymentAllocation (INTEREST_FIRST by default); repayments are walked in date order so interest
+     accrued AFTER a payment is still unpaid. Invariant: principalOutstanding + unpaidInterest + unpaidPenalties == loanOutstanding. --- */
+  function loanInterestPosition(loan, db, asOf) {
+    asOf = asOf || dates.todayISO();
+    const policy = getPolicy(db, "loan"), principal = Number(loan.loanAmount) || 0;
+    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= effectiveAsOf(loan, asOf)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
+    let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0;
+    reps.forEach((t) => {
+      let amt = Number(t.amount);
+      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
+      const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
+      const principalDue = Math.max(0, principal - principalPaid);
+      const order = policy.repaymentAllocation === "PRINCIPAL_FIRST" ? [["principal", principalDue], ["interest", interestDue], ["pen", penDue]] : [["interest", interestDue], ["pen", penDue], ["principal", principalDue]];
+      order.forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
+      if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
+    });
+    const e = effectiveAsOf(loan, asOf), accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    return { principal, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid),
+      principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid, allocation: policy.repaymentAllocation, allocationConfirmed: !!policy.allocationConfirmed };
+  }
   const memberHasOutstandingLoan = (db, memberId, asOf) =>
     activeLoans(db).some((l) => l.memberId === memberId && loanOutstanding(l, db, asOf) > 0);
 
@@ -155,10 +196,11 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     if (!CONFIG_PENDING.profitFormula) throw new Error("PENDING_SOB_DECISION: profit-distribution formula (Open Q1)");
     return CONFIG_PENDING.profitFormula.apply(null, arguments);
   }
+  /* SOB rule: a member normally qualifies mainly on their TOTAL savings, standard guideline up to 3x. It is a guideline, not a hard stop:
+     a loan beyond it may continue when guarantors / approved security back the shortfall (see loans.assessLoan). */
   function loanEligibility(db, memberId) {
-    if (!CONFIG_PENDING.qualifyingSavingsRule) throw new Error("PENDING_SOB_DECISION: qualifying-savings definition (Open Q2)");
-    const q = CONFIG_PENDING.qualifyingSavingsRule(db, memberId);
-    return { qualifyingSavings: q, maxLoan: 3 * q }; // 3x cap is confirmed
+    const q = memberSavings(db, memberId), mult = Number(getPolicy(db, "loan").guidelineMultiple) || 3;
+    return { qualifyingSavings: q, multiple: mult, maxLoan: mult * q };
   }
   /* Eligibility for distribution — the loan-exclusion rule IS confirmed, independent of the formula. */
   function allocateRepayment() {
@@ -170,6 +212,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   return {
     RESTORE_WINDOW_HOURS, CONFIG_PENDING, allocateRepayment, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    POLICY_DEFAULTS, getPolicy, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     profitShare, loanEligibility, eligibleForDistribution
   };
@@ -185,20 +228,27 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.gov = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
-  const ALL = ["ledger.create", "ledger.void", "ledger.restore", "ledger.approve", "loan.apply", "loan.review", "loan.disburse",
-    "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage", "subscription.record", "shareout.preview",
-    "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "report.view", "audit.view", "system.admin"];
+  /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
+     (reviews/approves, never inputs). The Treasurer reviews (read-only on figures). "Committee" is the generic read-only reviewer. */
+  const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
+    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
+  const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
+  const READ = ["report.view", "audit.view", "shareout.preview"];
+  const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];
 
-  // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions.
+  // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions (never write permissions).
   const config = {
     committeePermissions: null,
-    // Approval policy is an OPEN SOB DECISION (Q6). Default: no entry type needs a second person.
+    // WHICH entry types need the Chairperson is SOB's decision: default none. Also settable (and persisted) via db.policy "approval".
     approval: { requiredTypes: [], separateApprover: true }
   };
   const PERMS = {
     Admin: () => ALL,
-    Committee: () => config.committeePermissions || ["report.view", "shareout.preview"],
-    Member: () => ["self.view", "loan.apply", "report.self", "airtime.request"]
+    Chairperson: () => READ.concat(APPROVE, ["self.view"]),
+    Treasurer: () => READ.concat(["self.view"]),
+    Committee: () => (config.committeePermissions || ["report.view", "shareout.preview"]).filter((p) => !WRITE.includes(p) && !APPROVE.includes(p)),
+    Member: () => ["self.view", "loan.apply", "report.self", "airtime.request", "guarantee.accept"]
   };
   const can = (ctx, action) => !!ctx && (PERMS[ctx.role] || (() => []))().includes(action);
   function require_(ctx, action) {
@@ -230,7 +280,12 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
     if (!dates.isISO(e.date)) throw new Error("INVALID: date must be YYYY-MM-DD");
     need(e.type, "type");
     if (e.memberId && !db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: " + e.memberId);
-    const needsApproval = config.approval.requiredTypes.includes(e.type);
+    if (["Withdraw", "Share-Out", "Bank Charge"].includes(e.type) && e.memberId) {
+      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. */
+      const pos = ledger.memberPosition(db, e.memberId);
+      if (amount > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
+    }
+    const needsApproval = config.approval.requiredTypes.concat(ledger.getPolicy(db, "approval").requiredTypes || []).includes(e.type);
     const entry = Object.assign({}, e, {
       id: e.id || uid("TXN"), amount, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now,
       approvalStatus: needsApproval ? "PendingApproval" : "Approved"
@@ -286,69 +341,189 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
     return member;
   }
 
-  return { ALL, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember };
+  /* SOB-approved settings, stored in the ledger itself (db.policy) and audited. Only validated, known settings can be changed; every change needs a reason. */
+  const ENTRY_TYPES = ["Savings", "Withdraw", "Profit", "Loan Disbursement", "Loan Repayment", "Subscription", "Income", "Expense", "Share-Out", "Bank Charge", "Interest", "Penalty"];
+  function setPolicy(db, ctx, key, values, reason) {
+    require_(ctx, "policy.manage"); need(reason, "reason");
+    if (!ledger.POLICY_DEFAULTS[key]) throw new Error("INVALID: unknown policy '" + key + "'");
+    const cur = ledger.getPolicy(db, key), next = Object.assign({}, cur);
+    const v = values || {};
+    if (key === "approval") {
+      if (v.requiredTypes !== undefined) { if (!Array.isArray(v.requiredTypes) || v.requiredTypes.some((x) => !ENTRY_TYPES.includes(x))) throw new Error("INVALID: requiredTypes must be a list of ledger entry types"); next.requiredTypes = v.requiredTypes.slice(); }
+      if (v.loanSecondApproval !== undefined) next.loanSecondApproval = !!v.loanSecondApproval;
+    } else if (key === "loan") {
+      if (v.guaranteeCover !== undefined) { if (!["SHORTFALL", "FULL_LOAN"].includes(v.guaranteeCover)) throw new Error("INVALID: guaranteeCover must be SHORTFALL or FULL_LOAN"); next.guaranteeCover = v.guaranteeCover; }
+      if (v.repaymentAllocation !== undefined) { if (!["INTEREST_FIRST", "PRINCIPAL_FIRST"].includes(v.repaymentAllocation)) throw new Error("INVALID: repaymentAllocation"); next.repaymentAllocation = v.repaymentAllocation; next.allocationConfirmed = v.allocationConfirmed === true; }
+      else if (v.allocationConfirmed !== undefined) next.allocationConfirmed = !!v.allocationConfirmed;
+    } else if (key === "profit") {
+      if (v.addFactor) {
+        const f = v.addFactor; need(f.id, "factor id"); need(f.name, "factor name"); need(f.approvedBy, "approvedBy (who at SOB approved this factor)"); need(f.approvalRef, "approvalRef (minute / decision reference)");
+        if (!/^[A-Z][A-Z0-9_]{2,40}$/.test(f.id)) throw new Error("INVALID: factor id must be UPPER_SNAKE_CASE");
+        if (!["eligibility", "multiplier"].includes(f.kind)) throw new Error("INVALID: factor kind must be eligibility or multiplier");
+        if ((cur.factors || []).some((x) => x.id === f.id)) throw new Error("DUPLICATE: factor " + f.id);
+        next.factors = (cur.factors || []).concat([{ id: f.id, kind: f.kind, name: String(f.name).trim(), approvedBy: String(f.approvedBy).trim(), approvalRef: String(f.approvalRef).trim(), description: String(f.description || "") }]);
+      }
+    }
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === key);
+    if (!rec) { rec = { id: key }; db.policy.push(rec); }
+    Object.assign(rec, next, { id: key, updatedBy: ctx.by, updatedDate: ctx.today });
+    audit(db, ctx, "Policy", key, "Changed", cur, next, reason);
+    return rec;
+  }
+  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember };
 });
 
 return module.exports; })();
 __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
-/* SOB core/loans — application -> review -> approval/decline -> disbursement -> repayment -> clearance/reversal,
-   plus guarantor exposure. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
-   Confirmed: ONE guarantor per loan, who must have enough AVAILABLE savings (lifetime savings minus guarantees already committed)
-   to cover the guaranteed amount, which is the full loan. Still blocked (ledger.CONFIG_PENDING): qualifying savings (3x cap basis),
-   repayment allocation. */
+/* SOB core/loans — application -> review -> (optional Chairperson approval) -> disbursement -> repayment -> clearance/reversal,
+   plus the guarantor and security workflow. Interest is assigned per loan by Admin (assignedMonthlyInterest); SOB has no standard rate.
+   SOB rules implemented here:
+   - 3x savings is the STANDARD GUIDELINE, not a hard stop: a borrower who falls short may continue with guarantor(s) and/or exceptionally approved security.
+   - MORE THAN ONE guarantor may back a loan; their commitments add up. A guarantee takes effect only when the guarantor ACCEPTS it, and from that instant the
+     guaranteed amount is deducted from the guarantor's AVAILABLE savings (it stays in their account but cannot be withdrawn).
+   - Each qualifying repayment reduces the borrower's outstanding loan AND releases the same amount back to the guarantors (pro rata), linked by the repayment id;
+     clearing the loan releases whatever remains. Voiding a repayment re-commits exactly what it released.
+   - Property / other security is an EXCEPTIONAL, separately recorded route (core/security.js), never the default. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.loans = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, L, G) {
   const LIVE_GUARANTEE = (g) => g.status === "Active";
+  const OPEN_GUARANTEE = (g) => g.status === "Active" || g.status === "Requested";
+  const PRE_DISBURSE = ["Pending", "AwaitingApproval", "Approved"];
   const getLoan = (db, id) => { const l = db.loans.find((x) => x.id === id); if (!l) throw new Error("NOT_FOUND: loan " + id); return l; };
   const stateMust = (loan, ...ok) => { if (!ok.includes(loan.status)) throw new Error("BAD_STATE: loan is " + loan.status + ", needs " + ok.join("/")); };
+  const secs = (db, loanId) => (db.securities || []).filter((x) => x.loanId === loanId);
 
-  /* --- guarantor exposure --- */
-  const committed = (db, guarantorId) =>
-    (db.guarantees || []).filter((g) => g.guarantorId === guarantorId && LIVE_GUARANTEE(g)).reduce((a, g) => a + g.amount, 0);
-  const loanCover = (db, loanId) =>
-    (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + g.amount, 0);
-  function qualifyingSavings(db, memberId) {
-    if (!L.CONFIG_PENDING.qualifyingSavingsRule) throw new Error("PENDING_SOB_DECISION: qualifying-savings definition (Open Q2)");
-    return L.CONFIG_PENDING.qualifyingSavingsRule(db, memberId);
-  }
-  /* CONFIRMED rule: available = the guarantor's savings less what they have already guaranteed on other live loans. */
-  function guarantorAvailable(db, guarantorId) {
-    return L.memberSavings(db, guarantorId) - committed(db, guarantorId);
-  }
+  /* --- guarantor exposure (single source: ledger.js) --- */
+  const committed = (db, guarantorId) => L.memberCommitted(db, guarantorId);
+  const loanCover = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + L.guaranteeRemaining(g), 0);
+  const loanGuaranteed = (db, loanId) => (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).reduce((a, g) => a + Number(g.amount), 0);
+  const securityCover = (db, loanId) => secs(db, loanId).filter((x) => x.status === "Approved").reduce((a, x) => a + Number(x.acceptedCover || 0), 0);
+  function qualifyingSavings(db, memberId) { return L.loanEligibility(db, memberId).qualifyingSavings; }
+  const guarantorAvailable = (db, guarantorId) => L.memberAvailable(db, guarantorId);
   function exposureReport(db) {
     return db.members.map((m) => ({ memberId: m.id, name: m.name, committed: committed(db, m.id),
-      guarantees: (db.guarantees || []).filter((g) => g.guarantorId === m.id && LIVE_GUARANTEE(g)).length }))
+      guarantees: (db.guarantees || []).filter((g) => g.guarantorId === m.id && LIVE_GUARANTEE(g) && L.guaranteeRemaining(g) > 0).length }))
       .filter((r) => r.committed > 0);
   }
+
+  /* The one transparent answer to "can this loan proceed, and why": own-savings guideline, the shortfall, and what backs it. */
+  function assessLoan(db, memberId, amount, loanId) {
+    const pol = L.getPolicy(db, "loan"), el = L.loanEligibility(db, memberId), amt = Number(amount);
+    const guideline = el.maxLoan, shortfall = Math.max(0, amt - guideline);
+    const required = pol.guaranteeCover === "FULL_LOAN" ? amt : shortfall;
+    const gs = loanId ? (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g)) : [];
+    const guaranteeCover = loanId ? loanCover(db, loanId) : 0, secCover = loanId ? securityCover(db, loanId) : 0, backing = guaranteeCover + secCover;
+    const reasons = [];
+    if (required > 0 && backing < required) reasons.push("Backing of " + required + " is needed (loan " + amt + " vs guideline " + guideline + " = " + el.multiple + "x savings of " + el.qualifyingSavings + ") but only " + backing + " is accepted (guarantees " + guaranteeCover + ", approved security " + secCover + ").");
+    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, coverRule: pol.guaranteeCover, required,
+      guaranteeCover, guaranteesRequested: gs.filter((g) => g.status === "Requested").length, securityCover: secCover, securityBacked: secCover > 0, backing, shortBy: Math.max(0, required - backing), canApprove: reasons.length === 0, reasons };
+  }
+
   function addGuarantee(db, ctx, loanId, guarantorId, amount) {
     G.require(ctx, "guarantee.manage");
-    const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
-    if (loanCover(db, loanId) > 0) throw new Error("ONE_GUARANTOR_ONLY: this loan already has a guarantor; release it first to change");
-    amount = amount === undefined || amount === "" || amount === null ? loan.loanAmount : Number(amount);
-    if (amount !== Number(loan.loanAmount)) throw new Error("INVALID: the guarantor covers the full loan amount (" + loan.loanAmount + ")");
+    const loan = getLoan(db, loanId); stateMust(loan, ...PRE_DISBURSE);
+    amount = Number(amount); if (!(amount > 0)) throw new Error("INVALID: guarantee amount must be a positive number");
     if (guarantorId === loan.memberId) throw new Error("INVALID: a member cannot guarantee their own loan");
     if (!db.members.some((m) => m.id === guarantorId)) throw new Error("UNKNOWN_MEMBER: " + guarantorId);
+    if ((db.guarantees || []).some((g) => g.loanId === loanId && g.guarantorId === guarantorId && OPEN_GUARANTEE(g))) throw new Error("ALREADY_GUARANTOR: " + guarantorId + " already has an open guarantee on this loan");
     const avail = guarantorAvailable(db, guarantorId);
     if (amount > avail) throw new Error("INSUFFICIENT_GUARANTOR: guarantee of " + amount + " exceeds the guarantor's available savings (" + avail + ")");
-    const g = { id: G.uid("GUA"), loanId, guarantorId, amount, status: "Active", dateCommitted: ctx.today, committedBy: ctx.by };
+    const g = { id: G.uid("GUA"), loanId, guarantorId, amount, status: "Requested", dateRequested: ctx.today, requestedBy: ctx.by, releasedAmount: 0 };
     (db.guarantees = db.guarantees || []).push(g);
-    G.audit(db, ctx, "Guarantee", g.id, "Committed", null, { loanId, guarantorId, amount });
+    G.audit(db, ctx, "Guarantee", g.id, "Requested", null, { loanId, guarantorId, amount }, "Not binding until the guarantor accepts");
     return g;
   }
-  /* Admin replaces the guarantor (e.g. guarantor withdrew savings): release then add, both audited. */
-  function releaseGuarantor(db, ctx, loanId, reason) {
-    G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
-    const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
-    releaseGuarantees(db, ctx, loanId, reason);
+  /* The guarantor accepts for themself (portal), or Admin records an acceptance given elsewhere (evidence required). From this moment the amount is committed. */
+  function acceptGuarantee(db, ctx, guaranteeId, o) {
+    o = o || {};
+    const g = (db.guarantees || []).find((x) => x.id === guaranteeId); if (!g) throw new Error("NOT_FOUND: guarantee " + guaranteeId);
+    if (g.status !== "Requested") throw new Error("BAD_STATE: guarantee is " + g.status);
+    const self = ctx.role === "Member" && ctx.memberId === g.guarantorId;
+    if (self) G.require(ctx, "guarantee.accept");
+    else { G.require(ctx, "guarantee.manage"); G.need(o.evidence, "evidence (how the guarantor accepted: signed form, call, message)"); }
+    const loan = getLoan(db, g.loanId); stateMust(loan, ...PRE_DISBURSE);
+    const avail = guarantorAvailable(db, g.guarantorId);
+    if (g.amount > avail) throw new Error("INSUFFICIENT_GUARANTOR: guarantee of " + g.amount + " exceeds the guarantor's available savings (" + avail + ")");
+    Object.assign(g, { status: "Active", dateCommitted: ctx.today, acceptedBy: ctx.by, acceptedVia: self ? "guarantor (self)" : "recorded by Admin: " + String(o.evidence).trim() });
+    G.audit(db, ctx, "Guarantee", g.id, "Accepted and committed", { status: "Requested", available: avail }, { status: "Active", available: avail - g.amount, committed: committed(db, g.guarantorId) }, g.acceptedVia);
+    return g;
   }
-  function releaseGuarantees(db, ctx, loanId, why) {
-    (db.guarantees || []).filter((g) => g.loanId === loanId && LIVE_GUARANTEE(g)).forEach((g) => {
+  function declineGuarantee(db, ctx, guaranteeId, reason) {
+    const g = (db.guarantees || []).find((x) => x.id === guaranteeId); if (!g) throw new Error("NOT_FOUND: guarantee " + guaranteeId);
+    if (g.status !== "Requested") throw new Error("BAD_STATE: only a pending request can be declined (a committed guarantee is released only by repayments)");
+    const self = ctx.role === "Member" && ctx.memberId === g.guarantorId;
+    if (!self) G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
+    Object.assign(g, { status: "Declined", dateReleased: ctx.today, releaseReason: String(reason).trim() });
+    G.audit(db, ctx, "Guarantee", g.id, "Declined", { status: "Requested" }, { status: "Declined" }, reason);
+    return g;
+  }
+  /* Before disbursement only: withdraw guarantor backing (e.g. guarantor asks out). After disbursement a guarantee is released ONLY by repayments. */
+  function releaseGuarantor(db, ctx, loanId, reason, guaranteeId) {
+    G.require(ctx, "guarantee.manage"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, ...PRE_DISBURSE);
+    releaseGuarantees(db, ctx, loanId, reason, guaranteeId);
+  }
+  function releaseGuarantees(db, ctx, loanId, why, onlyId, viaEntry) {
+    (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g) && (!onlyId || g.id === onlyId)).forEach((g) => {
+      const left = L.guaranteeRemaining(g), was = g.status;
+      if (was === "Active" && left > 0) (g.releases = g.releases || []).push({ date: ctx.today, entryId: viaEntry || null, amount: left, reason: why });
+      g.releasedAmount = Number(g.releasedAmount || 0) + (was === "Active" ? left : 0);
       g.status = "Released"; g.dateReleased = ctx.today; g.releaseReason = why;
-      G.audit(db, ctx, "Guarantee", g.id, "Released", { status: "Active" }, { status: "Released" }, why);
+      G.audit(db, ctx, "Guarantee", g.id, "Released", { status: was, committed: was === "Active" ? left : 0 }, { status: "Released", committed: 0 }, why);
     });
+    // approved security on the loan ends with the loan
+    secs(db, loanId).filter((x) => x.status === "Approved" || x.status === "Proposed").forEach((x) => {
+      const was = x.status; x.status = was === "Proposed" ? "Rejected" : "Released"; x.closedDate = ctx.today; x.closeReason = why;
+      (x.history = x.history || []).push({ date: ctx.today, by: ctx.by, action: x.status, note: why });
+      G.audit(db, ctx, "Security", x.id, x.status, { status: was }, { status: x.status }, why);
+    });
+  }
+  /* Double entry: a counted repayment releases the SAME amount of commitment back to the guarantors (pro rata to what each still has committed). */
+  function releaseOnRepayment(db, ctx, loan, entry) {
+    const gs = (db.guarantees || []).filter((g) => g.loanId === loan.id && LIVE_GUARANTEE(g) && L.guaranteeRemaining(g) > 0);
+    if (!gs.some((g) => (g.releases || []).some((r) => r.entryId === entry.id && !r.reversed))) {
+      const total = gs.reduce((a, g) => a + L.guaranteeRemaining(g), 0), rel = Math.min(Number(entry.amount), total);
+      if (rel > 0) {
+        let left = rel; const sorted = gs.slice().sort((a, b) => L.guaranteeRemaining(b) - L.guaranteeRemaining(a));
+        sorted.forEach((g, i) => {
+          const part = i === sorted.length - 1 ? Math.min(left, L.guaranteeRemaining(g)) : Math.min(Math.floor(rel * L.guaranteeRemaining(g) / total), L.guaranteeRemaining(g));
+          left -= part; if (part <= 0) return;
+          (g.releases = g.releases || []).push({ date: entry.date, entryId: entry.id, amount: part });
+          g.releasedAmount = Number(g.releasedAmount || 0) + part;
+          if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; }
+          G.audit(db, ctx, "Guarantee", g.id, "Released by repayment", { committed: L.guaranteeRemaining(g) + part }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id, loanId: loan.id }, "Borrower repayment " + entry.amount + " on " + entry.date);
+        });
+        // rounding remainder (if any) goes to the first guarantor still committed so Σ released == repayment (up to the amount committed)
+        if (left > 0) { const g = sorted.find((x) => L.guaranteeRemaining(x) > 0); if (g) { const part = Math.min(left, L.guaranteeRemaining(g)); g.releases.push({ date: entry.date, entryId: entry.id, amount: part }); g.releasedAmount += part; if (L.guaranteeRemaining(g) === 0) { g.status = "Released"; g.dateReleased = entry.date; g.releaseReason = "Repaid in full by repayments"; } } }
+      }
+    }
+    if (loan.status === "Active" && L.loanOutstanding(loan, db, entry.date) <= 0) {
+      Object.assign(loan, { status: "Cleared", datePaidFull: entry.date, clearedBy: ctx.by });
+      releaseGuarantees(db, ctx, loan.id, "Loan cleared", null, entry.id);
+      G.audit(db, ctx, "Loan", loan.id, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
+    }
+  }
+  /* A repayment entry that becomes COUNTED (approved by the Chairperson) or is RESTORED triggers its release; one that is voided re-commits it. */
+  function onRepaymentCounted(db, ctx, entry) {
+    if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
+    const loan = db.loans.find((l) => l.id === entry.loanId); if (!loan || loan.voided) return;
+    releaseOnRepayment(db, ctx, loan, entry);
+  }
+  function onRepaymentRemoved(db, ctx, entry, why) {
+    if (!entry || entry.type !== "Loan Repayment" || !entry.loanId) return;
+    (db.guarantees || []).forEach((g) => (g.releases || []).filter((r) => r.entryId === entry.id && !r.reversed).forEach((r) => {
+      r.reversed = true; g.releasedAmount = Math.max(0, Number(g.releasedAmount || 0) - r.amount);
+      if (g.status === "Released" && L.guaranteeRemaining(g) > 0) { g.status = "Active"; g.dateReleased = ""; g.releaseReason = ""; }
+      G.audit(db, ctx, "Guarantee", g.id, "Re-committed (repayment removed)", { committed: L.guaranteeRemaining(g) - r.amount }, { committed: L.guaranteeRemaining(g), repaymentEntry: entry.id }, why || "repayment voided");
+    }));
+    const loan = db.loans.find((l) => l.id === entry.loanId);
+    if (loan && loan.status === "Cleared" && L.loanOutstanding(loan, db, ctx.today) > 0) {
+      Object.assign(loan, { status: "Active", datePaidFull: "" });
+      G.audit(db, ctx, "Loan", loan.id, "Re-opened (repayment removed)", { status: "Cleared" }, { status: "Active" }, why || "repayment voided");
+    }
   }
 
   /* --- workflow --- */
@@ -359,29 +534,40 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     amount = Number(amount); if (!(amount > 0)) throw new Error("INVALID: amount");
     if (!(L.memberSavings(db, memberId) > 0)) throw new Error("NO_SAVINGS: a member must have savings before applying");
     if (L.memberHasOutstandingLoan(db, memberId)) throw new Error("HAS_OUTSTANDING_LOAN: clear the existing loan first");
-    if ((db.loans || []).some((l) => l.memberId === memberId && !l.voided && ["Pending", "Approved"].includes(l.status))) throw new Error("ALREADY_APPLIED");
+    if ((db.loans || []).some((l) => l.memberId === memberId && !l.voided && PRE_DISBURSE.includes(l.status))) throw new Error("ALREADY_APPLIED");
     const loan = { id: G.uid("LOAN"), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
       applicationDate: ctx.today, appliedBy: ctx.by, graceMonths: 3 };
     db.loans.push(loan);
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });
     return loan;
   }
+  /* Approval. Admin (Super Admin) REVIEWS and, unless SOB's approval policy asks for the Chairperson, approves. With loanSecondApproval on, Admin's review moves the loan
+     to AwaitingApproval and only the Chairperson can make it Approved. The 3x guideline never rejects by itself: backing for any shortfall is what is checked. */
   function approveLoan(db, ctx, loanId, note) {
-    G.require(ctx, "loan.review");
-    const loan = getLoan(db, loanId); stateMust(loan, "Pending");
-    const q = L.loanEligibility(db, loan.memberId); // throws PENDING_SOB_DECISION until SOB defines qualifying savings
-    if (loan.loanAmount > q.maxLoan) throw new Error("OVER_LIMIT: " + loan.loanAmount + " exceeds 3x qualifying savings (" + q.maxLoan + ")");
-    if (loanCover(db, loanId) < loan.loanAmount) throw new Error("NO_GUARANTOR_COVER: every loan needs guarantor backing for the full amount");
-    Object.assign(loan, { status: "Approved", approvedBy: ctx.by, approvedDate: ctx.today });
-    G.audit(db, ctx, "Loan", loanId, "Approved", { status: "Pending" }, { status: "Approved" }, note);
+    const second = G.can(ctx, "loan.secondApprove"), review = G.can(ctx, "loan.review");
+    if (!second && !review) G.require(ctx, "loan.review");
+    const loan = getLoan(db, loanId);
+    const a = assessLoan(db, loan.memberId, loan.loanAmount, loanId);
+    const needsChair = !!L.getPolicy(db, "approval").loanSecondApproval;
+    if (loan.status === "AwaitingApproval") {
+      if (!second) throw new Error("FORBIDDEN: this loan awaits the Chairperson's approval");
+      if (G.config.approval.separateApprover && loan.reviewedBy === ctx.by) throw new Error("SEPARATION: the reviewer cannot also give the second approval");
+    } else { stateMust(loan, "Pending"); if (!review) throw new Error("FORBIDDEN: the Chairperson approves only loans reviewed by the Super Admin"); }
+    if (!a.canApprove) throw new Error("NO_BACKING: " + a.reasons.join(" "));
+    const next = loan.status === "Pending" && needsChair ? "AwaitingApproval" : "Approved";
+    const prev = loan.status;
+    if (next === "AwaitingApproval") Object.assign(loan, { status: next, reviewedBy: ctx.by, reviewedDate: ctx.today, assessment: a });
+    else Object.assign(loan, { status: "Approved", approvedBy: ctx.by, approvedDate: ctx.today, assessment: a, securityException: a.securityBacked });
+    G.audit(db, ctx, "Loan", loanId, next === "Approved" ? "Approved" : "Reviewed - awaiting Chairperson", { status: prev }, { status: next, assessment: { guideline: a.guideline, shortfall: a.shortfall, backing: a.backing, securityBacked: a.securityBacked } }, note);
     return loan;
   }
   function declineLoan(db, ctx, loanId, reason) {
-    G.require(ctx, "loan.review"); G.need(reason, "reason");
-    const loan = getLoan(db, loanId); stateMust(loan, "Pending", "Approved");
+    if (!G.can(ctx, "loan.secondApprove")) G.require(ctx, "loan.review"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, ...PRE_DISBURSE);
+    const prev = loan.status;
     Object.assign(loan, { status: "Declined", declinedBy: ctx.by, declinedDate: ctx.today, declineReason: reason });
     releaseGuarantees(db, ctx, loanId, "Loan declined");
-    G.audit(db, ctx, "Loan", loanId, "Declined", null, { status: "Declined" }, reason);
+    G.audit(db, ctx, "Loan", loanId, "Declined", { status: prev }, { status: "Declined" }, reason);
     return loan;
   }
   function disburse(db, ctx, loan, o, txnNote) {
@@ -398,6 +584,8 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   function disburseLoan(db, ctx, loanId, o) {
     G.require(ctx, "loan.disburse");
     const loan = getLoan(db, loanId); stateMust(loan, "Approved");
+    const a = assessLoan(db, loan.memberId, loan.loanAmount, loanId);       // backing may have changed since approval (e.g. a guarantee was released)
+    if (!a.canApprove) throw new Error("NO_BACKING: " + a.reasons.join(" "));
     return disburse(db, ctx, loan, o || {}, "Loan Disbursement");
   }
   /* Existing, already-approved loans (pre-workflow) are recorded without re-running the application steps. Always audited. */
@@ -417,12 +605,8 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     if (!(amount > 0)) throw new Error("INVALID: amount");
     const owing = L.loanOutstanding(loan, db, date);
     if (amount > owing) throw new Error("OVERPAYMENT: outstanding on " + date + " is " + owing);
-    G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Repayment", purpose: "Loan Repayment", loanId });
-    if (L.loanOutstanding(loan, db, date) <= 0) {
-      Object.assign(loan, { status: "Cleared", datePaidFull: date, clearedBy: ctx.by });
-      releaseGuarantees(db, ctx, loanId, "Loan cleared");
-      G.audit(db, ctx, "Loan", loanId, "Cleared", { status: "Active" }, { status: "Cleared" }, "Fully repaid");
-    }
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Repayment", purpose: "Loan Repayment", loanId });
+    if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);   // pending second approval: released only once the Chairperson approves
     return loan;
   }
   function editAssignedInterest(db, ctx, loanId, newAmount, reason) {
@@ -460,10 +644,158 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
-      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanCover(db, loan.id), interestHistory: loan.interestHistory || [] };
+      balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.CONFIG_PENDING.repaymentAllocation ? "configured" : "PENDING_SOB_DECISION", guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
-  return { committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
+  /* The linked double-entry view of one loan: every repayment beside the guarantor releases it caused, with both sides' running positions. */
+  function linkedLedger(db, loanId, asOf) {
+    const loan = getLoan(db, loanId), rows = [], gs = (db.guarantees || []).filter((g) => g.loanId === loanId && g.status !== "Declined");
+    const reps = L.activeTransactions(db).filter((t) => t.loanId === loanId && (t.type === "Loan Disbursement" || t.type === "Loan Repayment")).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    let paid = 0; const running = {}; gs.forEach((g) => { running[g.id] = 0; });
+    gs.filter((g) => g.dateCommitted).sort((a, b) => (a.dateCommitted < b.dateCommitted ? -1 : 1)).forEach((g) => rows.push({ date: g.dateCommitted, event: "Guarantee committed", ref: g.id, guarantor: g.guarantorId, borrowerChange: 0, guarantorCommittedChange: Number(g.amount), _o: 0 }));
+    reps.forEach((t) => {
+      if (t.type === "Loan Disbursement") { rows.push({ date: t.date, event: "Loan disbursed", ref: t.id, guarantor: "", borrowerChange: Number(t.amount), guarantorCommittedChange: 0, _o: 1 }); return; }
+      paid += Number(t.amount);
+      const rel = gs.reduce((a, g) => a.concat((g.releases || []).filter((r) => r.entryId === t.id && !r.reversed).map((r) => ({ g, r }))), []);
+      if (!rel.length) rows.push({ date: t.date, event: "Repayment", ref: t.id, guarantor: "", borrowerChange: -Number(t.amount), guarantorCommittedChange: 0, _o: 2 });
+      rel.forEach(({ g, r }, i) => rows.push({ date: t.date, event: "Repayment" + (i ? " (continued)" : ""), ref: t.id, guarantor: g.guarantorId, borrowerChange: i ? 0 : -Number(t.amount), guarantorCommittedChange: -r.amount, _o: 2 }));
+    });
+    rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a._o - b._o));
+    let out = 0, com = 0;
+    rows.forEach((r) => { out += r.borrowerChange; com += r.guarantorCommittedChange; r.borrowerPrincipalExposure = out; r.totalGuaranteeCommitted = com; delete r._o; });
+    const rest = L.loanOutstanding(loan, db, asOf || dates.todayISO());
+    return { loanId, rows, summary: { borrowerOutstanding: rest, guaranteeCommitted: loanCover(db, loanId), guaranteeReleased: gs.reduce((a, g) => a + Number(g.releasedAmount || 0), 0), totalRepaid: paid,
+      reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
+  }
+  return { assessLoan, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
     declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+});
+
+return module.exports; })();
+__M['core/security'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/security — the controlled facility for loans backed by OTHER approved security / property.
+   SOB strongly discourages property as security, so this is NEVER the default route: it exists for the case where SOB exceptionally chooses to accept it.
+   Security is recorded SEPARATELY from savings-backed guarantors, with description, valuation (where applicable), evidence documents, a written
+   reason for the exception, the Chairperson's approval and a full history. It counts toward a loan's backing only for the cover amount the Chairperson
+   explicitly accepts (never more than the recorded valuation, never more than the loan) — no valuation formula or haircut is invented here. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./governance.js") : root.SOB.gov);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.security = api; }
+})(typeof self !== "undefined" ? self : this, function (dates, G) {
+  const KINDS = ["Property", "Land", "Vehicle", "Equipment", "Other"];
+  const NEEDS_VALUATION = ["Property", "Land", "Vehicle", "Equipment"];
+  const PRE = ["Pending", "AwaitingApproval", "Approved"];
+  const list = (db) => (db.securities = db.securities || []);
+  const get = (db, id) => { const x = list(db).find((s) => s.id === id); if (!x) throw new Error("NOT_FOUND: security " + id); return x; };
+  const cleanDocs = (docs, ctx) => (docs || []).map((d) => ({ name: G.need(d && d.name, "document name"), reference: String((d && d.reference) || ""), note: String((d && d.note) || ""), addedBy: ctx.by, addedDate: ctx.today }));
+  const log = (x, ctx, action, note) => (x.history = x.history || []).push({ date: ctx.today, timestamp: ctx.now, by: ctx.by, role: ctx.role, action, note: note || "" });
+
+  function proposeSecurity(db, ctx, a) {
+    G.require(ctx, "security.manage");
+    const loan = db.loans.find((l) => l.id === a.loanId); if (!loan) throw new Error("NOT_FOUND: loan " + a.loanId);
+    if (!PRE.includes(loan.status)) throw new Error("BAD_STATE: security can only be proposed before disbursement (loan is " + loan.status + ")");
+    if (!KINDS.includes(a.kind)) throw new Error("INVALID: kind must be one of " + KINDS.join("/"));
+    const description = G.need(a.description, "description"); if (description.length < 8) throw new Error("INVALID: describe the security properly (what, where, who owns it)");
+    const owner = G.need(a.owner, "owner (whose security this is)");
+    let valuation = null;
+    if (a.valuation !== undefined && a.valuation !== null && a.valuation !== "") { valuation = Number(a.valuation); if (!(valuation > 0)) throw new Error("INVALID: valuation"); if (!dates.isISO(a.valuationDate)) throw new Error("INVALID: valuationDate (YYYY-MM-DD) is required with a valuation"); G.need(a.valuedBy, "valuedBy (who valued it)"); }
+    else if (NEEDS_VALUATION.includes(a.kind)) throw new Error("REQUIRED: valuation for " + a.kind + " security");
+    const documents = cleanDocs(a.documents, ctx); if (!documents.length) throw new Error("REQUIRED: at least one document / evidence reference (title deed, sale agreement, valuation report ...)");
+    const x = { id: G.uid("SEC"), loanId: loan.id, memberId: loan.memberId, kind: a.kind, description, owner, valuation, valuationDate: valuation ? a.valuationDate : "", valuedBy: valuation ? String(a.valuedBy).trim() : "",
+      documents, status: "Proposed", proposedBy: ctx.by, proposedDate: ctx.today, acceptedCover: 0, history: [] };
+    list(db).push(x); log(x, ctx, "Proposed", description);
+    G.audit(db, ctx, "Security", x.id, "Proposed", null, { loanId: x.loanId, kind: x.kind, valuation, documents: documents.length }, "Exceptional security proposed (not the default route)");
+    return x;
+  }
+  function addSecurityDocument(db, ctx, id, doc) {
+    G.require(ctx, "security.manage");
+    const x = get(db, id); if (!["Proposed", "Approved"].includes(x.status)) throw new Error("BAD_STATE: security is " + x.status);
+    const d = cleanDocs([doc], ctx)[0]; x.documents.push(d); log(x, ctx, "Document added", d.name);
+    G.audit(db, ctx, "Security", id, "Document added", null, { name: d.name, reference: d.reference });
+    return x;
+  }
+  /* The Chairperson (second approver) accepts or rejects. Acceptance needs the reason SOB is making an exception and the exact cover accepted. */
+  function decideSecurity(db, ctx, id, decision, o) {
+    G.require(ctx, "security.approve"); o = o || {};
+    const x = get(db, id); if (x.status !== "Proposed") throw new Error("BAD_STATE: security is " + x.status);
+    if (decision === "reject") { G.need(o.reason, "reason"); Object.assign(x, { status: "Rejected", decidedBy: ctx.by, decidedDate: ctx.today, decisionReason: String(o.reason).trim() }); log(x, ctx, "Rejected", o.reason); G.audit(db, ctx, "Security", id, "Rejected", { status: "Proposed" }, { status: "Rejected" }, o.reason); return x; }
+    if (decision !== "approve") throw new Error("INVALID: decision must be approve or reject");
+    const reason = G.need(o.reason, "reason (why SOB exceptionally accepts security instead of guarantors)");
+    const cover = Number(o.acceptedCover); if (!(cover > 0)) throw new Error("REQUIRED: acceptedCover (the part of the loan this security is accepted to back)");
+    const loan = db.loans.find((l) => l.id === x.loanId);
+    if (cover > Number(loan.loanAmount)) throw new Error("INVALID: acceptedCover cannot exceed the loan amount");
+    if (x.valuation && cover > x.valuation) throw new Error("INVALID: acceptedCover cannot exceed the recorded valuation (" + x.valuation + ")");
+    Object.assign(x, { status: "Approved", acceptedCover: cover, decidedBy: ctx.by, decidedDate: ctx.today, decisionReason: String(reason), exceptional: true });
+    log(x, ctx, "Approved", "cover " + cover + " - " + reason);
+    G.audit(db, ctx, "Security", id, "Approved (exception)", { status: "Proposed" }, { status: "Approved", acceptedCover: cover }, reason);
+    return x;
+  }
+  function releaseSecurity(db, ctx, id, reason) {
+    G.require(ctx, "security.manage"); G.need(reason, "reason");
+    const x = get(db, id); if (!["Proposed", "Approved"].includes(x.status)) throw new Error("BAD_STATE: security is " + x.status);
+    const loan = db.loans.find((l) => l.id === x.loanId);
+    if (loan && loan.status === "Active") throw new Error("BAD_STATE: security backing an outstanding loan is released only when the loan is cleared");
+    const was = x.status; Object.assign(x, { status: "Released", closedDate: ctx.today, closeReason: String(reason).trim() }); log(x, ctx, "Released", reason);
+    G.audit(db, ctx, "Security", id, "Released", { status: was }, { status: "Released" }, reason);
+    return x;
+  }
+  return { KINDS, proposeSecurity, addSecurityDocument, decideSecurity, releaseSecurity };
+});
+
+return module.exports; })();
+__M['core/profit'] = (function(){ const module = {exports:{}}; const require = __req; const self = undefined;
+/* SOB core/profit — profit distribution that is transparent and explainable member by member.
+   SOB rule: profit is shared PROPORTIONALLY to members' savings, together with the other legitimate underlying factors that apply to the distribution.
+   Nothing is invented: the engine uses only (1) each member's savings at the distribution date and (2) factors that SOB has APPROVED and Admin has registered
+   in the approved-factor list (db.policy "profit"), each with its approver and reference. The confirmed exclusion (members with an outstanding loan share in no profit)
+   is pre-registered. Every result carries the factors, per-member values, weights and rounding, so Admin can drill down to see exactly how each figure arose.
+   Rounding: each entitlement is rounded DOWN to a whole shilling; any remainder is shown as undistributed — it is never silently assigned to someone. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.profit = api; }
+})(typeof self !== "undefined" ? self : this, function (dates, L, G) {
+  const asAt = (db, date) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= date) });
+
+  function preview(db, a) {
+    a = a || {};
+    const pool = Number(a.pool); if (!(pool > 0)) throw new Error("INVALID: pool (the profit amount to distribute) must be positive");
+    const date = a.date; if (!dates.isISO(date)) throw new Error("INVALID: date (YYYY-MM-DD) - savings are measured at this date");
+    const reg = L.getPolicy(db, "profit").factors || [], fv = a.factorValues || {};
+    Object.keys(fv).forEach((id) => { if (!reg.some((f) => f.id === id)) throw new Error("UNAPPROVED_FACTOR: '" + id + "' is not in SOB's approved-factor list"); });
+    const snap = asAt(db, date);
+    const rows = db.members.filter((m) => m.status !== "Inactive").map((m) => {
+      const savings = L.memberSavings(snap, m.id), factors = [], why = [];
+      let weight = savings > 0 ? savings : 0, eligible = savings > 0;
+      if (savings <= 0) why.push("no savings at " + date);
+      reg.forEach((f) => {
+        if (f.id === "LOAN_HOLDER_EXCLUSION") { const owes = L.memberHasOutstandingLoan(snap, m.id, date); factors.push({ id: f.id, name: f.name, kind: f.kind, value: owes ? "outstanding loan - excluded" : "no outstanding loan" }); if (owes) { eligible = false; why.push("has an outstanding loan"); } return; }
+        const v = fv[f.id] ? fv[f.id][m.id] : undefined;
+        if (f.kind === "eligibility") { const ok = v === undefined ? true : !!v; factors.push({ id: f.id, name: f.name, kind: f.kind, value: ok }); if (!ok) { eligible = false; why.push(f.name); } }
+        else { const mult = v === undefined ? 1 : Number(v); if (!(mult >= 0)) throw new Error("INVALID: factor " + f.id + " value for " + m.id); factors.push({ id: f.id, name: f.name, kind: f.kind, value: mult, defaulted: v === undefined }); weight *= mult; }
+      });
+      if (!eligible) weight = 0;
+      return { memberId: m.id, name: m.name, savings, eligible, excludedBecause: why.join("; "), factors, weight };
+    });
+    const total = rows.reduce((x, r) => x + r.weight, 0);
+    rows.forEach((r) => { r.sharePct = total > 0 ? Math.round((r.weight / total) * 1e6) / 1e4 : 0; r.entitlement = total > 0 ? Math.floor(pool * r.weight / total) : 0; });
+    const distributed = rows.reduce((x, r) => x + r.entitlement, 0);
+    return { date, pool, basis: "Savings balance of each member at " + date + " (lifetime ledger up to that date)", factorsUsed: reg.map((f) => ({ id: f.id, name: f.name, kind: f.kind, approvedBy: f.approvedBy, approvalRef: f.approvalRef })),
+      totalWeight: total, rows, distributed, undistributed: pool - distributed, eligibleMembers: rows.filter((r) => r.eligible).length, excludedMembers: rows.filter((r) => !r.eligible && r.savings > 0).length,
+      formula: "entitlement = floor( pool x weight / sum of weights ), weight = savings x product of approved multiplier factors (0 if excluded)" };
+  }
+  function distribute(db, ctx, a) {
+    G.require(ctx, "profit.distribute"); a = a || {};
+    const period = G.need(a.period, "period (e.g. 2026-Q1)"); G.need(a.sourceNote, "sourceNote (where this profit came from)");
+    if ((db.profitDistributions || []).some((d) => d.period === period && d.status === "Posted")) throw new Error("ALREADY_DISTRIBUTED: " + period);
+    const pv = preview(db, a);
+    const rec = { id: G.uid("PRD"), period, status: "Posted", date: pv.date, pool: pv.pool, sourceNote: String(a.sourceNote).trim(), basis: pv.basis, formula: pv.formula, factorsUsed: pv.factorsUsed, rows: pv.rows, distributed: pv.distributed, undistributed: pv.undistributed, executedBy: ctx.by, executedDate: ctx.today };
+    (db.profitDistributions = db.profitDistributions || []).push(rec);
+    pv.rows.filter((r) => r.entitlement > 0).forEach((r) => { const t = G.createEntry(db, ctx, { date: pv.date, memberId: r.memberId, amount: r.entitlement, type: "Profit", purpose: "Profit distribution " + period, profitDistributionId: rec.id }); r.entryId = t.id; });
+    G.audit(db, ctx, "ProfitDistribution", rec.id, "Posted", null, { period, pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed, members: pv.rows.filter((r) => r.entitlement > 0).length }, a.sourceNote);
+    return rec;
+  }
+  return { preview, distribute };
 });
 
 return module.exports; })();
@@ -472,13 +804,13 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
    Confirmed: UGX 5,000 annual subscription (group income, never part of savings); FULL savings withdrawn in December for EVERY member,
    including members with an outstanding loan (the loan stays separately payable); members with an outstanding loan are NOT eligible
    for PROFIT distribution; history is never deleted at share-out.
-   Still blocked: the profit formula. Flagged, not decided: a guarantor's withdrawn savings can leave a live loan without cover
-   (shown as guaranteeAtRisk in the preview). */
+   A guarantor's savings committed to an unpaid loan are recognised FIRST: only the AVAILABLE part is withdrawn; the committed part stays in the account
+   until repayments release it. Profit is distributed by core/profit.js (proportional to savings + SOB-approved factors). */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./profit.js") : root.SOB.profit);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.cycle = api; }
-})(typeof self !== "undefined" ? self : this, function (dates, L, G, LN) {
+})(typeof self !== "undefined" ? self : this, function (dates, L, G, LN, P) {
   const SUBSCRIPTION_AMOUNT = 5000;
 
   /* --- subscriptions --- */
@@ -507,16 +839,20 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
   /* --- December share-out --- */
   function previewShareOut(db, year, asOf) {
     const rows = db.members.filter((m) => m.status !== "Inactive").map((m) => {
-      const savings = L.memberSavings(db, m.id);
+      const pos = L.memberPosition(db, m.id);
       const owing = L.activeLoans(db).filter((l) => l.memberId === m.id).reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, db, asOf)), 0);
       const hasLoan = owing > 0;
-      return { memberId: m.id, name: m.name, savings, outstandingLoan: owing, eligibleForProfit: !hasLoan,
-        savingsAction: savings <= 0 ? "NONE" : "WITHDRAW_FULL", guaranteeAtRisk: savings > 0 ? LN.committed(db, m.id) : 0, profit: "PENDING_SOB_FORMULA" };
+      /* The outstanding guarantee is recognised FIRST: only what is genuinely available after it may be withdrawn; the committed part stays in the account. */
+      const action = pos.savings <= 0 ? "NONE" : pos.withdrawable <= 0 ? "RETAIN_COMMITTED" : pos.committed > 0 ? "WITHDRAW_AVAILABLE" : "WITHDRAW_FULL";
+      return { memberId: m.id, name: m.name, savings: pos.savings, committed: pos.committed, available: pos.available, withdraw: pos.withdrawable, retained: pos.savings > 0 ? pos.savings - pos.withdrawable : 0,
+        outstandingLoan: owing, eligibleForProfit: !hasLoan, savingsAction: action, guaranteeAtRisk: pos.committed, profit: "see Profit distribution" };
     });
+    const draws = rows.filter((r) => r.withdraw > 0 && r.savingsAction !== "NONE");
     return { year: Number(year), rows,
-      totals: { withdrawable: rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
-        withdrawableByLoanHolders: rows.filter((r) => r.outstandingLoan > 0 && r.savingsAction === "WITHDRAW_FULL").reduce((a, r) => a + r.savings, 0),
-        guaranteesAtRisk: rows.filter((r) => r.guaranteeAtRisk > 0).length,
+      totals: { withdrawable: draws.reduce((a, r) => a + r.withdraw, 0),
+        withdrawableByLoanHolders: draws.filter((r) => r.outstandingLoan > 0).reduce((a, r) => a + r.withdraw, 0),
+        committedRetained: rows.reduce((a, r) => a + r.retained, 0),
+        guaranteesAtRisk: rows.filter((r) => r.committed > 0).length,
         eligibleMembers: rows.filter((r) => r.eligibleForProfit).length, excludedMembers: rows.filter((r) => !r.eligibleForProfit).length } };
   }
   function executeShareOut(db, ctx, year, o) {
@@ -529,22 +865,19 @@ __M['core/cycle'] = (function(){ const module = {exports:{}}; const require = __
     if (date.slice(5, 7) !== "12" && !(o.force && o.reason)) throw new Error("OUTSIDE_DECEMBER: share-out is a December event (force requires a reason)");
     const pv = previewShareOut(db, year, date);
     const event = { id: G.uid("SHO"), year, date, executedBy: ctx.by, entries: [], profit: { status: "PENDING_SOB_FORMULA" }, loanHolders: pv.rows.filter((r) => r.outstandingLoan > 0).map((r) => r.memberId) };
-    pv.rows.filter((r) => r.savingsAction === "WITHDRAW_FULL").forEach((r) => {
-      const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.savings, type: "Share-Out", purpose: "December share-out " + year, shareOutId: event.id });
-      event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.savings, entryId: t.id });
+    pv.rows.filter((r) => ["WITHDRAW_FULL", "WITHDRAW_AVAILABLE"].includes(r.savingsAction)).forEach((r) => {
+      const t = G.createEntry(db, ctx, { date, memberId: r.memberId, amount: r.withdraw, type: "Share-Out", purpose: "December share-out " + year + (r.retained ? " (UGX " + r.retained + " stays committed to guarantees)" : ""), shareOutId: event.id });
+      event.entries.push({ memberId: r.memberId, savingsWithdrawn: r.withdraw, committedRetained: r.retained, entryId: t.id });
     });
+    event.retainedCommitted = pv.rows.filter((r) => r.retained > 0).map((r) => ({ memberId: r.memberId, retained: r.retained }));
     event.totalWithdrawn = event.entries.reduce((a, e) => a + e.savingsWithdrawn, 0);
     (db.shareOutEvents = db.shareOutEvents || []).push(event);
     Object.assign(cycle, { status: "Closed", closedDate: date, shareOutId: event.id });
     ensureCycle(db, year + 1, dates.addDays(date, 1)); // next cycle begins automatically; nothing is deleted
-    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolders: event.loanHolders.length, guaranteesAtRisk: pv.totals.guaranteesAtRisk }, o.reason);
+    G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolders: event.loanHolders.length, committedRetained: pv.totals.committedRetained }, o.reason);
     return event;
   }
-  /* Profit distribution is blocked until SOB approves a formula; this never guesses. */
-  function distributeProfit(db, ctx, period) {
-    G.require(ctx, "shareout.execute");
-    return L.profitShare(db, period);
-  }
+  function distributeProfit(db, ctx, a) { return P.distribute(db, ctx, a); }
 
   return { SUBSCRIPTION_AMOUNT, subscriptionEntry, recordSubscription, subscriptionCompliance, ensureCycle, previewShareOut, executeShareOut, distributeProfit };
 });
@@ -899,18 +1232,27 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
-    voidEntry: (db, ctx, a) => G.voidEntry(db, ctx, a.id, a.reason),
-    restoreEntry: (db, ctx, a) => G.restoreEntry(db, ctx, a.id, a.reason),
-    approveEntry: (db, ctx, a) => G.approveEntry(db, ctx, a.id, a.decision, a.reason),
+    voidEntry: (db, ctx, a) => { const t = G.voidEntry(db, ctx, a.id, a.reason); LN.onRepaymentRemoved(db, ctx, t, a.reason); return t; },          // a voided repayment re-commits what it released
+    restoreEntry: (db, ctx, a) => { const t = G.restoreEntry(db, ctx, a.id, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
+    approveEntry: (db, ctx, a) => { const t = G.approveEntry(db, ctx, a.id, a.decision, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
     applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
-    releaseGuarantor: (db, ctx, a) => LN.releaseGuarantor(db, ctx, a.loanId, a.reason),
+    acceptGuarantee: (db, ctx, a) => LN.acceptGuarantee(db, ctx, a.id, { evidence: a.evidence }),
+    declineGuarantee: (db, ctx, a) => LN.declineGuarantee(db, ctx, a.id, a.reason),
+    releaseGuarantor: (db, ctx, a) => LN.releaseGuarantor(db, ctx, a.loanId, a.reason, a.guaranteeId),
+    proposeSecurity: (db, ctx, a) => SEC.proposeSecurity(db, ctx, { loanId: a.loanId, kind: a.kind, description: a.description, owner: a.owner, valuation: a.valuation, valuationDate: a.valuationDate, valuedBy: a.valuedBy, documents: a.documents }),
+    addSecurityDocument: (db, ctx, a) => SEC.addSecurityDocument(db, ctx, a.id, { name: a.name, reference: a.reference, note: a.note }),
+    decideSecurity: (db, ctx, a) => SEC.decideSecurity(db, ctx, a.id, a.decision, { reason: a.reason, acceptedCover: a.acceptedCover }),
+    releaseSecurity: (db, ctx, a) => SEC.releaseSecurity(db, ctx, a.id, a.reason),
+    setPolicy: (db, ctx, a) => G.setPolicy(db, ctx, a.key, a.values, a.reason),
+    previewProfit: (db, ctx, a) => { G.require(ctx, "profit.distribute"); return PR.preview(db, a); },
+    distributeProfit: (db, ctx, a) => PR.distribute(db, ctx, { period: a.period, date: a.date, pool: a.pool, sourceNote: a.sourceNote, factorValues: a.factorValues }),
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, date: a.date }),
@@ -966,20 +1308,24 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     const expenses = flow.filter((t) => t.type === "Expense").reduce((a, t) => a + Number(t.amount), 0);
     const loans = L.activeLoans(d);
     const outstanding = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, d, asOf)), 0);
-    const accrued = loans.reduce((a, l) => a + L.loanAccumulatedInterest(l, asOf) + L.loanTotalPenalties(l, d), 0);
-    const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + g.amount, 0);
+    const positions = loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => L.loanInterestPosition(l, d, asOf));
+    const unpaidInterest = positions.reduce((a, p) => a + p.unpaidInterest, 0);
+    const guaranteed = (db.guarantees || []).filter((g) => g.status === "Active").reduce((a, g) => a + L.guaranteeRemaining(g), 0);
+    const pol = L.getPolicy(db, "loan");
     return {
       asOf, period: period || null,
       totalSavings: { value: savings, definition: "Net of all member savings, withdrawals, charges and share-outs, up to the as-of date." },
       availableCash: { value: cash, definition: "Net cash movement in the ledger (deposits, repayments, subscriptions, income minus withdrawals, disbursements, expenses)." },
       outstandingLoans: { value: outstanding, count: loans.filter((l) => L.loanOutstanding(l, d, asOf) > 0).length, definition: "Sum of Loan Payable minus repayments across booked loans." },
-      interestReceivable: { value: accrued, provisional: !L.CONFIG_PENDING.interestReceivableBasis,
-        definition: "Interest (and penalties) accrued to date on booked loans, before repayments. Basis awaiting SOB decision (Open Q7)." },
+      interestReceivable: { value: unpaidInterest, loans: positions.length, provisional: !pol.allocationConfirmed,
+        definition: "Total accumulated UNPAID interest across all outstanding loans: interest accrued to date at each loan's assigned monthly interest (after its grace period, until the loan is fully repaid) less the part of repayments applied to interest (" + pol.repaymentAllocation.replace("_", " ").toLowerCase() + "). Tap for every member and loan." },
       profit: { value: profit, definition: "Profit entries recorded in the selected period." },
       expenses: { value: expenses, definition: "Expense entries recorded in the selected period." },
       members: { value: db.members.filter((m) => m.status !== "Inactive").length, definition: "Active registered members." },
       loanExposure: { pct: savings > 0 ? Math.round((outstanding / savings) * 1000) / 10 : null, guaranteed,
-        definition: "Outstanding Loans / Total Savings; 'guaranteed' is the total currently committed by guarantors." }
+        definition: "Outstanding Loans / Total Savings; 'guaranteed' is the total still committed by guarantors (released progressively as borrowers repay)." },
+      awaitingApproval: { value: (db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).length + (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).length + (db.securities || []).filter((x) => x.status === "Proposed").length,
+        definition: "Items waiting for the Chairperson's second approval (ledger entries, loans, exceptional security)." }
     };
   }
   function loanBook(db, asOf) {
@@ -987,11 +1333,24 @@ __M['core/kpis'] = (function(){ const module = {exports:{}}; const require = __r
     return L.activeLoans(db).map((l) => LN.loanView(db, l, asOf));
   }
   function pipeline(db) {
-    const c = { Pending: 0, Approved: 0, Active: 0, Cleared: 0, Declined: 0 };
+    const c = { Pending: 0, AwaitingApproval: 0, Approved: 0, Active: 0, Cleared: 0, Declined: 0 };
     (db.loans || []).filter((l) => !l.voided).forEach((l) => { if (c[l.status] !== undefined) c[l.status]++; });
     return c;
   }
-  return { dashboard, loanBook, pipeline };
+  /* Interest Receivable drill-down: every outstanding loan, how its interest arose and what is still unpaid. */
+  function interestReceivable(db, asOf) {
+    asOf = asOf || dates.todayISO(); const d = upTo(db, asOf);
+    const rows = L.activeLoans(d).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
+      const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
+      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
+        monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid + p.penaltiesPaid,
+        unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
+    });
+    const pol = L.getPolicy(db, "loan");
+    return { asOf, rows, total: rows.reduce((a, r) => a + r.unpaidInterest, 0), accumulated: rows.reduce((a, r) => a + r.accumulatedInterest, 0), paymentsMade: rows.reduce((a, r) => a + r.paymentsMade, 0), outstanding: rows.reduce((a, r) => a + r.outstanding, 0),
+      allocation: pol.repaymentAllocation, allocationConfirmed: !!pol.allocationConfirmed };
+  }
+  return { dashboard, loanBook, pipeline, interestReceivable };
 });
 
 return module.exports; })();
@@ -1018,7 +1377,7 @@ __M['core/migrate'] = (function(){ const module = {exports:{}}; const require = 
         n.interestHistory = n.interestHistory || [];
         return n;
       }),
-      guarantees: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
+      guarantees: [], securities: [], policy: [], yearCycles: [], shareOutEvents: [], profitDistributions: [],
       users: src.users || [], requests: src.requests || [], airtimeRequests: src.airtimeRequests || [],
       auditLog: (src.auditLog || []).slice(), reconciliations: src.reconciliations || [], smsFailures: src.smsFailures || [],
       legacyAdministration: src.ledger || [], // archived bank-level rows; they do NOT feed any total
@@ -1056,9 +1415,9 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
    the on-screen table, CSV export and print-ready HTML. Blocked (pending SOB decision) reports return {blocked:true, reason}. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./kpis.js") : root.SOB.kpis);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./kpis.js") : root.SOB.kpis, isNode ? require("./profit.js") : root.SOB.profit);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reports = api; }
-})(typeof self !== "undefined" ? self : this, function (dates, L, LN, C, K) {
+})(typeof self !== "undefined" ? self : this, function (dates, L, LN, C, K, PR) {
   const name = (db, id) => (db.members.find((m) => m.id === id) || {}).name || id;
   const sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const R = (title, columns, rows, totals) => ({ title, columns, rows, totals: totals || {} });
@@ -1066,7 +1425,37 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   function memberStatement(db, memberId, period) {
     const h = L.memberLifetimeHistory(db, memberId, period);
     const rows = h.map((r) => ({ date: dates.toDisplay(r.date), type: r.type, purpose: r.purpose || "", amount: r.amount, savingsEffect: L.classifyTransaction(r).savings, balance: r.runningSavings }));
-    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0 });
+    return R("Member statement — " + name(db, memberId), ["date", "type", "purpose", "amount", "savingsEffect", "balance"], rows, { closingBalance: rows.length ? rows[rows.length - 1].balance : 0, ...L.memberPosition(db, memberId) });
+  }
+  /* What a member has committed as guarantor, with the borrower side linked: commitments reduce AVAILABLE savings and return as the borrower repays. */
+  function guaranteeStatement(db, memberId) {
+    const pos = L.memberPosition(db, memberId);
+    const rows = (db.guarantees || []).filter((g) => g.guarantorId === memberId && g.status !== "Declined").map((g) => { const loan = db.loans.find((l) => l.id === g.loanId) || {};
+      return { guaranteeId: g.id, loanId: g.loanId, borrower: name(db, loan.memberId), status: g.status, guaranteed: g.amount, released: Number(g.releasedAmount || 0), stillCommitted: g.status === "Active" ? L.guaranteeRemaining(g) : 0, borrowerOutstanding: loan.id ? L.loanOutstanding(loan, db, dates.todayISO()) : 0, committedOn: g.dateCommitted || "", }; });
+    return R("Guarantee statement — " + name(db, memberId), ["guaranteeId", "loanId", "borrower", "status", "guaranteed", "released", "stillCommitted", "borrowerOutstanding"], rows,
+      { actualSavings: pos.savings, committedToGuarantees: pos.committed, availableBalance: pos.available });
+  }
+  /* Linked double entry for one loan: borrower repayments beside the guarantor releases they caused. */
+  function loanStatement(db, loanId, asOf) {
+    const l = LN.linkedLedger(db, loanId, asOf), loan = db.loans.find((x) => x.id === loanId);
+    const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
+    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "borrowerChange", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
+  }
+  function securities(db) {
+    const rows = (db.securities || []).map((x) => ({ id: x.id, loanId: x.loanId, borrower: name(db, x.memberId), kind: x.kind, description: x.description, owner: x.owner, valuation: x.valuation == null ? "" : x.valuation, acceptedCover: x.acceptedCover || 0, documents: (x.documents || []).length, status: x.status, decidedBy: x.decidedBy || "", reason: x.decisionReason || "" }));
+    return R("Exceptional security register", ["id", "loanId", "borrower", "kind", "description", "owner", "valuation", "acceptedCover", "documents", "status", "decidedBy", "reason"], rows, { approved: rows.filter((r) => r.status === "Approved").length, proposed: rows.filter((r) => r.status === "Proposed").length });
+  }
+  function interestReceivable(db, asOf) {
+    const d = K.interestReceivable(db, asOf);
+    const rows = d.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: dates.toDisplay(r.disbursed), interestFrom: dates.toDisplay(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding }));
+    return R("Interest Receivable (unpaid interest on outstanding loans)", ["member", "loanId", "principal", "monthlyInterest", "disbursed", "interestFrom", "monthsElapsed", "monthsCharged", "accumulatedInterest", "paymentsMade", "unpaidInterest", "outstanding"], rows,
+      { unpaidInterest: d.total, accumulatedInterest: d.accumulated, paymentsMade: d.paymentsMade, outstanding: d.outstanding, allocation: d.allocation + (d.allocationConfirmed ? "" : " (assumed until SOB confirms)") });
+  }
+  function approvals(db) {
+    const rows = [].concat((db.transactions || []).filter((t) => t.approvalStatus === "PendingApproval" && !t.voided).map((t) => ({ kind: "Ledger entry", ref: t.id, member: name(db, t.memberId), detail: t.type + " " + t.amount + " on " + dates.toDisplay(t.date), enteredBy: t.createdBy })),
+      (db.loans || []).filter((l) => l.status === "AwaitingApproval" && !l.voided).map((l) => ({ kind: "Loan", ref: l.id, member: name(db, l.memberId), detail: "Loan " + l.loanAmount, enteredBy: l.reviewedBy })),
+      (db.securities || []).filter((x) => x.status === "Proposed").map((x) => ({ kind: "Exceptional security", ref: x.id, member: name(db, x.memberId), detail: x.kind + ": " + x.description, enteredBy: x.proposedBy })));
+    return R("Awaiting Chairperson approval", ["kind", "ref", "member", "detail", "enteredBy"], rows, { waiting: rows.length });
   }
   function savings(db) {
     const rows = db.members.map((m) => ({ memberId: m.id, name: m.name, savings: L.memberSavings(db, m.id) }));
@@ -1081,8 +1470,8 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
     return R("Loan repayments", ["date", "member", "loanId", "amount"], rows, { total: sum(rows, "amount") });
   }
   function guarantors(db) {
-    const rows = (db.guarantees || []).map((g) => ({ guarantor: name(db, g.guarantorId), loanId: g.loanId, amount: g.amount, status: g.status }));
-    return R("Guarantor exposure", ["guarantor", "loanId", "amount", "status"], rows, { activeTotal: sum(rows.filter((r) => r.status === "Active"), "amount") });
+    const rows = (db.guarantees || []).map((g) => ({ guarantor: name(db, g.guarantorId), loanId: g.loanId, amount: g.amount, released: Number(g.releasedAmount || 0), committed: g.status === "Active" ? L.guaranteeRemaining(g) : 0, status: g.status }));
+    return R("Guarantor exposure", ["guarantor", "loanId", "amount", "released", "committed", "status"], rows, { activeTotal: sum(rows.filter((r) => r.status === "Active"), "amount"), committedTotal: sum(rows, "committed") });
   }
   function subscriptions(db, year) {
     const c = C.subscriptionCompliance(db, year);
@@ -1096,10 +1485,14 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   }
   function shareOut(db, year, asOf) {
     const p = C.previewShareOut(db, year, asOf || year + "-12-31");
-    return R("December share-out " + year + " (preview)", ["memberId", "name", "savings", "outstandingLoan", "savingsAction", "profit"], p.rows, p.totals);
+    return R("December share-out " + year + " (preview)", ["memberId", "name", "savings", "committed", "available", "withdraw", "retained", "outstandingLoan", "savingsAction"], p.rows, p.totals);
   }
+  /* Latest posted distribution (or a named period) with every factor and per-member figure; a preview needs pool + date. */
   function quarterlyDistribution(db, period) {
-    try { return L.profitShare(db, period); } catch (e) { return { blocked: true, title: "Quarterly profit distribution", reason: String(e.message) }; }
+    const posted = (db.profitDistributions || []).filter((d) => d.status === "Posted" && (!period || !period.period || d.period === period.period));
+    if (period && period.pool && period.date) { try { const pv = PR.preview(db, period); return R("Profit distribution (preview)", ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], pv.rows, { pool: pv.pool, distributed: pv.distributed, undistributed: pv.undistributed }); } catch (e) { return { blocked: true, title: "Profit distribution", reason: String(e.message) }; } }
+    const d = posted[posted.length - 1]; if (!d) return { blocked: true, title: "Profit distribution", reason: "No profit distribution has been posted yet. Admin can preview one by entering the pool and the date." };
+    return R("Profit distribution " + d.period, ["memberId", "name", "savings", "eligible", "excludedBecause", "sharePct", "entitlement"], d.rows, { pool: d.pool, distributed: d.distributed, undistributed: d.undistributed, basis: d.basis, formula: d.formula });
   }
   function repaymentAllocation(db) {
     try { L.allocateRepayment(db); } catch (e) { return { blocked: true, title: "Interest vs principal received", reason: String(e.message) }; }
@@ -1136,7 +1529,7 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
     const rows = (db.discrepancies || []).map((d) => ({ kind: d.kind, subject: d.subject, summary: d.summary, status: d.status, decision: d.decision || "", reason: d.resolutionReason || "", evidence: d.evidence || "" }));
     return R("Reconciliation register", ["kind", "subject", "summary", "status", "decision", "reason", "evidence"], rows, { open: rows.filter((r) => r.status === "Open").length, resolved: rows.filter((r) => r.status === "Resolved").length });
   }
-  return { airtime, notificationLog, reconciliationRegister, memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, repaymentAllocation, annualSummary, toCSV, toPrintHTML };
+  return { guaranteeStatement, loanStatement, securities, interestReceivable, approvals, airtime, notificationLog, reconciliationRegister, memberStatement, savings, loans, repayments, guarantors, subscriptions, incomeExpenses, shareOut, quarterlyDistribution, repaymentAllocation, annualSummary, toCSV, toPrintHTML };
 });
 
 return module.exports; })();
@@ -1154,6 +1547,8 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     transactions: { sheet: "Ledger", cols: ["id","date","memberId","amount","type","purpose","loanId","forYear","shareOutId","receipt","bankedBy","receivedBy","createdBy","approvedBy","approvalStatus","voided","voidReason","voidedAt","voidedBy"] },
     loans: { sheet: "Loans", cols: ["id","date","memberId","loanAmount","assignedMonthlyInterest","graceMonths","status","datePaidFull","legacy","voided","voidReason","purpose","interestHistory","penalties"] },
     guarantees: { sheet: "Guarantees", cols: ["id","loanId","guarantorId","amount","status","dateCommitted","dateReleased","releaseReason","committedBy"] },
+    securities: { sheet: "Securities", cols: [] },
+    policy: { sheet: "Policy", cols: [] },
     yearCycles: { sheet: "YearCycles", cols: ["year","status","openedDate","closedDate","shareOutId"] },
     shareOutEvents: { sheet: "ShareOutEvents", cols: ["id","year","date","executedBy","totalWithdrawn","loanHolderTreatment","entries","profit"] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
@@ -1340,8 +1735,8 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.auth = api; }
 })(typeof self !== "undefined" ? self : this, function () {
   const ROUNDS = 300, MAX_FAILS = 5, LOCK_SECONDS = 900, SESSION_SECONDS = 6 * 3600;
-  const ROLES = ["Admin", "Committee", "Member"];
-  const MIN_PIN = { Admin: 6, Committee: 6, Member: 4 };
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];  // Admin = Super Admin
+  const MIN_PIN = { Admin: 6, Chairperson: 6, Treasurer: 6, Committee: 6, Member: 4 };
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
   const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });
@@ -1407,7 +1802,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
-    if (user.role === "Admin" || user.role === "Committee") {
+    if (user.role !== "Member") {   // Super Admin, Chairperson, Treasurer, Committee: staff see the ledger (never credentials); only Admin sees users/outbox
       const full = Object.assign({}, base, db, { users: user.role === "Admin" ? (db.users || []).map(A.publicUser) : [] });
       if (user.role !== "Admin") full.outbox = [];
       full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
@@ -1422,7 +1817,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
     return Object.assign({}, base, {
       members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
       transactions: (db.transactions || []).filter((t) => t.memberId === me || mine.some((l) => l.id === t.loanId)),
-      loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)),
+      loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
       yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
