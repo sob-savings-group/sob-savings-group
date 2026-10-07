@@ -29,29 +29,33 @@
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
-      let tab = "Member";
-      const mid = h("input", { id: "mid", placeholder: "SOB-015", autocapitalize: "characters", autocomplete: "username" }), one = h("input", { id: "one", placeholder: "SOB-015 Aaron", autocapitalize: "none", autocomplete: "off" }), pin = h("input", { type: "password", id: "pin", autocomplete: "current-password" });
+      /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
+      const mid = h("input", { id: "mid", placeholder: "e.g. SOB-015", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      let working = false;
       const go = async () => {
+        if (working) return; working = true;
         try {
-          let id = mid.value.trim(), secret = pin.value.trim();
-          if (tab === "Member") { const m = /^\s*(\S+)[\s,;:]+(.+?)\s*$/.exec(one.value); if (!m) throw Object.assign(new Error("Type your SOB ID, a space, then any one of your names (e.g. SOB-015 Aaron)"), { code: "FORMAT" }); id = m[1]; secret = m[2]; }
-          await st.store.login(id, secret); st.user = st.store.user; st.view = null; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } render();
-        } catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "Wrong ID, or the name / PIN does not match" : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+          /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
+          const typed = mid.value.trim(), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
+          let id = typed, secret = pin.value.trim();
+          if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = typed;
+          if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+          const u = await st.store.login(id, secret);
+          st.user = u; st.view = null;
+          if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
+          render();
+        } catch (e) { toast(e.code === "BAD_CREDENTIALS" ? "We could not match that. Check your SOB ID, and your PIN or name." : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+        finally { working = false; }
       };
-      [one, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
-      const fields = h("div", null), tabs = h("div", { class: "tabs" });
-      const draw = () => {
-        tabs.replaceChildren(...["Member", "Admin"].map((t) => h("button", { type: "button", class: t === tab ? "on" : "", "data-tab": t, onclick: () => { tab = t; draw(); } }, t === "Admin" ? "Admin / Officer" : t)));
-        fields.replaceChildren(...(tab === "Member"
-          ? [h("label", null, "Your SOB ID and any one of your names"), one, h("p", { class: "mute", style: "font-size:12px" }, "Example: SOB-015 Aaron (first or last name). This is view-only: balances and statements. To request airtime or accept guarantees, type your PIN instead of the name (SOB-015 4821). Sign-in never depends on your subscription status.")]
-          : [h("label", null, "Staff ID"), mid, h("label", null, "PIN"), pin]));
-      };
-      draw();
+      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."), tabs, fields,
-        h("div", { class: "row" }, h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In")),
-        h("p", { class: "mute", style: "font-size:12px;text-align:center" }, "Need help? " + help.map((o) => o[1] + " " + o[0] + " " + o[2]).join(" · ")));
+      box.replaceChildren(h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
+        h("label", { for: "mid" }, "SOB ID / Name"), mid, h("div", { class: "hint" }, "Enter your SOB ID or registered name."),
+        h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint" }, "Enter your PIN where required."),
+        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"),
+        h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }
     return box;
   }
@@ -77,10 +81,10 @@
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
     const nav = (isStaff() ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
-    app.append(h("header", null, h("h1", null, "SOB " + (isStaff() ? "Admin" : "Member")), h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV"), h("span", { class: "pill" }, roleLabel(st.user.role) + " · " + st.user.name + (st.user.readOnly ? " · VIEW ONLY (signed in by name)" : "")),
+    app.append(h("header", null, h("h1", null, isStaff() ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), isStaff() || !st.live ? h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV") : null, h("span", { class: "pill" }, roleLabel(st.user.role) + " · " + st.user.name + (st.user.readOnly ? " · VIEW ONLY (signed in by name)" : "")),
       st.live && !st.user.readOnly ? h("button", { id: "my-pin", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed")) }, "My PIN") : null,
       h("button", { id: "logout", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, "Sign out")),
-      h("nav", null, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l, k === "airtime" && isStaff() && pendingAirtime() ? " (" + pendingAirtime() + ")" : "", k === "approvals" && isStaff() && K.dashboard(st.db, today()).awaitingApproval.value ? " (" + K.dashboard(st.db, today()).awaitingApproval.value + ")" : ""))));
+      h("nav", { class: isStaff() ? "" : "mnav" }, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l, k === "airtime" && isStaff() && pendingAirtime() ? " (" + pendingAirtime() + ")" : "", k === "approvals" && isStaff() && K.dashboard(st.db, today()).awaitingApproval.value ? " (" + K.dashboard(st.db, today()).awaitingApproval.value + ")" : ""))));
     const main = h("main", { id: "main" }); app.append(main);
     try { main.append(VIEWS[st.view]()); } catch (e) { main.append(State("error", "Could not show this screen: " + friendly(e))); }
   }

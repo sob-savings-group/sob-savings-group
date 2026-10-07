@@ -1,6 +1,6 @@
 /* Drives dist/verify.html (the no-Node deployment check) in a real browser against the bundled Code_Ledger.gs behind a local HTTP server. */
 const assert = require("assert"), fs = require("fs"), vm = require("vm"), path = require("path"), http = require("http"), crypto = require("crypto"), { execSync } = require("child_process"), { chromium } = require("playwright");
-const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.click("[data-tab=Admin]"); await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.click("[data-tab=Member]"); await pg.fill("#one", id + " " + pin); } };
+const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.fill("#mid", id); await pg.fill("#pin", pin); } };
 const root = path.join(__dirname, ".."), synth = require("../tests/helpers/synth.js"), dataDir = synth.writeTmp(), legacy = path.join(dataDir, "legacy.json");
 execSync("node " + path.join(root, "build/build-gs.js")); execSync("node " + path.join(root, "build/make-verify.js"));
 const sheets = {}, cache = {}, props = { SOB_INITIAL_ADMIN_PIN: "Adm1n-Setup-77" };

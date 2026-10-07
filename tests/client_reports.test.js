@@ -33,6 +33,15 @@ t("expired/invalid session signs the client out and clears the stored token", as
   assert.equal(await c2.resume(), null); assert.equal(ss.m["sob.session"], undefined);
   await c.logout(); assert.equal(c.signedIn, false); assert.equal(ss.m["sob.session"], undefined);
 });
+t("sign-in contract: a response without a user falls back to whoami; a response without a session is a clear error, never a crash", async () => {
+  const mk = (loginRes, whoRes) => C.create({ url: "u", session: memStorage(), fetch: async (u, o) => { const b = JSON.parse(o.body); return { json: async () => (b.action === "login" ? loginRes : whoRes) }; } });
+  const u = { id: "ADMIN", name: "ADMIN", role: "Admin", mustChangePin: false };
+  assert.deepEqual(await mk({ ok: true, token: "t", user: u }, {}).login("ADMIN", "x"), u);
+  assert.equal((await mk({ ok: true, token: "t" }, { ok: true, user: u }).login("ADMIN", "x")).role, "Admin");
+  const noFlag = await mk({ ok: true, token: "t", user: { id: "A", role: "Admin" } }, {}).login("A", "x"); assert.strictEqual(noFlag.mustChangePin, false);
+  await assert.rejects(() => mk({ ok: true }, {}).login("A", "x"), /SIGNIN_CONTRACT/);
+  await assert.rejects(() => mk({ ok: true, token: "t" }, { ok: true }).login("A", "x"), /SIGNIN_CONTRACT/);
+});
 t("reports: savings and loan book reconcile with the engine", () => {
   const s = R.savings(db0); assert.equal(s.totals.total, L.computeGroupTotals(db0, AS_OF).groupSavings);
   const lb = R.loans(db0, AS_OF); assert.equal(lb.rows.length, db0.loans.length);

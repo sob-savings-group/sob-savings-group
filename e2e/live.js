@@ -1,7 +1,7 @@
 /* Live-mode E2E: the real UI talks (over HTTP) to the real backend code running against a mock Sheet. Proves sign-in, server-side
    role enforcement even when the browser is tampered with, and that members only receive their own data. */
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
-const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.click("[data-tab=Admin]"); await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.click("[data-tab=Member]"); await pg.fill("#one", id + " " + pin); } };
+const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.fill("#mid", id); await pg.fill("#pin", pin); } else { await pg.fill("#mid", id); await pg.fill("#pin", pin); } };
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
 const root = path.join(__dirname, ".."), raw = JSON.parse(fs.readFileSync(process.env.SEED || path.join(root, "app/demo-seed.json"), "utf8"));

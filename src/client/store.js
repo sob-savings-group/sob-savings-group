@@ -23,11 +23,20 @@
       if (!j.ok) { if (j.error === "UNAUTHENTICATED") { token = null; user = null; keep.set(null); status = "signed-out"; emit(); } const e = new Error(j.error || "REQUEST_FAILED"); e.code = String(j.error || "").split(":")[0]; throw e; }
       return j;
     }
+    const validUser = (u) => !!u && typeof u === "object" && typeof u.role === "string" && !!u.role && u.id != null;
     return {
       onChange(f) { listeners.push(f); },
       get db() { return db; }, get user() { return user; }, get status() { return status; }, get signedIn() { return !!token; },
-      async login(id, pin) { const j = await call({ action: "login", id, pin }); token = j.token; user = j.user; keep.set(token); status = "signed-in"; emit(); return user; },
-      async resume() { const t = keep.get(); if (!t) return null; token = t; try { const j = await call({ action: "whoami" }); user = j.user; status = "signed-in"; emit(); return user; } catch (e) { token = null; return null; } },
+      /* Contract: a successful login answers {ok:true, token:string, user:{id,name,role,mustChangePin}}. Anything else is checked here, once, so the UI can trust the result. */
+      async login(id, pin) {
+        const j = await call({ action: "login", id, pin });
+        if (!j || typeof j.token !== "string" || !j.token) throw Object.assign(new Error("SIGNIN_CONTRACT: the server did not return a session (fields received: " + Object.keys(j || {}).join(", ") + "). Redeploy the latest Code.gs as a New version."), { code: "SIGNIN_CONTRACT" });
+        token = j.token; let u = j.user;
+        if (!validUser(u)) { try { const w = await call({ action: "whoami" }); u = w.user; } catch (e) { token = null; throw e; } }   // the session exists: ask the server who it belongs to
+        if (!validUser(u)) { token = null; throw Object.assign(new Error("SIGNIN_CONTRACT: the server signed you in but did not say who you are (fields received: " + Object.keys(j).join(", ") + "). Redeploy the latest Code.gs as a New version."), { code: "SIGNIN_CONTRACT" }); }
+        user = Object.assign({ mustChangePin: false }, u); user.mustChangePin = user.mustChangePin === true; keep.set(token); status = "signed-in"; emit(); return user;
+      },
+      async resume() { const t = keep.get(); if (!t) return null; token = t; try { const j = await call({ action: "whoami" }); if (!validUser(j.user)) throw new Error("no user"); user = Object.assign({ mustChangePin: false }, j.user); status = "signed-in"; emit(); return user; } catch (e) { token = null; return null; } },
       async logout() { try { await call({ action: "logout" }); } catch (e) { /* already gone */ } token = null; user = null; db = null; keep.set(null); status = "signed-out"; emit(); },
       async load() { status = "syncing"; emit(); const j = await call({ action: "getLedger" }); db = j.db; status = "synced"; emit(); return db; },
       /* Ask the server to run a ledger command as the signed-in user. The returned ledger view replaces the local copy. */

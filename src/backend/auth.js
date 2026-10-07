@@ -29,15 +29,23 @@
     const m = (db.members || []).find((x) => x.id === u.memberId);
     return tokens(u.name).concat(tokens(m && m.name)).includes(g);
   }
+  const norm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9\u00c0-\u024f]+/g, " ").trim();
+  /* A registered FULL name that belongs to exactly one active member identifies that member (view-only, same as ID + name). */
+  function memberByFullName(db, text) {
+    const q = norm(text); if (q.length < 5) return null;
+    const hits = (db.users || []).filter((u) => u.role === "Member" && u.status !== "Disabled" && (norm(u.name) === q || norm(((db.members || []).find((m) => m.id === u.memberId) || {}).name) === q));
+    return hits.length === 1 ? hits[0] : null;
+  }
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    const u = findUser(db, id);
+    let u = findUser(db, id), byName = false;
+    if (!u) { u = memberByFullName(db, id); byName = !!u; }
     const good = u && u.pinHash && safeEq(stretch(env, u.salt, String(pin || "")), u.pinHash);
     /* Members may also sign in with their SOB ID + any ONE of their names (first or last). That is a VIEW-ONLY session (names are not secret):
        statements and balances yes; guarantee acceptance, airtime, PIN changes etc. need the PIN. Staff roles always need their PIN. */
-    const viaName = !good && u && u.role === "Member" && nameMatches(db, u, pin);
+    const viaName = !good && u && u.role === "Member" && (byName ? norm(pin) === norm(id) : nameMatches(db, u, pin));
     if (!good && !viaName) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" }; }
     env.cache.remove(k);
     const token = env.randomToken() + env.randomToken();

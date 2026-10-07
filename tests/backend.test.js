@@ -65,6 +65,12 @@ t("members can sign in with SOB ID + first OR last name: view-only; staff cannot
   assert.equal(w.call({ action: "login", id: "ADMIN", pin: "admin" }).error, "BAD_CREDENTIALS");
   assert.equal(w.call({ action: "login", id: memberWith.id, pin: "1234" }).user.readOnly, undefined, "PIN sign-in stays full access");
 });
+t("a unique full registered name alone signs a member in (view-only); ambiguous or unknown names do not", () => {
+  const w = world(), full = memberWith.name, r = w.call({ action: "login", id: full, pin: full });
+  assert.ok(r.ok && r.user.readOnly && r.user.id === memberWith.id, "full name");
+  assert.equal(w.call({ action: "login", id: "Nobody Atall", pin: "Nobody Atall" }).error, "BAD_CREDENTIALS");
+  assert.equal(w.call({ action: "login", id: full, pin: "wrong" }).error, "BAD_CREDENTIALS");
+});
 t("PINs are stored hashed+salted, never in plain text, and never sent to any client", () => {
   const w = world(), users = S.readCollection(w.env.ss, "users");
   users.forEach((u) => { assert.ok(u.pinHash && u.salt); assert.ok(!JSON.stringify(u).includes("admin-pin-1") && !JSON.stringify(u).includes("1234")); });
