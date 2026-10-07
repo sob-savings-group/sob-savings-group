@@ -1,5 +1,5 @@
 (function () {
-  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy } = window.SOBUI;
+  const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, Banner, Empty, Confirm } = window.SOBUI;
   const S = window.SOB, CFG = window.SOB_CONFIG || {}, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports;
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
@@ -53,7 +53,7 @@
       [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
+      box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
         h("label", { for: "mid" }, "SOB ID / Name"), mid, h("div", { class: "hint" }, "Enter your SOB ID or registered name."),
         h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint" }, "Enter your PIN where required."),
         h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"),
@@ -65,9 +65,9 @@
   /* A PIN printed on a slip (or set by an Admin) is known to someone else: its owner must replace it before anything else is possible (enforced by the server too). */
   function forcePinScreen() {
     const o = h("input", { type: "password", id: "fp-old", autocomplete: "current-password" }), n = h("input", { type: "password", id: "fp-new", autocomplete: "new-password" }), c = h("input", { type: "password", id: "fp-new2", autocomplete: "new-password" });
-    return h("div", { class: "card", style: "max-width:420px;margin:40px auto", id: "force-pin" }, h("h2", { class: "sec", style: "margin-top:0" }, "Choose your own PIN"),
-      h("p", { class: "mute" }, "Your first PIN was given to you on paper. For your security, set a private PIN now (members: at least 4 characters; staff: at least 6)."),
-      h("label", null, "Current (slip) PIN"), o, h("label", null, "New PIN"), n, h("label", null, "Repeat new PIN"), c,
+    return h("div", { class: "card login", id: "force-pin" }, h("img", { class: "logo", src: R.LOGO, alt: "" }), h("h1", { class: "hero", style: "font-size:28px" }, "Choose your own PIN"),
+      h("p", { class: "tag" }, "Your first PIN was given to you on paper. Please choose a private PIN now: at least 4 characters for members, 6 for staff."),
+      h("label", null, "Current PIN (from your slip)"), o, h("label", null, "New PIN"), n, h("label", null, "Repeat new PIN"), c,
       h("div", { class: "row" }, h("button", { class: "primary", id: "fp-go", onclick: async () => {
         if (n.value !== c.value) return toast("The two new PINs do not match", true);
         try { await st.store.setPin(n.value, o.value); st.user.mustChangePin = false; await st.store.load(); st.db = st.store.db; st.view = null; toast("PIN changed"); render(); } catch (e) { toast(friendly(e), true); }
@@ -75,20 +75,37 @@
   }
 
   /* ---------- navigation ---------- */
-  const NAV_STAFF = [["dash", "Dashboard"], ["members", "Members"], ["loans", "Loans"], ["ledger", "Ledger"], ["subs", "Subscriptions"], ["airtime", "Airtime"], ["shareout", "Share-Out"], ["profit", "Profit"], ["approvals", "Approvals"], ["reports", "Reports"], ["recon", "Reconciliation"], ["audit", "Audit"], ["messages", "Messages", "Admin"], ["system", "System", "Admin"]];
-  const NAV_MEMBER = [["home", "Home"], ["savings", "Savings & Statement"], ["myloans", "Loan & Interest"], ["airtime", "Airtime"]];
+  /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
+  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
+  async function refresh(quiet) {
+    if (!st.live || !st.user || st.user.mustChangePin || st.refreshing) return; st.refreshing = true;
+    try { await st.store.load(); st.db = st.store.db; st.lastLoad = Date.now(); if (!document.querySelector(".modal-bg")) render(); if (!quiet) toast("Up to date"); } catch (e) { if (!quiet) toast(friendly(e), true); } finally { st.refreshing = false; }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && st.live && st.user && Date.now() - (st.lastLoad || 0) > 60000) refresh(true); });
+  const go = (v) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); };
+  const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
+  function navBadge(k) {
+    if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.dashboard(st.db, today()).awaitingApproval.value : 0;
+    return k === "myguar" ? (st.db.guarantees || []).filter((g) => g.guarantorId === st.user.memberId && g.status === "Requested").length : 0;
+  }
   function render() {
     app.replaceChildren();
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
-    const nav = (isStaff() ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
-    app.append(h("header", null, h("h1", null, isStaff() ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), isStaff() || !st.live ? h("span", { class: "pill" }, st.live ? "LIVE" : "DEMO · DEV") : null, h("span", { class: "pill" }, roleLabel(st.user.role) + " · " + st.user.name + (st.user.readOnly ? " · VIEW ONLY (signed in by name)" : "")),
-      st.live && !st.user.readOnly ? h("button", { id: "my-pin", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed")) }, "My PIN") : null,
-      h("button", { id: "logout", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, "Sign out")),
-      h("nav", { class: isStaff() ? "" : "mnav" }, nav.map(([k, l]) => h("button", { class: st.view === k ? "active" : "", "data-nav": k, onclick: () => { st.view = k; st.memberView = null; render(); } }, l, k === "airtime" && isStaff() && pendingAirtime() ? " (" + pendingAirtime() + ")" : "", k === "approvals" && isStaff() && K.dashboard(st.db, today()).awaitingApproval.value ? " (" + K.dashboard(st.db, today()).awaitingApproval.value + ")" : ""))));
-    const main = h("main", { id: "main" }); app.append(main);
-    try { main.append(VIEWS[st.view]()); } catch (e) { main.append(State("error", "Could not show this screen: " + friendly(e))); }
+    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
+    const active = (k) => st.view === k || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
+    const shell = h("div", { class: "shell" });
+    shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, h("img", { src: R.LOGO, alt: "BWOMI" }), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
+      staff && !st.live ? h("span", { class: "pill" }, "DEMO · DEV") : null,
+      st.live && !st.user.readOnly ? h("button", { class: "iconbtn", id: "my-pin", "aria-label": "Change my PIN", title: "Change my PIN", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed"), "Save PIN") }, Icon("key")) : null,
+      st.live ? h("button", { class: "iconbtn", id: "refresh", "aria-label": "Refresh", title: "Refresh", onclick: () => refresh(false) }, Icon("refresh")) : null,
+      h("button", { class: "iconbtn", id: "logout", "aria-label": "Sign out", title: "Sign out", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, Icon("logout"))));
+    shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, nav.map(([k, l, , ic, cls]) => { const n = navBadge(k);
+      return h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null); })));
+    const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
+    try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
   /* ---------- drill-down helpers ---------- */
@@ -108,16 +125,25 @@
   }
 
   /* ---------- Admin: dashboard ---------- */
+  /* What needs a human today — the first thing staff see. */
+  function attention(k, p) {
+    const items = [], open = (st.db.discrepancies || []).filter((d) => d.status === "Open").length, aw = k.awaitingApproval.value, role = st.user.role;
+    if (aw) items.push(["warn", aw + (aw === 1 ? " item is" : " items are") + " waiting for the Chairperson's approval" + (role === "Chairperson" ? " — your decision is needed." : "."), "approvals", "Open"]);
+    if (p.Pending) items.push(["info", p.Pending + (p.Pending === 1 ? " loan application needs" : " loan applications need") + " review.", "loans", "Open"]);
+    if (pendingAirtime() && (role === "Admin")) items.push(["info", pendingAirtime() + " airtime " + (pendingAirtime() === 1 ? "request is" : "requests are") + " waiting.", "airtime", "Open"]);
+    if (open) items.push(["warn", open + " reconciliation " + (open === 1 ? "difference is" : "differences are") + " still open.", "recon", "Open"]);
+    return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
+  }
   function dashboard() {
     const k = K.dashboard(st.db, today(), { year: Number(today().slice(0, 4)) }), p = K.pipeline(st.db);
     const savingsRows = () => Table([{ label: "Member", render: (r) => r.name }, { label: "Savings", num: 1, render: (r) => num(r.savings) }], R.savings(st.db).rows.filter((r) => r.savings !== 0), (r) => openMember(r.memberId));
-    const wrap = h("div", null,
+    const wrap = h("div", null, attention(k, p),
       h("div", { class: "grid", id: "kpis" },
-        Card("Total Savings", ugx(k.totalSavings.value), "Group, lifetime", () => drill("Total Savings", k.totalSavings.definition, savingsRows())),
+        Card("Total Savings", ugx(k.totalSavings.value), "Group, lifetime", () => drill("Total Savings", k.totalSavings.definition, savingsRows()), "avail"),
         Card("Available Cash", ugx(k.availableCash.value), "Net cash movement", () => drill("Available Cash", k.availableCash.definition, Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).slice(-25).reverse()))),
-        Card("Outstanding Loans", ugx(k.outstandingLoans.value), k.outstandingLoans.count + " active loans", () => drill("Outstanding Loans", k.outstandingLoans.definition, Table(loanCols, loanRows((v) => v.balance > 0), (v) => openLoan(v.id)))),
-        Card("Interest Receivable", ugx(k.interestReceivable.value), k.interestReceivable.loans + " loans · unpaid interest", () => openInterestReceivable()),
-        Card("Profit (this year)", ugx(k.profit.value), "Recorded profit entries", () => drill("Profit", k.profit.definition, h("div", null, h("p", { class: "mute" }, "Profit is shared in proportion to eligible savings; members with an outstanding loan are not eligible. Open Profit to see every member's calculation."), h("button", { onclick: () => { const m = document.querySelector(".modal-bg"); if (m) m.remove(); st.view = "profit"; render(); } }, "Open Profit")))),
+        Card("Outstanding Loans", ugx(k.outstandingLoans.value), k.outstandingLoans.count + " active loans", () => drill("Outstanding Loans", k.outstandingLoans.definition, Table(loanCols, loanRows((v) => v.balance > 0), (v) => openLoan(v.id))), "loan"),
+        Card("Interest Receivable", ugx(k.interestReceivable.value), k.interestReceivable.loans + " loans · unpaid interest", () => openInterestReceivable(), "interest"),
+        Card("Profit (this year)", ugx(k.profit.value), "Recorded profit entries", () => drill("Profit", k.profit.definition, h("div", null, h("p", { class: "mute" }, "Profit is shared in proportion to eligible savings; members with an outstanding loan are not eligible. Open Profit to see every member's calculation."), h("button", { onclick: () => { const m = document.querySelector(".modal-bg"); if (m) m.remove(); st.view = "profit"; render(); } }, "Open Profit"))), "profit"),
         Card("Expenses (this year)", ugx(k.expenses.value), "", () => drill("Expenses", k.expenses.definition, tableFromReport(R.incomeExpenses(st.db, { year: Number(today().slice(0, 4)) })))),
         Card("Members", String(k.members.value), "Active", () => { st.view = "members"; render(); }),
         Card("Awaiting approval", String(k.awaitingApproval.value), "Chairperson second approval", () => { st.view = "approvals"; render(); }),
@@ -154,9 +180,11 @@
       h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(st.db, today()).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id)),
       h("h2", { class: "sec" }, "Lifetime history"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "Savings after", num: 1, render: (t) => num(t.runningSavings) }], hist.slice(0, 50))));
   }
+  /* live search: only the result area is redrawn, so typing never loses focus */
+  const Searchable = (placeholder, build) => { let q = ""; const box = h("div"); const paint = () => box.replaceChildren(build(q.trim().toLowerCase())); const inp = h("input", { type: "search", class: "search", placeholder, "aria-label": placeholder, oninput: (e) => { q = e.target.value; paint(); } }); paint(); return h("div", null, inp, box); };
   function members() {
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "member.manage") ? h("button", { class: "primary", id: "add-member", onclick: () => Form("Add member", [{ name: "name", label: "Full name" }, { name: "phone", label: "Phone" }], act(async (v) => commit("addMember", { name: v.name, phone: v.phone }), "Member added")) }, "Add member") : null),
-      Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Savings", num: 1, render: (m) => num(L.memberSavings(st.db, m.id)) }], st.db.members, (m) => openMember(m.id)));
+      Searchable("Search members by name, ID or phone", (q) => Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Savings", num: 1, render: (m) => num(L.memberSavings(st.db, m.id)) }], st.db.members.filter((m) => !q || (m.id + " " + m.name + " " + (m.phone || "")).toLowerCase().includes(q)), (m) => openMember(m.id))));
   }
 
   /* ---------- loans ---------- */
@@ -167,10 +195,10 @@
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loanBacking(loan),
       h("h2", { class: "sec" }, "Guarantors (savings-backed)"), Table([{ label: "Guarantor", render: (g) => nameOf(g.guarantorId) }, { label: "Guaranteed", num: 1, render: (g) => num(g.amount) }, { label: "Released", num: 1, render: (g) => num(g.releasedAmount || 0) }, { label: "Still committed", num: 1, render: (g) => num(g.status === "Active" ? L.guaranteeRemaining(g) : 0) }, { label: "Status", render: (g) => badge(g.status, g.status === "Active" ? "ok" : g.status === "Requested" ? "warn" : "mute") },
-        { label: "", render: (g) => g.status === "Requested" && G.can(c, "guarantee.manage") ? h("button", { "data-accept-guarantee": g.id, onclick: (ev) => { ev.stopPropagation(); Form("Record the guarantor's acceptance", [{ name: "evidence", label: "How did they accept? (signed form, call, message) - required" }], act(async (f) => { await commit("acceptGuarantee", { id: g.id, evidence: f.evidence }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Guarantee accepted and committed")); } }, "Record acceptance") : "" }], (st.db.guarantees || []).filter((g) => g.loanId === id && g.status !== "Declined")),
+        { label: "", render: (g) => g.status === "Requested" && G.can(c, "guarantee.manage") ? h("button", { "data-accept-guarantee": g.id, onclick: (ev) => { ev.stopPropagation(); Form("Record the guarantor's acceptance", [{ name: "evidence", label: "How did they accept? (signed form, call, message) - required" }], act(async (f) => { await commit("acceptGuarantee", { id: g.id, evidence: f.evidence }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Guarantee accepted and committed")); } }, "Record acceptance") : "" }], (st.db.guarantees || []).filter((g) => g.loanId === id && g.status !== "Declined"), null, "No guarantors on this loan"),
       h("h2", { class: "sec" }, "Other security (exceptional)"), Table([{ label: "Kind", key: "kind" }, { label: "Description", key: "description" }, { label: "Valuation", num: 1, render: (x) => x.valuation == null ? "—" : num(x.valuation) }, { label: "Accepted cover", num: 1, render: (x) => num(x.acceptedCover || 0) }, { label: "Docs", num: 1, render: (x) => (x.documents || []).length }, { label: "Status", render: (x) => badge(x.status, x.status === "Approved" ? "ok" : x.status === "Proposed" ? "warn" : "mute") },
         { label: "", render: (x) => x.status === "Proposed" && G.can(c, "security.approve") ? h("span", { class: "row", style: "margin:0" }, h("button", { class: "primary", "data-approve-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Approve exceptional security", [{ name: "reason", label: "Why SOB exceptionally accepts security (required)" }, { name: "cover", label: "Part of the loan this security backs (UGX)", type: "number" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "approve", reason: f.reason, acceptedCover: Number(f.cover) }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Security approved")); } }, "Approve"),
-          h("button", { class: "danger", "data-reject-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject security", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Rejected")); } }, "Reject")) : "" }], (st.db.securities || []).filter((x) => x.loanId === id)),
+          h("button", { class: "danger", "data-reject-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject security", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Rejected")); } }, "Reject")) : "" }], (st.db.securities || []).filter((x) => x.loanId === id), null, "No other security — the loan rests on savings and guarantors"),
       ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), (() => { const lr = R.loanStatement(st.db, id, today()); return h("div", null, printButton(lr), tableFromReport(lr)); })()) : null,
       h("h2", { class: "sec" }, "Interest history"), Table([{ label: "Date", key: "date" }, { label: "From", num: 1, render: (x) => x.previousAmount == null ? "—" : num(x.previousAmount) }, { label: "To", num: 1, render: (x) => num(x.newAmount) }, { label: "Reason", key: "reason" }], v.interestHistory),
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
@@ -204,9 +232,10 @@
 
   /* ---------- ledger ---------- */
   function ledger() {
-    const rows = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 200);
+    const all = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose" }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
-      Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id)));
+      Searchable("Search the ledger by member, type, purpose or amount", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
+      return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
   function openEntry(id) {
     const t = st.db.transactions.find((x) => x.id === id), c = ctx(), row = h("div", { class: "row" });
@@ -304,40 +333,7 @@
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
-  function home() {
-    const id = me(), sav = L.memberSavings(st.db, id), loans = K.loanBook(st.db, today()).filter((v) => st.db.loans.find((l) => l.id === v.id).memberId === id);
-    const bal = loans.reduce((a, v) => a + Math.max(0, v.balance), 0);
-    return h("div", null, h("h2", { class: "sec", style: "margin-top:0" }, "Welcome, " + st.user.name),
-      h("div", { class: "grid" }, Card("My Savings", ugx(sav), "Tap for statement", () => { st.view = "savings"; render(); }), Card("My Loan Balance", ugx(bal), loans.length ? "Tap for details" : "No loan", () => { st.view = "myloans"; render(); }), Card("Committed to guarantees", ugx(LN.committed(st.db, id)), "Cannot be withdrawn until released"), Card("Available to withdraw", ugx(L.memberPosition(st.db, id).withdrawable), "Savings minus commitments"),
-      Card("SMS/WhatsApp notices", (st.db.members.find((m) => m.id === id) || {}).notifyOptOut ? "Off" : "On", "Tap to switch", () => { const off = !!(st.db.members.find((m) => m.id === id) || {}).notifyOptOut; act(async () => commit("setNotifyOptOut", { memberId: id, optOut: !off }), off ? "Notices switched on" : "Notices switched off")(); })), myGuaranteeRequests());
-  }
-  function myGuaranteeRequests() {
-    const id = me(), reqs = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Requested");
-    if (!reqs.length) return null;
-    const loanOf = (g) => (st.db.loans || []).find((l) => l.id === g.loanId) || {};
-    return h("div", { id: "guarantee-requests" }, h("h2", { class: "sec" }, "Guarantee requests for you"),
-      h("p", { class: "mute" }, "If you accept, the amount is set aside from your savings straight away and cannot be withdrawn while the loan is unpaid. It is released back as the borrower repays."),
-      Table([{ label: "Borrower", render: (g) => nameOf(loanOf(g).memberId) || "—" }, { label: "Loan", render: (g) => num(loanOf(g).amount || 0) }, { label: "You would guarantee", num: 1, render: (g) => num(g.amount) },
-        { label: "Your available now", num: 1, render: () => num(L.memberPosition(st.db, id).available) },
-        { label: "", render: (g) => h("span", { class: "row", style: "margin:0" },
-          h("button", { class: "primary", "data-accept-guarantee": g.id, onclick: act(async () => commit("acceptGuarantee", { id: g.id, evidence: "Accepted by the guarantor in the member portal" }), "Guarantee accepted: amount set aside") }, "Accept"),
-          h("button", { class: "danger", "data-decline-guarantee": g.id, onclick: () => Form("Decline guarantee", [{ name: "reason", label: "Reason (optional)" }], act(async (f) => commit("declineGuarantee", { id: g.id, reason: f.reason }), "Declined")) }, "Decline")) }], reqs));
-  }
-  function myGuarantees() {
-    const id = me(), list = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status !== "Requested" && g.status !== "Declined");
-    if (!list.length) return null;
-    return h("div", null, h("h2", { class: "sec" }, "Guarantees I have given"), Table([{ label: "Borrower", render: (g) => nameOf(((st.db.loans || []).find((l) => l.id === g.loanId) || {}).memberId) || "—" }, { label: "Guaranteed", num: 1, render: (g) => num(g.amount) }, { label: "Released back", num: 1, render: (g) => num(g.releasedAmount || 0) }, { label: "Still committed", num: 1, render: (g) => num(g.status === "Active" ? L.guaranteeRemaining(g) : 0) }, { label: "Status", render: (g) => badge(g.status, g.status === "Active" ? "ok" : "mute") }], list));
-  }
-  function mySavings() {
-    const rep = R.memberStatement(st.db, me());
-    const pos = L.memberPosition(st.db, me());
-    return h("div", null, h("div", { class: "grid" }, Card("Actual savings", ugx(pos.savings), "Lifetime balance, never reset at share-out"), Card("Committed to guarantees", ugx(pos.committed), "Held while the loan is unpaid"), Card("Available balance", ugx(pos.available), "Savings minus commitments")), myGuarantees(), h("h2", { class: "sec" }, "Statement"), printButton(rep), tableFromReport(rep));
-  }
-  function myLoans() {
-    const mine = K.loanBook(st.db, today()).filter((v) => st.db.loans.find((l) => l.id === v.id).memberId === me());
-    return h("div", null, h("div", { class: "row" }, h("button", { class: "primary", id: "apply", onclick: () => Form("Apply for a loan", [{ name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: me(), amount: f.amt }), "Application sent")) }, "Apply for a loan")),
-      Table(loanCols.filter((c) => c.label !== "Member"), mine, (v) => openLoan(v.id)), myGuaranteeRequests(), h("p", { class: "mute" }, "Interest is assigned by the Admin for each loan and recalculated monthly until the loan is settled."));
-  }
+  const MV = window.SOBMember({ st, act, commit, render, today, printReport, go });
 
   /* ---------- airtime (members request; Admin fulfils) ---------- */
   const airtimeCols = (staff) => [{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(staff ? [{ label: "Member", render: (r) => r.memberName + " (" + r.memberId + ")" }] : [], [{ label: "Phone", key: "phone" }, { label: "Airtime", num: 1, render: (r) => num(r.airtimeAmount) }, { label: "Fee", num: 1, render: (r) => num(r.fee) }, { label: "Total", num: 1, render: (r) => num(r.total) },
@@ -405,7 +401,7 @@
       h("h2", { class: "sec" }, "Sign-ins"),
       Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Role", key: "role" }, { label: "Status", render: (u) => badge(u.status, u.status === "Active" ? "ok" : "bad") }, { label: "", render: (u) => u.id === st.user.id || u.status === "Disabled" ? "" : h("button", { class: "danger", "data-disable": u.id, onclick: () => { if (confirm("Disable sign-in for " + u.id + "?")) act(async () => { await st.store.disableUser(u.id); await st.store.load(); st.db = st.store.db; render(); }, "Sign-in disabled")(); } }, "Disable") }], st.db.users || []));
   }
-  const VIEWS = { profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home, savings: mySavings, myloans: myLoans };
+  const VIEWS = { profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   async function boot() {
@@ -413,13 +409,17 @@
     try {
       if (st.live) {
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
-        st.store.onChange((e) => Busy.set(e.busy ? e.busyLabel : null));
+        st.store.onChange((e) => { Busy.set(e.busy ? e.busyLabel : null); if (e.status === "synced") st.lastLoad = Date.now(); if (e.status === "signed-out" && st.user) { st.user = null; st.view = null; render(); toast("Your session ended. Please sign in again.", "warn"); } });
         st.db = { members: [], transactions: [], loans: [] };
         if (await st.store.resume()) { st.user = st.store.user; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } }
       }
       else { const raw = await (await fetch("demo-seed.json")).json(); st.db = S.migrate.migrateLegacy(raw, today()); }
       window.__SOB = st; render();
-    } catch (e) { app.replaceChildren(State("error", "Could not load data: " + friendly(e))); }
+    } catch (e) { app.replaceChildren(State("error", "We could not load SOB. " + friendly(e), () => { app.replaceChildren(State("loading")); boot(); })); }
   }
+  /* connection awareness: say so plainly instead of letting buttons look dead */
+  const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "You are offline. Changes cannot be saved until the connection returns.")); };
+  window.addEventListener("offline", offline); window.addEventListener("online", () => { const o = document.getElementById("offline"); if (o) o.remove(); toast("Back online"); });
+  if (navigator.onLine === false) offline();
   boot();
 })();

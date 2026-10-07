@@ -41,10 +41,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     }
     await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
     await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Member"); await pg.click("#demo-go"); await pg.waitForSelector('[data-card="My Savings"]');
-    ok((await pg.locator("[data-nav]").count()) === 4, vp.name + ": member sees only member navigation");
+    ok((await pg.locator("[data-nav]").count()) === 8 && (await pg.locator('[data-nav="members"], [data-nav="approvals"], [data-nav="system"]').count()) === 0, vp.name + ": member sees only member navigation");
     ok((await pg.locator('[data-nav="ledger"]').count()) === 0, vp.name + ": member has no ledger/admin access in UI");
-    await pg.click('[data-nav="savings"]'); await pg.waitForSelector("table"); await pg.click('[data-nav="myloans"]');
-    await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator("#main .err").count()) === 0 && await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": member airtime screen renders without horizontal scroll");
+    await pg.click('[data-nav="savings"]'); await pg.waitForSelector("#stmt-list"); await pg.click('[data-nav="myloans"]');
+    if (vp.width < 1000) { await pg.click('[data-nav="more"]'); await pg.click("text=Request airtime from your savings"); } else await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator("#main .err").count()) === 0 && await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": member airtime screen renders without horizontal scroll");
     await pg.screenshot({ path: path.join(root, "shots", vp.name + "-member-airtime.png"), fullPage: true });
     await pg.screenshot({ path: path.join(root, "shots", vp.name + "-member.png"), fullPage: true });
     ok(errs.length === 0, vp.name + ": no console/page errors" + (errs.length ? " -> " + errs.join(" | ") : ""));
