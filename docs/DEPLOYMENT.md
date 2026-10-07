@@ -14,6 +14,8 @@ The only thing the automated rehearsal cannot do is talk to Google, so run the *
 
 **No Node/computer setup?** Run `npm run build && node build/make-verify.js` once (or take `dist/verify.html` from the release) and open `dist/verify.html` in any browser: paste the `/exec` URL and the Admin PIN, run the smoke check, then (scratch only) create the Chairperson and run the write test. It performs the same checks as `sobctl smoke` / `smoke-write`.
 
+**Using the app without hosting:** `node build/make-app-file.js` builds `dist/sob-app.html`, the whole web client in one file. Open it from your computer in Chrome; it asks once for the `/exec` URL (or open it with `?url=<exec url>`). The `/exec` URL itself is only the API and shows `{"ok":true,...}` when opened directly.
+
 ## B. Production
 1. Same steps 1–5 with a new Sheet named **SOB Ledger**. Do NOT run `smoke-write` here.
 2. Sign-ins (offline, outside the repo): `node tools/provision-users.js <legacy.json> ~/sob-pins --staff "ADMIN:Admin:<Super Admin name>,CHAIR:Chairperson:<name>,TREAS:Treasurer:<name>"` → creates `users.json` (hashes only) and `pin-slips.html/csv` (plain PINs: print, hand out, then delete the folder).
