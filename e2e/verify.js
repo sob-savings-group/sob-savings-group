@@ -1,0 +1,27 @@
+/* Drives dist/verify.html (the no-Node deployment check) in a real browser against the bundled Code_Ledger.gs behind a local HTTP server. */
+const assert = require("assert"), fs = require("fs"), vm = require("vm"), path = require("path"), http = require("http"), crypto = require("crypto"), { execSync } = require("child_process"), { chromium } = require("playwright");
+const root = path.join(__dirname, ".."), synth = require("../tests/helpers/synth.js"), dataDir = synth.writeTmp(), legacy = path.join(dataDir, "legacy.json");
+execSync("node " + path.join(root, "build/build-gs.js")); execSync("node " + path.join(root, "build/make-verify.js"));
+const sheets = {}, cache = {}, props = { SOB_INITIAL_ADMIN_PIN: "Adm1n-Setup-77" };
+const mk = () => { const d = []; return { getLastRow: () => d.length, getLastColumn: () => d.reduce((a, r) => Math.max(a, r.length), 0), getRange(r, c, nr, nc) { return { getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (d[r - 1 + i] && d[r - 1 + i][c - 1 + j] !== undefined ? d[r - 1 + i][c - 1 + j] : ""))), setValues: (v) => v.forEach((row, i) => row.forEach((x, j) => { d[r - 1 + i] = d[r - 1 + i] || []; d[r - 1 + i][c - 1 + j] = x; })), clearContent: () => { for (let i = 0; i < nr; i++) if (d[r - 1 + i]) for (let j = 0; j < nc; j++) d[r - 1 + i][c - 1 + j] = ""; } }; } }; };
+const sb = { SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mk()) }) }, LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+  UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
+    CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
+  Utilities: { DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 }, computeDigest: (a, s) => Array.from(crypto.createHash("sha256").update(s).digest()).map((b) => (b > 127 ? b - 256 : b)), getUuid: () => crypto.randomUUID() },
+  PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, deleteProperty: (k) => { delete props[k]; } }) }, ContentService: { MimeType: { JSON: "json" }, createTextOutput: (s) => ({ s, setMimeType() { return this; } }) }, console };
+vm.createContext(sb); vm.runInContext(fs.readFileSync(path.join(root, "dist/Code_Ledger.gs"), "utf8") + "\nthis.doPost=doPost;this.initAdmin=initAdmin;this.setupAdmin=setupAdmin;this.dailyBackup=dailyBackup;this.restoreFromProperty=restoreFromProperty;", sb);
+(async () => {
+  const srv = http.createServer((q, r) => { const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" }; if (q.method === "OPTIONS") { r.writeHead(204, cors); return r.end(); } let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, Object.assign({ "Content-Type": "application/json" }, cors)); r.end(sb.doPost({ postData: { contents: b } }).s); }); });
+  await new Promise((r) => srv.listen(0, r)); const url = "http://localhost:" + srv.address().port + "/exec"; sb.setupAdmin();
+  const M = require("../src/core/migrate.js"), db = M.migrateLegacy(JSON.parse(fs.readFileSync(legacy, "utf8")), "2026-10-07");
+  const post = async (b) => (await fetch(url, { method: "POST", body: JSON.stringify(b) })).json(), a = await post({ action: "login", id: "ADMIN", pin: "Adm1n-Setup-77" }); if (!process.env.EMPTY) assert.ok((await post({ action: "importSnapshot", token: a.token, db })).ok);
+  const I = require("../src/core/integrity.js"); for (const f of process.env.EMPTY ? [] : I.unaccounted(db, "2026-10-07")) assert.ok((await post({ action: "command", token: a.token, name: "openDiscrepancy", args: { kind: "OTHER", subject: I.findingKey(f), summary: "known fixture item" } })).ok);
+  const br = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }), pg = await br.newPage(); const errs = []; pg.on("pageerror", (e) => errs.push(e.message));
+  await pg.goto("file://" + path.join(root, "dist/verify.html")); await pg.fill("#url", url); await pg.fill("#apin", "Adm1n-Setup-77");
+  const wait = () => pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent), null, { timeout: 60000 });
+  await pg.click("#b-smoke"); await wait(); let t = await pg.innerText("#out"); console.log(t); assert.ok(/RESULT: PASS/.test(t), "smoke");
+  await pg.fill("#cslip", "Chair-Slip-91"); await pg.fill("#cown", "Chair-Own-5512"); await pg.click("#b-chair"); await wait(); t = await pg.innerText("#out"); assert.ok(/RESULT: PASS/.test(t), "chair");
+  await pg.click("#b-write"); await wait(); t = await pg.innerText("#out"); assert.ok(/stopped/.test(t) && /scratch/.test(t), "write refused without the scratch tick");
+  await pg.check("#scratch"); await pg.click("#b-write"); await pg.waitForFunction(() => /RESULT:/.test(document.getElementById("out").textContent) && /audit trail/.test(document.getElementById("out").textContent), null, { timeout: 60000 }); t = await pg.innerText("#out"); console.log(t); assert.ok(/RESULT: PASS/.test(t) && !/FAIL/.test(t), "write");
+  assert.deepEqual(errs, []); await br.close(); srv.close(); console.log("verify page e2e passed");
+})().catch((e) => { console.error(e); process.exit(1); });

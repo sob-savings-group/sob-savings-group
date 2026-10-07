@@ -12,6 +12,8 @@ The only thing the automated rehearsal cannot do is talk to Google, so run the *
    `node tools/sobctl.js ping` → `node tools/sobctl.js smoke` → `SOB_ALLOW_WRITE_TESTS=yes node tools/sobctl.js smoke-write`. All lines must say PASS.
 6. Delete the scratch sheet/deployment.
 
+**No Node/computer setup?** Run `npm run build && node build/make-verify.js` once (or take `dist/verify.html` from the release) and open `dist/verify.html` in any browser: paste the `/exec` URL and the Admin PIN, run the smoke check, then (scratch only) create the Chairperson and run the write test. It performs the same checks as `sobctl smoke` / `smoke-write`.
+
 ## B. Production
 1. Same steps 1–5 with a new Sheet named **SOB Ledger**. Do NOT run `smoke-write` here.
 2. Sign-ins (offline, outside the repo): `node tools/provision-users.js <legacy.json> ~/sob-pins --staff "ADMIN:Admin:<Super Admin name>,CHAIR:Chairperson:<name>,TREAS:Treasurer:<name>"` → creates `users.json` (hashes only) and `pin-slips.html/csv` (plain PINs: print, hand out, then delete the folder).
