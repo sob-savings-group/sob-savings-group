@@ -40,12 +40,14 @@
   function assessLoan(db, memberId, amount, loanId) {
     const pol = L.getPolicy(db, "loan"), el = L.loanEligibility(db, memberId), amt = Number(amount);
     const guideline = el.maxLoan, shortfall = Math.max(0, amt - guideline);
-    const required = shortfall;                                              // confirmed: guarantors back only the shortfall beyond the borrower's own qualification
+    /* SOB decision: the guarantor policy BEGINS on guarantorPolicyStart (1 Jan 2027). From then guarantors back only the shortfall beyond the borrower's own qualification; before it nothing is required. */
+    const start = pol.guarantorPolicyStart || "2027-01-01", guarantorsApply = dates.todayISO() >= start;
+    const required = guarantorsApply ? shortfall : 0;
     const gs = loanId ? (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g)) : [];
     const guaranteeCover = loanId ? loanCover(db, loanId) : 0, secCover = loanId ? securityCover(db, loanId) : 0, backing = guaranteeCover + secCover;
     const reasons = [];
     if (required > 0 && backing < required) reasons.push("Backing of " + required + " is needed (loan " + amt + " vs guideline " + guideline + " = " + el.multiple + "x savings of " + el.qualifyingSavings + ") but only " + backing + " is accepted (guarantees " + guaranteeCover + ", approved security " + secCover + ").");
-    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required,
+    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required, guarantorsApply, guarantorPolicyStart: start,
       guaranteeCover, guaranteesRequested: gs.filter((g) => g.status === "Requested").length, securityCover: secCover, securityBacked: secCover > 0, backing, shortBy: Math.max(0, required - backing), canApprove: reasons.length === 0, reasons };
   }
 

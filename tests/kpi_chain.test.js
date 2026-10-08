@@ -1,6 +1,7 @@
 /* KPI -> drill-down -> underlying transactions -> report/PDF: for every KPI and every kind of period, ONE calculation feeds them all, and a
    past date really shows the position on that date (a ledger truncated to that date gives the same answer). */
 const assert = require("assert");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 const D = require("../src/core/dates.js"), L = require("../src/core/ledger.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), K = require("../src/core/kpis.js"), R = require("../src/core/reports.js");
 let pass = 0, f = 0; const t = (n, fn) => { try { fn(); pass++; console.log("  ok  " + n); } catch (e) { f++; process.exitCode = 1; console.log("FAIL  " + n + "\n      " + (e.stack || e.message).split("\n").slice(0, 5).join("\n      ")); } };
 const U = { admin: { name: "Super Admin", id: "U1", role: "Admin" }, chair: { name: "Chair", id: "U2", role: "Chairperson" } };

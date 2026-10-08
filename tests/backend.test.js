@@ -1,4 +1,5 @@
 const assert = require("assert"), fs = require("fs"), vm = require("vm"), path = require("path"), crypto = require("crypto");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js");
 let failed = 0; const tests = []; const t = (n, f) => tests.push([n, f]);
 const raw = require("./helpers/synth.js").legacyRaw();

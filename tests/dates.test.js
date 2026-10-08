@@ -1,4 +1,5 @@
 const assert = require("assert"), G = require("../src/core/governance.js"), CMD = require("../src/core/commands.js"), LN = require("../src/core/loans.js");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 let n = 0; const t = (name, f) => { f(); n++; console.log("  ok  " + name); };
 const ctx = (day, role) => G.makeCtx({ name: role || "Admin", id: "U", role: role || "Admin" }, { today: day, now: day + "T09:00:00.000Z" });
 const fresh = () => ({ members: [{ id: "SOB-001", name: "A", status: "Active" }, { id: "SOB-002", name: "B", status: "Active" }], transactions: [], loans: [], guarantees: [], auditLog: [] });

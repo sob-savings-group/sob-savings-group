@@ -1,4 +1,5 @@
 const assert = require("assert");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 const fs = require("fs");
 const dates = require("../src/core/dates.js");
 const L = require("../src/core/ledger.js");

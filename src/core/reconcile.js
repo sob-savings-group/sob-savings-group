@@ -51,6 +51,17 @@
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
     return loan;
   }
+  /* A consolidated loan stays ONE loan account; its dated component disbursements are kept on it for the record (they must add up to the loan amount exactly). */
+  function recordLoanComponents(db, ctx, loanId, components, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    const loan = db.loans.find((l) => l.id === loanId); if (!loan || loan.voided) throw new Error("NOT_FOUND: loan " + loanId);
+    if (!Array.isArray(components) || components.length < 2) throw new Error("INVALID: a consolidated loan has at least two components");
+    const comps = components.map((c) => { if (!dates.isISO(c.date)) throw new Error("INVALID: component date must be YYYY-MM-DD"); const amt = Number(c.amount); if (!(amt > 0)) throw new Error("INVALID: component amount must be positive"); return { date: c.date, amount: amt, ref: String(c.ref || "") }; }).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const sum = comps.reduce((a, c) => a + c.amount, 0); if (sum !== Number(loan.loanAmount)) throw new Error("INVALID: components add up to " + sum + " but the loan is " + loan.loanAmount);
+    const prev = loan.components || null; loan.components = comps; (loan.componentHistory = loan.componentHistory || []).push({ at: ctx.now, by: ctx.by, reason, evidence, previous: prev });
+    G.audit(db, ctx, "Loan", loanId, "Component disbursements recorded", { components: prev }, { components: comps }, reason + " | evidence: " + evidence);
+    return loan;
+  }
   /* Audited re-dating of one ledger entry (e.g. a placeholder date from the old system). The original date stays on the record. */
   function correctEntryDate(db, ctx, entryId, newDate, reason, evidence) {
     G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
@@ -71,5 +82,5 @@
     });
   }
   const summary = (db) => { const l = list(db); return { open: l.filter((x) => x.status === "Open").length, resolved: l.filter((x) => x.status === "Resolved").length, total: l.length }; };
-  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, correctEntryDate, loanDateImpact, summary };
+  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
 });

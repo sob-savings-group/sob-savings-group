@@ -93,7 +93,7 @@
       c.add("existing records untouched by the history import", pre.transactions.every((x) => JSON.stringify(db.transactions.find((y) => y.id === x.id)) === JSON.stringify(x)));
       const net = {}; todo.forEach((e) => { net[e.memberId] = (net[e.memberId] || 0) + (["Savings", "Profit"].includes(e.type) ? e.amount : -e.amount); });
       c.add("each member's savings moved by exactly the imported rows", db.members.every((m) => L.memberSavings(db, m.id) - L.memberSavings(pre, m.id) === (net[m.id] || 0)));
-      c.add("original dates, amounts and member IDs preserved", H.entries.every((e) => { const x = db.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === e.date && x.memberId === e.memberId && x.amount === e.amount && x.historical === true; }));
+      c.add("original dates, amounts and member IDs preserved", H.entries.every((e) => { const x = db.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === (e.dateUnknown ? e.dateAfter : e.date) && (!e.dateUnknown || x.dateUnknown === true) && x.memberId === e.memberId && x.amount === e.amount && x.historical === true; }));
       const again = must(await api({ action: "command", name: "importHistoricalEntries", args: hargs(H.entries, { dryRun: true }) }), "re-run check").result;
       c.add("running it again would add nothing", again.added === 0 && again.possibleDuplicates.length === 0);
     }
@@ -160,7 +160,8 @@
       let principal = 0, unpaidInterest = 0, penalties = 0;
       loans.forEach((l) => { const w = L.loanInterestPosition(l, db, asOf); principal += w.principalOutstanding; unpaidInterest += w.unpaidInterest; penalties += w.unpaidPenalties; });
       const owed = principal + unpaidInterest + penalties, profit = active.filter((t) => t.memberId === m.id && t.type === "Profit").reduce((a, t) => a + t.amount, 0);
-      return { id: m.id, name: m.name, savings: money(pos.savings), committed: money(pos.committed), available: money(pos.available), profitCredited: money(profit), loanPrincipal: money(principal), unpaidInterest: money(unpaidInterest), loanOwed: money(owed), memoNet: money(pos.savings - owed), historyRows: active.filter((t) => t.memberId === m.id && t.historical).length };
+      const sumT = (ty) => active.filter((t) => t.memberId === m.id && t.type === ty).reduce((a, t) => a + (Number(t.amount) || 0), 0), dep = sumT("Savings"), wd = sumT("Withdraw"), so = sumT("Share-Out");
+      return { id: m.id, name: m.name, deposits: money(dep), withdrawals: money(wd), shareOuts: money(so), otherMovements: money(pos.savings - (dep + profit - wd - so)), savings: money(pos.savings), committed: money(pos.committed), available: money(pos.available), profitCredited: money(profit), loanPrincipal: money(principal), unpaidInterest: money(unpaidInterest), loanOwed: money(owed), memoNet: money(pos.savings - owed), historyRows: active.filter((t) => t.memberId === m.id && t.historical).length };
     });
     const tot = (k) => rows.reduce((a, r) => a + r[k], 0), g = L.computeGroupTotals(db, asOf), reg = db.discrepancies || [];
     const hist = active.filter((t) => t.historical), byType = {}; hist.forEach((t) => { const b = (byType[t.type] = byType[t.type] || { count: 0, sum: 0 }); b.count++; b.sum += t.amount; });
@@ -173,7 +174,7 @@
     Object.keys(ctl.historyByType || {}).forEach((k) => { add("Historical " + k + " (count)", ctl.historyByType[k].count, (byType[k] || {}).count || 0); add("Historical " + k + " (UGX)", ctl.historyByType[k].sum, (byType[k] || {}).sum || 0); });
     add("Open exceptions in the register (historical rows held)", ctl.heldExceptions, reg.filter((d) => d.status === "Open" && d.kind === "MISSING_ENTRY").length);
     return {
-      asOf, rows, totals: { savings: tot("savings"), committed: tot("committed"), available: tot("available"), profitCredited: tot("profitCredited"), loanPrincipal: tot("loanPrincipal"), unpaidInterest: tot("unpaidInterest"), loanOwed: tot("loanOwed"), memoNet: tot("memoNet") },
+      asOf, rows, totals: { deposits: tot("deposits"), withdrawals: tot("withdrawals"), shareOuts: tot("shareOuts"), otherMovements: tot("otherMovements"), savings: tot("savings"), committed: tot("committed"), available: tot("available"), profitCredited: tot("profitCredited"), loanPrincipal: tot("loanPrincipal"), unpaidInterest: tot("unpaidInterest"), loanOwed: tot("loanOwed"), memoNet: tot("memoNet") },
       group: g, historyByType: byType, controls: t, register: reg.map((d) => ({ kind: d.kind, subject: d.subject, summary: d.summary, status: d.status, decision: d.decision || "" })),
       negative: rows.filter((r) => r.savings < 0).map((r) => r.id + " " + r.name), missing: pack.missing || [], decisions: pack.decisions || [],
       contributions: { deposits: sumBy((x) => x.type === "Savings"), withdrawals: sumBy((x) => x.type === "Withdraw"), loanRepayments: sumBy((x) => x.type === "Loan Repayment"), disbursed: (db.loans || []).filter((l) => !l.voided).reduce((a, l) => a + (Number(l.loanAmount) || 0), 0) }
@@ -183,7 +184,7 @@
   function asReports(rep) {
     const R = (title, columns, rows, totals, labels) => ({ title, columns, rows, totals: totals || {}, labels: labels || {} });
     return [
-      R("Reconciliation: per-member position as at " + D.toDisplay(rep.asOf), ["id", "name", "savings", "committed", "available", "profitCredited", "loanPrincipal", "unpaidInterest", "loanOwed", "memoNet"], rep.rows, rep.totals, { id: "ID", name: "Member", savings: "Cumulative savings", committed: "Guarantee commitments", available: "Available savings", profitCredited: "Profit credited", loanPrincipal: "Loan principal outstanding", unpaidInterest: "Unpaid interest", loanOwed: "Total loan owed", memoNet: "Memo: savings less loan owed (not used in any KPI)" }),
+      R("Reconciliation: per-member position as at " + D.toDisplay(rep.asOf), ["id", "name", "deposits", "profitCredited", "withdrawals", "shareOuts", "otherMovements", "savings", "committed", "available", "loanPrincipal", "unpaidInterest", "loanOwed", "memoNet"], rep.rows, rep.totals, { id: "ID", name: "Member", deposits: "Savings deposited", withdrawals: "Withdrawals", shareOuts: "Share-outs paid", otherMovements: "Other movements", savings: "Actual savings (after withdrawals and share-outs)", committed: "Guarantee commitments", available: "Available savings", profitCredited: "Profit credited", loanPrincipal: "Loan principal outstanding", unpaidInterest: "Unpaid interest", loanOwed: "Total loan owed", memoNet: "Memo: savings less loan owed (not used in any KPI)" }),
       R("Reconciliation: control totals", ["name", "expected", "actual", "pass", "note"], rep.controls.map((c) => Object.assign({}, c, { pass: c.pass ? "OK" : "DIFFERENT" })), {}, { name: "Control", expected: "Source records", actual: "Platform", pass: "Result", note: "Note" }),
       R("Reconciliation: exceptions and open items", ["kind", "subject", "summary", "status", "decision"], rep.register, { total: rep.register.length }, { kind: "Kind", subject: "Subject", summary: "What is uncertain", status: "Status", decision: "Decision" })
     ];

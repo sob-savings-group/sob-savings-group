@@ -6,6 +6,8 @@
 4. The Chairperson (ID CHAIR) signs in, approves the requests in Approvals (the void first). Run **installSOBRecords** once more: it records the four dated repayments and closes the corrected loan-date items.
 5. Print the PIN slips, then delete that sheet and Code_Records.gs.
 
+Settled SOB decisions built in (8 Oct 2026): Bishop = SOB-003 (108 rows imported); the two undated genuine transactions keep their source position (after/before dated neighbours) with no invented date; consolidated loans stay ONE account with their dated components (Chairperson-approved); the guarantor policy begins 1 Jan 2027; actual savings = deposits + profit - withdrawals - share-outs; the 50 historical exceptions were matched against the loan register, group bank ledger and phone numbers (15 explained and closed, 35 left unposted for lack of exact evidence).
+
 Tested with tests/install.test.js (synthetic data) and privately on the real records. Needs real-Google confirmation: Apps Script run time (6-minute limit; the run is repeatable and resumes), and the Chairperson approvals.
 
 ---

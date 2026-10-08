@@ -100,7 +100,7 @@
     approval: { requiredTypes: [], loanSecondApproval: true },
     // FINAL SOB rules: standard guideline up to 3x savings; guarantors back only the shortfall beyond the borrower's own qualification;
     // a repayment clears accumulated unpaid interest first and any remainder reduces principal (REPAYMENT_RULE, not a setting).
-    loan: { guidelineMultiple: 3 },
+    loan: { guidelineMultiple: 3, guarantorPolicyStart: "2027-01-01" },   // SOB decision: the guarantor requirement begins on 1 Jan 2027; before that the 3x guideline is shown but no guarantor is required
     profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
   };
   const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };
@@ -459,12 +459,14 @@
   function assessLoan(db, memberId, amount, loanId) {
     const pol = L.getPolicy(db, "loan"), el = L.loanEligibility(db, memberId), amt = Number(amount);
     const guideline = el.maxLoan, shortfall = Math.max(0, amt - guideline);
-    const required = shortfall;                                              // confirmed: guarantors back only the shortfall beyond the borrower's own qualification
+    /* SOB decision: the guarantor policy BEGINS on guarantorPolicyStart (1 Jan 2027). From then guarantors back only the shortfall beyond the borrower's own qualification; before it nothing is required. */
+    const start = pol.guarantorPolicyStart || "2027-01-01", guarantorsApply = dates.todayISO() >= start;
+    const required = guarantorsApply ? shortfall : 0;
     const gs = loanId ? (db.guarantees || []).filter((g) => g.loanId === loanId && OPEN_GUARANTEE(g)) : [];
     const guaranteeCover = loanId ? loanCover(db, loanId) : 0, secCover = loanId ? securityCover(db, loanId) : 0, backing = guaranteeCover + secCover;
     const reasons = [];
     if (required > 0 && backing < required) reasons.push("Backing of " + required + " is needed (loan " + amt + " vs guideline " + guideline + " = " + el.multiple + "x savings of " + el.qualifyingSavings + ") but only " + backing + " is accepted (guarantees " + guaranteeCover + ", approved security " + secCover + ").");
-    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required,
+    return { memberId, amount: amt, savings: el.qualifyingSavings, multiple: el.multiple, guideline, withinGuideline: amt <= guideline, shortfall, required, guarantorsApply, guarantorPolicyStart: start,
       guaranteeCover, guaranteesRequested: gs.filter((g) => g.status === "Requested").length, securityCover: secCover, securityBacked: secCover > 0, backing, shortBy: Math.max(0, required - backing), canApprove: reasons.length === 0, reasons };
   }
 
@@ -1188,6 +1190,17 @@
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
     return loan;
   }
+  /* A consolidated loan stays ONE loan account; its dated component disbursements are kept on it for the record (they must add up to the loan amount exactly). */
+  function recordLoanComponents(db, ctx, loanId, components, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    const loan = db.loans.find((l) => l.id === loanId); if (!loan || loan.voided) throw new Error("NOT_FOUND: loan " + loanId);
+    if (!Array.isArray(components) || components.length < 2) throw new Error("INVALID: a consolidated loan has at least two components");
+    const comps = components.map((c) => { if (!dates.isISO(c.date)) throw new Error("INVALID: component date must be YYYY-MM-DD"); const amt = Number(c.amount); if (!(amt > 0)) throw new Error("INVALID: component amount must be positive"); return { date: c.date, amount: amt, ref: String(c.ref || "") }; }).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const sum = comps.reduce((a, c) => a + c.amount, 0); if (sum !== Number(loan.loanAmount)) throw new Error("INVALID: components add up to " + sum + " but the loan is " + loan.loanAmount);
+    const prev = loan.components || null; loan.components = comps; (loan.componentHistory = loan.componentHistory || []).push({ at: ctx.now, by: ctx.by, reason, evidence, previous: prev });
+    G.audit(db, ctx, "Loan", loanId, "Component disbursements recorded", { components: prev }, { components: comps }, reason + " | evidence: " + evidence);
+    return loan;
+  }
   /* Audited re-dating of one ledger entry (e.g. a placeholder date from the old system). The original date stays on the record. */
   function correctEntryDate(db, ctx, entryId, newDate, reason, evidence) {
     G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
@@ -1208,7 +1221,7 @@
     });
   }
   const summary = (db) => { const l = list(db); return { open: l.filter((x) => x.status === "Open").length, resolved: l.filter((x) => x.status === "Resolved").length, total: l.length }; };
-  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, correctEntryDate, loanDateImpact, summary };
+  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
 });
 
 /* src/core/integrity.js */
@@ -1506,7 +1519,8 @@
       if (!e || !e.sourceRef) return bad("sourceRef required");
       if (!TYPES.includes(e.type)) return bad("type must be one of " + TYPES.join("/"));
       if (!members.has(e.memberId)) return bad("unknown member " + e.memberId);
-      if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD");
+      if (e.dateUnknown) { if (!dates.isISO(e.dateAfter)) return bad("dateUnknown rows need dateAfter (the last dated source row before it) as YYYY-MM-DD"); if (e.dateBefore && !dates.isISO(e.dateBefore)) return bad("dateBefore must be YYYY-MM-DD"); e = Object.assign({}, e, { date: e.dateAfter }); }
+      else if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD");
       const amt = Number(e.amount); if (!(amt > 0)) return bad("amount must be positive");
       if (byRef.has(e.sourceRef)) { out.alreadyImported++; return; }
       if (seen.has(e.sourceRef)) return bad("duplicate sourceRef inside batch");
@@ -1521,7 +1535,7 @@
       if (a.dryRun) return;
       const m = db.members.find((x) => x.id === e.memberId);
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
-        historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
+        historical: true, originalName: e.originalName || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined, dateBefore: e.dateUnknown && e.dateBefore ? e.dateBefore : undefined, sourceOrder: e.sourceOrder === undefined ? undefined : e.sourceOrder, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
     /* Audit ANNOTATIONS: workbook rows with no amount, no date or a zero amount. They are disclosed and kept for the record but are NEVER ledger transactions. */
     const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
@@ -1574,6 +1588,7 @@
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
+    recordLoanComponents: (db, ctx, a) => RC.recordLoanComponents(db, ctx, a.loanId, a.components, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
     executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason }),
     requestAirtime: (db, ctx, a) => AT.request(db, ctx, { memberId: a.memberId, amount: a.amount, phone: a.phone }),
@@ -1593,6 +1608,7 @@
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
@@ -1601,7 +1617,7 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "executeShareOut") return "Share-out " + a.year;
     return a.id || "";
@@ -1820,7 +1836,7 @@
       c.add("existing records untouched by the history import", pre.transactions.every((x) => JSON.stringify(db.transactions.find((y) => y.id === x.id)) === JSON.stringify(x)));
       const net = {}; todo.forEach((e) => { net[e.memberId] = (net[e.memberId] || 0) + (["Savings", "Profit"].includes(e.type) ? e.amount : -e.amount); });
       c.add("each member's savings moved by exactly the imported rows", db.members.every((m) => L.memberSavings(db, m.id) - L.memberSavings(pre, m.id) === (net[m.id] || 0)));
-      c.add("original dates, amounts and member IDs preserved", H.entries.every((e) => { const x = db.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === e.date && x.memberId === e.memberId && x.amount === e.amount && x.historical === true; }));
+      c.add("original dates, amounts and member IDs preserved", H.entries.every((e) => { const x = db.transactions.find((y) => y.sourceRef === e.sourceRef); return x && x.date === (e.dateUnknown ? e.dateAfter : e.date) && (!e.dateUnknown || x.dateUnknown === true) && x.memberId === e.memberId && x.amount === e.amount && x.historical === true; }));
       const again = must(await api({ action: "command", name: "importHistoricalEntries", args: hargs(H.entries, { dryRun: true }) }), "re-run check").result;
       c.add("running it again would add nothing", again.added === 0 && again.possibleDuplicates.length === 0);
     }
@@ -1887,7 +1903,8 @@
       let principal = 0, unpaidInterest = 0, penalties = 0;
       loans.forEach((l) => { const w = L.loanInterestPosition(l, db, asOf); principal += w.principalOutstanding; unpaidInterest += w.unpaidInterest; penalties += w.unpaidPenalties; });
       const owed = principal + unpaidInterest + penalties, profit = active.filter((t) => t.memberId === m.id && t.type === "Profit").reduce((a, t) => a + t.amount, 0);
-      return { id: m.id, name: m.name, savings: money(pos.savings), committed: money(pos.committed), available: money(pos.available), profitCredited: money(profit), loanPrincipal: money(principal), unpaidInterest: money(unpaidInterest), loanOwed: money(owed), memoNet: money(pos.savings - owed), historyRows: active.filter((t) => t.memberId === m.id && t.historical).length };
+      const sumT = (ty) => active.filter((t) => t.memberId === m.id && t.type === ty).reduce((a, t) => a + (Number(t.amount) || 0), 0), dep = sumT("Savings"), wd = sumT("Withdraw"), so = sumT("Share-Out");
+      return { id: m.id, name: m.name, deposits: money(dep), withdrawals: money(wd), shareOuts: money(so), otherMovements: money(pos.savings - (dep + profit - wd - so)), savings: money(pos.savings), committed: money(pos.committed), available: money(pos.available), profitCredited: money(profit), loanPrincipal: money(principal), unpaidInterest: money(unpaidInterest), loanOwed: money(owed), memoNet: money(pos.savings - owed), historyRows: active.filter((t) => t.memberId === m.id && t.historical).length };
     });
     const tot = (k) => rows.reduce((a, r) => a + r[k], 0), g = L.computeGroupTotals(db, asOf), reg = db.discrepancies || [];
     const hist = active.filter((t) => t.historical), byType = {}; hist.forEach((t) => { const b = (byType[t.type] = byType[t.type] || { count: 0, sum: 0 }); b.count++; b.sum += t.amount; });
@@ -1900,7 +1917,7 @@
     Object.keys(ctl.historyByType || {}).forEach((k) => { add("Historical " + k + " (count)", ctl.historyByType[k].count, (byType[k] || {}).count || 0); add("Historical " + k + " (UGX)", ctl.historyByType[k].sum, (byType[k] || {}).sum || 0); });
     add("Open exceptions in the register (historical rows held)", ctl.heldExceptions, reg.filter((d) => d.status === "Open" && d.kind === "MISSING_ENTRY").length);
     return {
-      asOf, rows, totals: { savings: tot("savings"), committed: tot("committed"), available: tot("available"), profitCredited: tot("profitCredited"), loanPrincipal: tot("loanPrincipal"), unpaidInterest: tot("unpaidInterest"), loanOwed: tot("loanOwed"), memoNet: tot("memoNet") },
+      asOf, rows, totals: { deposits: tot("deposits"), withdrawals: tot("withdrawals"), shareOuts: tot("shareOuts"), otherMovements: tot("otherMovements"), savings: tot("savings"), committed: tot("committed"), available: tot("available"), profitCredited: tot("profitCredited"), loanPrincipal: tot("loanPrincipal"), unpaidInterest: tot("unpaidInterest"), loanOwed: tot("loanOwed"), memoNet: tot("memoNet") },
       group: g, historyByType: byType, controls: t, register: reg.map((d) => ({ kind: d.kind, subject: d.subject, summary: d.summary, status: d.status, decision: d.decision || "" })),
       negative: rows.filter((r) => r.savings < 0).map((r) => r.id + " " + r.name), missing: pack.missing || [], decisions: pack.decisions || [],
       contributions: { deposits: sumBy((x) => x.type === "Savings"), withdrawals: sumBy((x) => x.type === "Withdraw"), loanRepayments: sumBy((x) => x.type === "Loan Repayment"), disbursed: (db.loans || []).filter((l) => !l.voided).reduce((a, l) => a + (Number(l.loanAmount) || 0), 0) }
@@ -1910,7 +1927,7 @@
   function asReports(rep) {
     const R = (title, columns, rows, totals, labels) => ({ title, columns, rows, totals: totals || {}, labels: labels || {} });
     return [
-      R("Reconciliation: per-member position as at " + D.toDisplay(rep.asOf), ["id", "name", "savings", "committed", "available", "profitCredited", "loanPrincipal", "unpaidInterest", "loanOwed", "memoNet"], rep.rows, rep.totals, { id: "ID", name: "Member", savings: "Cumulative savings", committed: "Guarantee commitments", available: "Available savings", profitCredited: "Profit credited", loanPrincipal: "Loan principal outstanding", unpaidInterest: "Unpaid interest", loanOwed: "Total loan owed", memoNet: "Memo: savings less loan owed (not used in any KPI)" }),
+      R("Reconciliation: per-member position as at " + D.toDisplay(rep.asOf), ["id", "name", "deposits", "profitCredited", "withdrawals", "shareOuts", "otherMovements", "savings", "committed", "available", "loanPrincipal", "unpaidInterest", "loanOwed", "memoNet"], rep.rows, rep.totals, { id: "ID", name: "Member", deposits: "Savings deposited", withdrawals: "Withdrawals", shareOuts: "Share-outs paid", otherMovements: "Other movements", savings: "Actual savings (after withdrawals and share-outs)", committed: "Guarantee commitments", available: "Available savings", profitCredited: "Profit credited", loanPrincipal: "Loan principal outstanding", unpaidInterest: "Unpaid interest", loanOwed: "Total loan owed", memoNet: "Memo: savings less loan owed (not used in any KPI)" }),
       R("Reconciliation: control totals", ["name", "expected", "actual", "pass", "note"], rep.controls.map((c) => Object.assign({}, c, { pass: c.pass ? "OK" : "DIFFERENT" })), {}, { name: "Control", expected: "Source records", actual: "Platform", pass: "Result", note: "Note" }),
       R("Reconciliation: exceptions and open items", ["kind", "subject", "summary", "status", "decision"], rep.register, { total: rep.register.length }, { kind: "Kind", subject: "Subject", summary: "What is uncertain", status: "Status", decision: "Decision" })
     ];
@@ -1947,7 +1964,7 @@
   function loanStatement(db, loanId, asOf) {
     const l = LN.linkedLedger(db, loanId, asOf), loan = db.loans.find((x) => x.id === loanId);
     const rows = l.rows.map((r) => ({ date: dates.toDisplay(r.date), event: r.event, ref: r.ref, guarantor: r.guarantor ? name(db, r.guarantor) : "", borrowerChange: r.borrowerChange, cashReceived: r.cashReceived || 0, awaitingRule: r.awaitingRule || 0, guarantorCommittedChange: r.guarantorCommittedChange, borrowerPrincipalExposure: r.borrowerPrincipalExposure, totalGuaranteeCommitted: r.totalGuaranteeCommitted }));
-    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "cashReceived", "borrowerChange", "awaitingRule", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, l.summary);
+    return R("Loan statement — " + loanId + " (" + name(db, loan.memberId) + ")", ["date", "event", "ref", "guarantor", "cashReceived", "borrowerChange", "awaitingRule", "guarantorCommittedChange", "borrowerPrincipalExposure", "totalGuaranteeCommitted"], rows, Object.assign({}, l.summary, loan.components && loan.components.length ? { componentDisbursements: loan.components.map((c) => dates.toDisplay(c.date) + ": " + Number(c.amount).toLocaleString("en-US")).join("; ") } : {}));
   }
   function securities(db) {
     const rows = (db.securities || []).map((x) => ({ id: x.id, loanId: x.loanId, borrower: name(db, x.memberId), kind: x.kind, description: x.description, owner: x.owner, valuation: x.valuation == null ? "" : x.valuation, acceptedCover: x.acceptedCover || 0, documents: (x.documents || []).length, status: x.status, decidedBy: x.decidedBy || "", reason: x.decisionReason || "" }));

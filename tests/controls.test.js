@@ -1,5 +1,6 @@
 /* Integrity and second-approval controls (final SOB rules): the Super Admin cannot bypass the Chairperson, originals survive voids, releases follow principal only. */
 const assert = require("assert");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 const G = require("../src/core/governance.js"), L = require("../src/core/ledger.js"), LN = require("../src/core/loans.js"), I = require("../src/core/integrity.js"), CMD = require("../src/core/commands.js"), C = require("../src/core/cycle.js");
 let pass = 0, f = 0; const t = (n, fn) => { try { fn(); pass++; console.log("  ok  " + n); } catch (e) { f++; process.exitCode = 1; console.log("FAIL  " + n + "\n      " + (e.stack || e.message).split("\n").slice(0, 4).join("\n      ")); } };
 const U = { admin: { name: "Super Admin", id: "U1", role: "Admin" }, chair: { name: "Chair", id: "U2", role: "Chairperson" }, treas: { name: "Treas", id: "U3", role: "Treasurer" } };

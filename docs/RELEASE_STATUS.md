@@ -46,3 +46,7 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 - Admin screen *Load SOB records* (System): file pick, dry run, guarded demo removal, idempotent load, Chairperson-gated corrections, reconciliation report (screen, PDF, CSV), member/staff sign-in creation. See docs/LOAD_RECORDS.md.
 - New server action `purgeDemoLedger` (Admin; refuses unless every member is a known demo name and none is real; backup first).
 - Tests: tests/loader.test.js, e2e/records.js (synthetic). Private rehearsal on the real records passed all checks; report kept out of git.
+
+## Candidate 5 - settled decisions applied
+- Bishop = SOB-003; undated rows keep source position (dateUnknown/dateAfter/dateBefore); consolidated loans keep `components` via the Chairperson-gated `recordLoanComponents`; `guarantorPolicyStart` 2027-01-01; report shows deposits, profit, withdrawals, share-outs and actual savings; one-step `installSOBRecords`.
+- Tests: tests/decisions.test.js, tests/loader.test.js, tests/install.test.js, e2e/records.js.

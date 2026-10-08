@@ -20,7 +20,7 @@
     approval: { requiredTypes: [], loanSecondApproval: true },
     // FINAL SOB rules: standard guideline up to 3x savings; guarantors back only the shortfall beyond the borrower's own qualification;
     // a repayment clears accumulated unpaid interest first and any remainder reduces principal (REPAYMENT_RULE, not a setting).
-    loan: { guidelineMultiple: 3 },
+    loan: { guidelineMultiple: 3, guarantorPolicyStart: "2027-01-01" },   // SOB decision: the guarantor requirement begins on 1 Jan 2027; before that the 3x guideline is shown but no guarantor is required
     profit: { factors: [{ id: "LOAN_HOLDER_EXCLUSION", kind: "eligibility", name: "Members with an outstanding loan do not share in profit", approvedBy: "SOB (confirmed rule)", approvalRef: "SOB rules: loan-holders get no profit" }] }
   };
   const getPolicy = (db, key) => { const rec = ((db && db.policy) || []).find((p) => p.id === key) || {}; return Object.assign({}, POLICY_DEFAULTS[key] || {}, rec); };

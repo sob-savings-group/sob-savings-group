@@ -1,5 +1,6 @@
 /* The nine SOB loan / guarantor / approval / interest / profit rules, tested end to end on the core engine. */
 const assert = require("assert");
+require("../src/core/ledger.js").POLICY_DEFAULTS.loan.guarantorPolicyStart = "2020-01-01";   // these tests exercise the guarantor rules, which SOB starts on 1 Jan 2027 in production
 const dates = require("../src/core/dates.js"), L = require("../src/core/ledger.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), SEC = require("../src/core/security.js"),
   C = require("../src/core/cycle.js"), K = require("../src/core/kpis.js"), R = require("../src/core/reports.js"), I = require("../src/core/integrity.js"), CMD = require("../src/core/commands.js"), S = require("../src/backend/store.js");
 let pass = 0, f = 0; const t = (n, fn) => { try { fn(); pass++; console.log("  ok  " + n); } catch (e) { f++; process.exitCode = 1; console.log("FAIL  " + n + "\n      " + (e.stack || e.message).split("\n").slice(0, 4).join("\n      ")); } };

@@ -32,8 +32,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click("#records-load"); await pg.waitForSelector("#records-report", { timeout: 180000 });
   ok(!/FAIL /.test(await pg.textContent("#records-result")), "every check passes after loading");
   ok((await pg.locator("#records-report table").count()) === 3, "reconciliation report: member table, control totals and exceptions");
-  ok(/Cumulative savings/.test(await pg.textContent("#records-report")) && /Available savings/.test(await pg.textContent("#records-report")), "savings and available savings are shown separately");
-  const [dl] = await Promise.all([pg.waitForEvent("download"), pg.locator("#records-report >> text=Download CSV").first().click()]); const csv = fs.readFileSync(await dl.path(), "utf8"); ok(/Cumulative savings/.test(csv) && csv.split("\n").length > 5, "report downloads as CSV");
+  ok(/Actual savings/.test(await pg.textContent("#records-report")) && /Available savings/.test(await pg.textContent("#records-report")), "savings and available savings are shown separately");
+  const [dl] = await Promise.all([pg.waitForEvent("download"), pg.locator("#records-report >> text=Download CSV").first().click()]); const csv = fs.readFileSync(await dl.path(), "utf8"); ok(/Actual savings/.test(csv) && csv.split("\n").length > 5, "report downloads as CSV");
   await pg.click("#records-load"); await pg.waitForFunction(() => /already in the Sheet/.test((document.querySelector("#records-result") || {}).textContent || ""), null, { timeout: 120000 }); ok(true, "loading again adds nothing twice");
   const [sl] = await Promise.all([pg.waitForEvent("download"), pg.click("#make-signins")]); const slips = fs.readFileSync(await sl.path(), "utf8"); ok(/^id,name,pin/.test(slips) && slips.split("\n").length > 10, "member sign-ins created with a PIN-slip download");
   await pg.screenshot({ path: process.env.SHOT || path.join(os.tmpdir(), "records.png"), fullPage: true });

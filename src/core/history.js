@@ -27,7 +27,8 @@
       if (!e || !e.sourceRef) return bad("sourceRef required");
       if (!TYPES.includes(e.type)) return bad("type must be one of " + TYPES.join("/"));
       if (!members.has(e.memberId)) return bad("unknown member " + e.memberId);
-      if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD");
+      if (e.dateUnknown) { if (!dates.isISO(e.dateAfter)) return bad("dateUnknown rows need dateAfter (the last dated source row before it) as YYYY-MM-DD"); if (e.dateBefore && !dates.isISO(e.dateBefore)) return bad("dateBefore must be YYYY-MM-DD"); e = Object.assign({}, e, { date: e.dateAfter }); }
+      else if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD");
       const amt = Number(e.amount); if (!(amt > 0)) return bad("amount must be positive");
       if (byRef.has(e.sourceRef)) { out.alreadyImported++; return; }
       if (seen.has(e.sourceRef)) return bad("duplicate sourceRef inside batch");
@@ -42,7 +43,7 @@
       if (a.dryRun) return;
       const m = db.members.find((x) => x.id === e.memberId);
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
-        historical: true, originalName: e.originalName || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
+        historical: true, originalName: e.originalName || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined, dateBefore: e.dateUnknown && e.dateBefore ? e.dateBefore : undefined, sourceOrder: e.sourceOrder === undefined ? undefined : e.sourceOrder, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
     /* Audit ANNOTATIONS: workbook rows with no amount, no date or a zero amount. They are disclosed and kept for the record but are NEVER ledger transactions. */
     const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
