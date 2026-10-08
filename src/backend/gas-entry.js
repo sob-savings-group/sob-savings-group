@@ -91,3 +91,45 @@ function restoreFromProperty(){
   var env = __env(); env.lock.waitLock(30000);
   try { var r = __M['backend/backup'].restore(env.ss, env, id, "Owner (editor)"); if (r.ok) p.deleteProperty("SOB_RESTORE_BACKUP_ID"); return JSON.stringify(r); } finally { env.lock.releaseLock(); }
 }
+
+/* ---- One-step installation of the verified SOB records (run from the Apps Script editor by the spreadsheet owner: Run > installSOBRecords).
+   Needs the private file Code_Records.gs (defines __sobPack). Same audited commands as the app; Admin must exist (setupAdmin). Safe to run again:
+   nothing is duplicated. Corrections wait for the Chairperson; after they approve them in the app, run this once more. ---- */
+function installSOBRecords(){
+  var env = __env(), S = __M['backend/store'], A = __M['backend/auth'], LD = __M['core/loader'], R = __M['core/reports'];
+  if (typeof __sobPack !== "function") throw new Error("Add the private file Code_Records.gs to this project first");
+  var pack = __sobPack(), users = S.readCollection(env.ss, "users"), admin = users.filter(function(u){ return u.role === "Admin" && u.status !== "Disabled"; })[0];
+  if (!admin) throw new Error("Run setupAdmin first");
+  var token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), admin.id, 1500);
+  var api = function(b){ return __M['backend/api'].handle(env, Object.assign({ token: token }, b)); };
+  var log = function(m){ Logger.log(m); };
+  /* Demo clean-up: only when EVERY member is a "Demo Member NNN" sample record and none is a real SOB member (the server enforces this again and takes a backup first). */
+  var cur = S.readAll(env.ss), pre = [];
+  if (cur.members.length && cur.members.every(function(m){ return /^demo member \d+$/i.test(String(m.name).trim()); })) {
+    var pr = api({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames: cur.members.map(function(m){ return m.name; }), realNames: LD.realNames(pack) });
+    pre.push((pr.ok ? "PASS Demo records removed (backup " + pr.backup + "); " + JSON.stringify(pr.removed) : "FAIL Demo clean-up: " + pr.error));
+  }
+  return LD.load(api, pack, { approvedBy: "Spreadsheet owner, installation, " + new Date().toISOString().slice(0, 10), asOf: new Date().toISOString().slice(0, 10), say: log }).then(function(res){
+    var out = pre.slice();
+    res.checks.forEach(function(c){ out.push((c.pass ? "PASS " : "FAIL ") + c.name + (c.detail ? " - " + c.detail : "")); });
+    (res.pending || []).forEach(function(p){ out.push("WAITING FOR CHAIRPERSON: " + p); });
+    if (res.ok) { try { out = out.concat(__provisionSignins(env, S, A, R, pack)); } catch (e) { out.push("FAIL sign-ins: " + e.message); } }
+    var sh = env.ss.getSheetByName("SOB Load Log") || env.ss.insertSheet("SOB Load Log");
+    sh.clear(); sh.getRange(1, 1, out.length + 1, 1).setValues([["Last run " + new Date().toISOString() + " - " + (res.ok ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED")]].concat(out.map(function(l){ return [l]; })));
+    out.forEach(log); return res.ok;
+  });
+}
+/* Sign-ins for the Chairperson, Treasurer and every member that has none. Random one-time PINs go into a sheet "PIN slips - DELETE AFTER PRINTING"; everyone must choose their own at first sign-in. */
+function __provisionSignins(env, S, A, R, pack){
+  var users = S.readCollection(env.ss, "users"), have = {}; users.forEach(function(u){ have[u.id] = 1; });
+  var db = S.readAll(env.ss), rows = [], pin6 = function(){ return ("000000" + Math.floor(Math.random() * 1000000)).slice(-6); }, pin8 = function(){ return String(10000000 + Math.floor(Math.random() * 90000000)); };
+  var off = {}; R.OFFICERS.forEach(function(o){ off[o[1]] = o[0]; });
+  [["CHAIR", "Chairperson"], ["TREAS", "Treasurer"]].forEach(function(s){ if (have[s[0]]) return; var p = pin8(); users.push(A.makeUser(env, { id: s[0], name: off[s[1]] || s[1], role: s[1], pin: p, mustChange: true })); rows.push([s[0], off[s[1]] || s[1], s[1], p]); });
+  db.members.filter(function(m){ return m.status !== "Inactive" && !have[m.id]; }).forEach(function(m){ var p = pin6(); users.push(A.makeUser(env, { id: m.id, name: m.name, role: "Member", memberId: m.id, pin: p, mustChange: true })); rows.push([m.id, m.name, "Member", p]); });
+  if (!rows.length) return ["Sign-ins: nothing new to create"];
+  S.writeCollection(env.ss, "users", users);
+  var sh = env.ss.getSheetByName("PIN slips - DELETE AFTER PRINTING") || env.ss.insertSheet("PIN slips - DELETE AFTER PRINTING");
+  var start = sh.getLastRow() + 1; if (start === 1) { sh.getRange(1, 1, 1, 4).setValues([["ID", "Name", "Role", "One-time PIN"]]); start = 2; }
+  sh.getRange(start, 1, rows.length, 4).setValues(rows);
+  return ["PASS Sign-ins created: " + rows.length + " (Chairperson and Treasurer ID: CHAIR / TREAS; one-time PINs are in the sheet 'PIN slips - DELETE AFTER PRINTING')"];
+}

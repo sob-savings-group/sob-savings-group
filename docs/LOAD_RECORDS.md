@@ -1,4 +1,15 @@
-# Loading the real SOB records
+# Loading the real SOB records — fastest path (owner, about 5 minutes)
+
+1. Apps Script → replace **Code.gs** with the new one; add a new file **Code_Records.gs** (private, from the delivery) and paste its contents.
+2. Run **installSOBRecords** (choose it in the function list → Run). It removes only "Demo Member NNN" sample records (backup first), loads all verified current and historical records, registers the exceptions, submits the corrections to the Chairperson, and creates sign-ins. Results: sheet **SOB Load Log**; one-time PINs: sheet **PIN slips - DELETE AFTER PRINTING**.
+3. Deploy → Manage deployments → Edit → New version.
+4. The Chairperson (ID CHAIR) signs in, approves the requests in Approvals (the void first). Run **installSOBRecords** once more: it records the four dated repayments and closes the corrected loan-date items.
+5. Print the PIN slips, then delete that sheet and Code_Records.gs.
+
+Tested with tests/install.test.js (synthetic data) and privately on the real records. Needs real-Google confirmation: Apps Script run time (6-minute limit; the run is repeatable and resumes), and the Chairperson approvals.
+
+---
+## Alternative: from inside the app
 
 The real records are loaded from inside the app (Super Admin → System → **Load SOB records**). No Node, no command line.
 
