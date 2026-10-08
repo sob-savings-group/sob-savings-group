@@ -13,3 +13,4 @@ history-pack*.json
 REPORT_private*
 hist-*/
 config/production-url.txt
+SOB_RECORDS_PACK*.json

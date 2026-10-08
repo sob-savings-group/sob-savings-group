@@ -429,6 +429,56 @@
       h("p", { class: "mute" }, "Members can switch notifications off from their Home screen; those members are skipped, not messaged."));
   }
 
+
+  /* ---------- load the verified SOB records (Admin, live deployment) ---------- */
+  const randPin = () => { const a = new Uint32Array(1); crypto.getRandomValues(a); return String(a[0] % 1000000).padStart(6, "0"); };
+  const randPin8 = () => { const a = new Uint32Array(2); crypto.getRandomValues(a); return String(10000000 + ((a[0] * 4294967296 + a[1]) % 90000000)); };
+  function recordsPanel() {
+    const rc = st.rec = st.rec || {}, LD = S.loader;
+    const refresh = async () => { await st.store.load(); st.db = st.store.db; rc.state = rc.pack ? LD.inspect(st.db, rc.pack) : null; render(); };
+    const say = (m) => { rc.msg = m; const el = document.getElementById("records-progress"); if (el) el.textContent = m; };
+    const approver = () => (document.getElementById("records-approver") || {}).value || "";
+    const run = (dry) => act(async () => {
+      if (!rc.pack) throw new Error("Choose the SOB records file first.");
+      try { rc.res = await LD.load((b) => st.store.call(b), rc.pack, { approvedBy: approver(), asOf: today(), dryRun: dry, say }); } finally { await refresh(); }
+    }, dry ? "Check finished" : "Finished — read the result below");
+    const purge = () => { if (!rc.pack) return toast("Choose the SOB records file first.", "warn"); if (!confirm("Remove ALL demo/sample records from the Google Sheet? A backup is taken first. Real SOB records are never removed.")) return;
+      act(async () => { const r = await st.store.call({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames: window.SOB_DEMO_NAMES || [], realNames: LD.realNames(rc.pack) }); rc.purged = r; await refresh(); }, "Demo records removed (backup kept)")(); };
+    const file = h("input", { type: "file", id: "records-file", accept: ".json,application/json", onchange: async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try { const p = JSON.parse(await f.text()), bad = LD.validatePack(p); if (bad.length) throw new Error(bad.join(" ")); rc.pack = p; rc.name = f.name; rc.res = null; rc.state = LD.inspect(st.db, p); toast("Records file read"); }
+      catch (err) { rc.pack = null; rc.state = null; toast("That file cannot be used: " + friendly(err), "warn"); } render(); } });
+    const stateText = { empty: "The Google Sheet is empty: ready to load.", loaded: "SOB records are already in the Sheet. Loading again adds nothing twice.", foreign: "The Sheet holds demo/sample records, not SOB members. Remove them first.", mixed: "The Sheet mixes SOB members with unknown records. Nothing will be changed; ask for help." };
+    const rep = rc.pack && rc.state && ["loaded", "mixed"].includes(rc.state.state) ? LD.build(st.db, rc.pack, today()) : null, reps = rep ? LD.asReports(rep) : [];
+    const sign = () => {
+      const have = new Set((st.db.users || []).map((u) => u.id)), need = st.db.members.filter((m) => m.status !== "Inactive" && !have.has(m.id));
+      return h("div", null, h("h2", { class: "sec" }, "Sign-ins"), h("p", { class: "mute" }, need.length + " member(s) have no sign-in yet. Each gets a random one-time PIN and must choose their own at first sign-in. The PIN slips download once; print them, hand them out, then delete the file."),
+        h("div", { class: "row" }, h("button", { id: "make-signins", disabled: !need.length, onclick: act(async () => {
+          const slips = []; for (const m of need) { const pin = randPin(); await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin }); slips.push([m.id, m.name, pin]); }
+          download("SOB-PIN-slips-" + today() + ".csv", "text/csv", "id,name,pin\n" + slips.map((x) => [x[0], '"' + x[1].replace(/"/g, '""') + '"', x[2]].join(",")).join("\n")); await refresh();
+        }, "Sign-ins created; PIN slips downloaded") }, "Create member sign-ins + download PIN slips"),
+        h("button", { id: "make-staff", onclick: () => Form("Staff sign-in", [{ name: "id", label: "Sign-in ID (e.g. CHAIR)" }, { name: "name", label: "Name" }, { name: "role", label: "Role", options: ["Chairperson", "Treasurer", "Committee"] }],
+          act(async (f) => { const pin = randPin8(); await st.store.createUser({ id: f.id.trim().toUpperCase(), name: f.name, role: f.role, pin }); download("SOB-staff-PIN-" + f.id.trim().toUpperCase() + ".csv", "text/csv", "id,name,role,pin\n" + [f.id.trim().toUpperCase(), '"' + f.name + '"', f.role, pin].join(",")); await refresh(); }, "Sign-in created; PIN downloaded")) }, "Add staff sign-in")));
+    };
+    return h("div", { id: "records-panel" }, h("h2", { class: "sec", style: "margin-top:0" }, "Load SOB records"),
+      h("p", { class: "mute" }, "Loads the verified SOB records (members, savings, withdrawals, loans, repayments, interest, profits and history) into the Google Sheet. Nothing is invented or changed to force a balance; uncertain rows go to the reconciliation register. Safe to run again: duplicates are skipped."),
+      h("div", { class: "row" }, file), rc.pack ? h("p", { class: "mute" }, "File: " + rc.name + " — " + rc.pack.controls.members + " members, " + rc.pack.controls.legacyTransactions + " current entries, " + rc.pack.controls.historyEntries + " historical entries.") : null,
+      rc.state ? h("div", { class: rc.state.state === "foreign" || rc.state.state === "mixed" ? "blocked" : "hint", id: "records-state" }, stateText[rc.state.state] + " (" + rc.state.members + " members, " + rc.state.transactions + " transactions, " + rc.state.loans + " loans in the Sheet now)") : null,
+      h("div", { class: "field" }, h("label", { for: "records-approver" }, "Approved by (name, role, date)"), h("input", { id: "records-approver", type: "text", placeholder: "e.g. Name, Role, 8 Oct 2026", value: rc.approver || "", oninput: (e) => { rc.approver = e.target.value; } })),
+      h("div", { class: "row" }, h("button", { id: "records-check", disabled: !rc.pack, onclick: run(true) }, "Check only"), h("button", { class: "primary", id: "records-load", disabled: !rc.pack || (rc.state && ["foreign", "mixed"].includes(rc.state.state)), onclick: run(false) }, "Load records"),
+        rc.state && rc.state.state === "foreign" ? h("button", { class: "danger", id: "records-purge", onclick: purge }, "Remove demo records") : null),
+      h("p", { class: "mute", id: "records-progress" }, rc.msg || ""),
+      rc.res ? h("div", { id: "records-result" }, Banner(rc.res.ok ? "ok" : "bad", rc.res.ok ? "All checks passed." : "Some checks did not pass. Nothing was forced; read the lines marked FAIL."),
+        h("ul", { class: "checks" }, rc.res.checks.map((c) => h("li", { class: c.pass ? "ok" : "bad" }, (c.pass ? "PASS " : "FAIL ") + c.name + (c.detail ? " — " + c.detail : "")))),
+        rc.res.pending && rc.res.pending.length ? h("div", { class: "hint", id: "records-pending" }, "Waiting for the Chairperson in Approvals (" + rc.res.pending.length + "): " + rc.res.pending.join("; ") + ". When they have approved, press Load records once more to finish the repayments.") : null) : null,
+      rep ? h("div", { id: "records-report" }, h("h2", { class: "sec" }, "Reconciliation report"),
+        h("div", { class: "grid" }, Card("Cumulative savings", ugx(rep.totals.savings)), Card("Available savings", ugx(rep.totals.available)), Card("Loan principal outstanding", ugx(rep.totals.loanPrincipal)), Card("Unpaid interest", ugx(rep.totals.unpaidInterest)), Card("Profit credited", ugx(rep.totals.profitCredited)), Card("Open register items", String(rep.register.filter((x) => x.status === "Open").length))),
+        h("p", { class: "mute" }, "Cumulative savings are never reduced by loans. Available savings = savings less guarantee commitments. The last column of the member table is a memo only."),
+        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf)), h("button", { onclick: () => download(r.title.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(r)) }, "Download CSV")), tableFromReport(r))),
+        rep.missing.length ? h("div", null, h("h3", null, "Information genuinely missing"), h("ul", null, rep.missing.map((x) => h("li", null, x)))) : null,
+        rep.decisions.length ? h("div", null, h("h3", null, "SOB decisions still needed"), h("ul", null, rep.decisions.map((x) => h("li", null, x)))) : null) : null,
+      sign());
+  }
   /* ---------- system: backups + sign-ins (Admin, live deployment) ---------- */
   function system() {
     if (!st.live) return h("div", { class: "blocked" }, "Backups and sign-in management are available on the live deployment. This preview uses demo data that is never saved.");
@@ -437,7 +487,7 @@
     const download = async () => {
       const r = await st.store.call({ action: "exportBackup" }), a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(r.backup)], { type: "application/json" })), download: "SOB-backup-" + today() + ".json" }); document.body.append(a); a.click(); a.remove(); toast("Backup downloaded — it contains members' personal data; keep it private");
     };
-    return h("div", null, h("h2", { class: "sec", style: "margin-top:0" }, "Backups"),
+    return h("div", null, recordsPanel(), h("h2", { class: "sec" }, "Backups"),
       h("p", { class: "mute" }, "A snapshot is taken automatically every night once the daily trigger is installed (see the deployment guide). Snapshots are checksummed. Backups never contain PINs."),
       h("div", { class: "row" }, h("button", { class: "primary", id: "backup-now", onclick: act(async () => { const r = await st.store.call({ action: "backupNow", force: true }); toast("Snapshot " + r.id + " saved"); await reload(); }) }, "Back up now"), h("button", { id: "backup-download", onclick: act(download) }, "Download offline backup")),
       st.sys && st.sys.error ? h("div", { class: "err" }, st.sys.error) : null,

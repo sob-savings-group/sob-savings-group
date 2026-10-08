@@ -139,6 +139,26 @@
           return { ok: true, revision: 1 };
         } finally { env.lock.releaseLock(); }
       }
+      /* Removes DEMO/sample records only. Refused unless EVERY member in the ledger is a known demo name and NONE is a real one; a forced, verified backup is taken first.
+         Real or mixed ledgers are never touched. After this the (empty) ledger accepts the real-records import. */
+      if (body.action === "purgeDemoLedger") {
+        if (user.role !== "Admin") return fail("FORBIDDEN: only Admin may remove demo data");
+        if (body.confirm !== "REMOVE DEMO DATA") return fail("INVALID: confirmation phrase missing");
+        env.lock.waitLock(20000);
+        try {
+          const cur = S.readAll(env.ss), demo = new Set((body.demoNames || []).map((x) => String(x).trim().toLowerCase())), real = new Set((body.realNames || []).map((x) => String(x).trim().toLowerCase()));
+          if (!demo.size) return fail("INVALID: demoNames missing");
+          const nm = (m) => String(m.name || "").trim().toLowerCase();
+          if (!cur.members.length && !cur.transactions.length && !cur.loans.length) return { ok: true, purged: false, note: "ledger already empty" };
+          if (cur.members.some((m) => real.has(nm(m)))) return fail("REFUSED: the ledger contains real SOB members; nothing was removed");
+          if (!cur.members.length || !cur.members.every((m) => demo.has(nm(m)))) return fail("REFUSED: not every member is a known demo record; nothing was removed");
+          const bk = B.snapshot(env.ss, env, "before demo data removal by " + user.id, { force: true });
+          const counts = { members: cur.members.length, transactions: cur.transactions.length, loans: cur.loans.length };
+          Object.keys(S.COLLECTIONS).forEach((k) => { if (k !== "users") S.writeCollection(env.ss, k, []); });
+          S.writeMeta(env.ss, { revision: 0, schemaVersion: cur.schemaVersion || 2, seq: 0, lastWrite: env.now() });
+          return { ok: true, purged: true, removed: counts, backup: bk.id };
+        } finally { env.lock.releaseLock(); }
+      }
       return fail("UNKNOWN_ACTION");
     } catch (e) { return fail(String((e && e.message) || e)); }
   }

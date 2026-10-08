@@ -41,3 +41,8 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 - **Automatic backend:** the production /exec address is built into `sob-app.html` (no URL to type); `?dev=` override for developers only.
 - **Date/period on KPIs:** see `docs/KPI_PERIODS.md` (as-at balances, cash with opening/closing, period activity, live queues; one calculation feeds card → drill-down → entries → PDF; tie-out tick on screen). As-at correctness fixed in the engine (loans paid out later, loans cleared later, guarantees committed/released by date).
 - Tested: `npm run verify` (unit + property tests + browser e2e). Needs real Google: the walkthrough in `docs/REAL_GOOGLE_WALKTHROUGH.md`.
+
+## Candidate 4 — real SOB records loader
+- Admin screen *Load SOB records* (System): file pick, dry run, guarded demo removal, idempotent load, Chairperson-gated corrections, reconciliation report (screen, PDF, CSV), member/staff sign-in creation. See docs/LOAD_RECORDS.md.
+- New server action `purgeDemoLedger` (Admin; refuses unless every member is a known demo name and none is real; backup first).
+- Tests: tests/loader.test.js, e2e/records.js (synthetic). Private rehearsal on the real records passed all checks; report kept out of git.
