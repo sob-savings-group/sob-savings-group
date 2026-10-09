@@ -59,6 +59,20 @@ const o = { approvedBy: "Test Approver, Admin, 8 Oct 2026", asOf: "2026-10-08" }
     const db = (await b.api({ action: "getLedger" })).db, n = db.historicalNotes.find((x) => x.sourceRef === "T|a|r11"); assert.equal(n.status, "VOID"); assert.equal(n.isTransaction, false); assert.ok(!db.transactions.some((x) => String(x.sourceRef || "").startsWith("T|a|r11")));
     const bad = JSON.parse(JSON.stringify(pack)); bad.coverage.voidRows.push("T|a|r999"); const b2 = await boot(); const r2 = await LD.load(b2.api, bad, o); assert.ok(r2.checks.some((x) => /without an amount are VOID/.test(x.name) && !x.pass), "a missing VOID note is caught");
   });
+  await t("a run that must stop early (Google's six-minute limit) reports it is NOT finished, then a later run completes it with nothing added twice", async () => {
+    const b = await boot(); const r1 = await LD.load(b.api, pack, Object.assign({}, o, { deadline: Date.now() - 1 }));
+    assert.equal(r1.partial, true); assert.equal(r1.ok, false);
+    const d1 = (await b.api({ action: "getLedger" })).db; assert.ok(d1.transactions.length > 0, "the stages before the register were saved");
+    const r2 = await LD.load(b.api, pack, o); assert.equal(r2.ok, true, JSON.stringify(r2.checks.filter((c) => !c.pass)));
+    const d2 = (await b.api({ action: "getLedger" })).db, subj = (d2.discrepancies || []).map((x) => x.kind + "|" + x.subject); assert.equal(new Set(subj).size, subj.length, "no exception registered twice");
+    const n = d2.transactions.length, a = (d2.auditLog || []).length, r3 = await LD.load(b.api, pack, o); const d3 = (await b.api({ action: "getLedger" })).db; assert.equal(r3.ok, true); assert.equal(d3.transactions.length, n); assert.equal((d3.auditLog || []).length, a);
+  });
+  await t("the batched register commands record many items in one step, never twice, and refuse a resolution that would post an entry", async () => {
+    const b = await boot(); const items = [{ kind: "OTHER", subject: "S1", summary: "x" }, { kind: "OTHER", subject: "S2", summary: "y" }];
+    let r = await b.api({ action: "command", name: "openDiscrepancies", args: { items } }); assert.equal(r.result.opened, 2); r = await b.api({ action: "command", name: "openDiscrepancies", args: { items } }); assert.equal(r.result.opened, 0); assert.equal(r.result.kept, 2);
+    r = await b.api({ action: "command", name: "resolveDiscrepancies", args: { items: [{ subject: "S1", decision: "ACCEPT_SOURCE_WITH_ENTRY", reason: "r", evidence: "e" }] } }); assert.equal(r.ok, false);
+    r = await b.api({ action: "command", name: "resolveDiscrepancies", args: { items: [{ subject: "S1", decision: "NO_ACTION_EXPLAINED", reason: "r", evidence: "e" }, { subject: "NOPE", decision: "NO_ACTION_EXPLAINED", reason: "r", evidence: "e" }] } }); assert.equal(r.result.resolved, 1); assert.equal(r.result.skipped, 1);
+  });
   await t("a member cannot purge or load", async () => {
     const mt = (await s.call({ action: "login", id: "ADMIN", pin: "Adm1n-Setup-77" })).token; assert.ok(mt); const ids = (await api({ action: "getLedger" })).db.members[0].id;
     await api({ action: "createUser", user: { id: ids, name: "m", role: "Member", memberId: ids, pin: "123456" } }); const mm = s.session((await s.call({ action: "login", id: ids, pin: "123456" })).token);

@@ -34,6 +34,12 @@
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
+    /* Batched forms used by the installer so a first load fits Google's six-minute limit: one read and one write for many items. Never gated, so ACCEPT_SOURCE_WITH_ENTRY (which posts an entry) is refused here. */
+    openDiscrepancies: (db, ctx, a) => { const items = Array.isArray(a.items) ? a.items : []; if (items.length > 60) throw new Error("INVALID: at most 60 items per batch"); const out = { opened: 0, kept: 0 };
+      items.forEach((d) => { if ((db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)) { out.kept++; return; } COMMANDS.openDiscrepancy(db, ctx, d); out.opened++; }); return out; },
+    resolveDiscrepancies: (db, ctx, a) => { const items = Array.isArray(a.items) ? a.items : []; if (items.length > 60) throw new Error("INVALID: at most 60 items per batch"); const out = { resolved: 0, skipped: 0 };
+      items.forEach((r) => { if (r.decision === "ACCEPT_SOURCE_WITH_ENTRY") throw new Error("INVALID: a resolution that posts an entry needs its own approval"); const it = (db.discrepancies || []).find((x) => x.subject === r.subject && x.status === "Open"); if (!it) { out.skipped++; return; }
+        RC.resolveDiscrepancy(db, ctx, it.id, { decision: r.decision, reason: r.reason, evidence: r.evidence }); out.resolved++; }); return out; },
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     markLoanDateUnknown: (db, ctx, a) => RC.markLoanDateUnknown(db, ctx, a.loanId, a.reason, a.evidence),

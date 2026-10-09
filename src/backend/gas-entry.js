@@ -109,7 +109,8 @@ function installSOBRecords(){
     var pr = api({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames: cur.members.map(function(m){ return m.name; }), realNames: LD.realNames(pack) });
     pre.push((pr.ok ? "PASS Demo records removed (backup " + pr.backup + "); " + JSON.stringify(pr.removed) : "FAIL Demo clean-up: " + pr.error));
   }
-  return LD.load(api, pack, { approvedBy: "Spreadsheet owner, installation, " + new Date().toISOString().slice(0, 10), asOf: new Date().toISOString().slice(0, 10), say: log }).then(function(res){
+  return LD.load(api, pack, { approvedBy: "Spreadsheet owner, installation, " + new Date().toISOString().slice(0, 10), asOf: new Date().toISOString().slice(0, 10), deadline: Date.now() + 240000, say: log }).then(function(res){
+    if (res.partial) { var shp = env.ss.getSheetByName("SOB Load Log") || env.ss.insertSheet("SOB Load Log"); shp.clear(); shp.getRange(1, 1, 1, 1).setValues([["Last run " + new Date().toISOString() + " - NOT FINISHED YET. Run installSOBRecords again; it continues where it stopped and adds nothing twice."]]); log("NOT FINISHED YET - run installSOBRecords again"); return "PARTIAL"; }
     var out = pre.slice();
     res.checks.forEach(function(c){ out.push((c.pass ? "PASS " : "FAIL ") + c.name + (c.detail ? " - " + c.detail : "")); });
     (res.pending || []).forEach(function(p){ out.push("WAITING FOR CHAIRPERSON: " + p); });

@@ -1816,6 +1816,12 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
+    /* Batched forms used by the installer so a first load fits Google's six-minute limit: one read and one write for many items. Never gated, so ACCEPT_SOURCE_WITH_ENTRY (which posts an entry) is refused here. */
+    openDiscrepancies: (db, ctx, a) => { const items = Array.isArray(a.items) ? a.items : []; if (items.length > 60) throw new Error("INVALID: at most 60 items per batch"); const out = { opened: 0, kept: 0 };
+      items.forEach((d) => { if ((db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)) { out.kept++; return; } COMMANDS.openDiscrepancy(db, ctx, d); out.opened++; }); return out; },
+    resolveDiscrepancies: (db, ctx, a) => { const items = Array.isArray(a.items) ? a.items : []; if (items.length > 60) throw new Error("INVALID: at most 60 items per batch"); const out = { resolved: 0, skipped: 0 };
+      items.forEach((r) => { if (r.decision === "ACCEPT_SOURCE_WITH_ENTRY") throw new Error("INVALID: a resolution that posts an entry needs its own approval"); const it = (db.discrepancies || []).find((x) => x.subject === r.subject && x.status === "Open"); if (!it) { out.skipped++; return; }
+        RC.resolveDiscrepancy(db, ctx, it.id, { decision: r.decision, reason: r.reason, evidence: r.evidence }); out.resolved++; }); return out; },
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
     markLoanDateUnknown: (db, ctx, a) => RC.markLoanDateUnknown(db, ctx, a.loanId, a.reason, a.evidence),
@@ -2239,6 +2245,7 @@ __M['core/loader'] = (function(){ const module = {exports:{}}; const require = _
 
   /* Full, idempotent load. `o`: {approvedBy, asOf, dryRun, say(msg)}. Returns {ok, checks, state, pending[]}. */
   async function load(api, pack, o) {
+    let partial = false; const late = () => !!(o.deadline && Date.now() > o.deadline);   // the installer stops cleanly before Google's six-minute limit and is simply run again
     o = o || {}; const say = o.say || (() => {}), c = checks(), asOf = o.asOf || D.todayISO(), pending = [];
     const bad = validatePack(pack); if (bad.length) { c.add("records file is valid", false, bad.join(" ")); return { ok: false, checks: c.list, pending }; }
     if (!o.approvedBy || String(o.approvedBy).trim().length < 5) { c.add("an approver name, role and date is required", false); return { ok: false, checks: c.list, pending }; }
@@ -2325,17 +2332,19 @@ __M['core/loader'] = (function(){ const module = {exports:{}}; const require = _
     if (!o.dryRun) {
       say("Recording the reconciliation exceptions…");
       let opened = 0, kept = 0, failed = [];
-      for (const d of (pack.discrepancies || [])) {
-        if ((db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)) { kept++; continue; }
-        const r = await api({ action: "command", name: "openDiscrepancy", args: d }); if (r.ok) { opened++; db = r.db; } else failed.push(d.subject + ": " + r.error);
+      const todoD = (pack.discrepancies || []).filter((d) => !(db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)); kept = (pack.discrepancies || []).length - todoD.length;
+      for (let i = 0; i < todoD.length; i += 25) {
+        if (late()) { partial = true; break; }
+        const r = await api({ action: "command", name: "openDiscrepancies", args: { items: todoD.slice(i, i + 25) } }); if (r.ok) opened += r.result.opened; else failed.push(r.error);
       }
+      db = await read();
       c.add("exception register: " + opened + " recorded, " + kept + " already there", failed.length === 0, failed.slice(0, 3).join("; "));
-      for (const res of (pack.resolutions || [])) {
-        const item = (db.discrepancies || []).find((x) => x.subject === res.subject && x.status === "Open"); if (!item) continue;
-        const r = await api({ action: "command", name: "resolveDiscrepancy", args: { id: item.id, decision: res.decision, reason: res.reason, evidence: res.evidence } });
-        if (r.ok && r.result && r.result.pendingApproval) pending.push(r.result.label + " (" + res.subject + ")");
-        if (r.ok) db = r.db; else c.add("resolution recorded: " + res.subject, false, r.error);
+      const todoR = (pack.resolutions || []).filter((res) => (db.discrepancies || []).some((x) => x.subject === res.subject && x.status === "Open"));
+      for (let i = 0; i < todoR.length && !partial; i += 25) {
+        if (late()) { partial = true; break; }
+        const r = await api({ action: "command", name: "resolveDiscrepancies", args: { items: todoR.slice(i, i + 25).map((x) => ({ subject: x.subject, decision: x.decision, reason: x.reason, evidence: x.evidence })) } }); if (!r.ok) c.add("resolutions recorded", false, r.error);
       }
+      db = await read();
     }
 
     /* 4. SOB-approved corrections: Super Admin REQUESTS, the Chairperson approves. Repayments that replace a voided consolidated one wait for that approval. */
@@ -2346,6 +2355,7 @@ __M['core/loader'] = (function(){ const module = {exports:{}}; const require = _
       const voidStep = pack.plan.steps.find((s) => s.name === "voidEntry"), voided = voidStep && (db.transactions.find((t) => t.id === voidStep.args.id) || {}).voided;
       let submitted = 0, already = 0, waiting = 0, created = 0;
       for (const s of pack.plan.steps) {
+        if (late()) { partial = true; break; }
         const args = Object.assign({}, s.args); if (args.reason) args.reason += " | Approved by: " + o.approvedBy;
         if (s.name === "createEntry") {
           if (db.transactions.some((t) => !t.voided && t.memberId === args.memberId && t.date === args.date && t.amount === args.amount && t.type === args.type && t.loanId === args.loanId)) { already++; continue; }
@@ -2359,6 +2369,7 @@ __M['core/loader'] = (function(){ const module = {exports:{}}; const require = _
       }
       c.add("corrections: " + submitted + " newly requested, " + already + " already requested/applied" + (waiting ? ", " + waiting + " repayments wait for the Chairperson to approve the void first (run this again afterwards)" : "") + (created ? ", " + created + " repayments recorded" : ""), true);
     }
+    if (partial) return { ok: false, partial: true, checks: c.list, pending };
     /* A register item for a loan date is closed only once the Chairperson-approved correction has actually been applied; items still needing an SOB decision stay open. */
     if (!o.dryRun && pack.plan && pack.plan.steps) {
       db = await read(); let closed = 0;
@@ -3179,7 +3190,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "585ea827e3";
+var SOB_BUILD = "254141b85e";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
@@ -3250,7 +3261,8 @@ function installSOBRecords(){
     var pr = api({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames: cur.members.map(function(m){ return m.name; }), realNames: LD.realNames(pack) });
     pre.push((pr.ok ? "PASS Demo records removed (backup " + pr.backup + "); " + JSON.stringify(pr.removed) : "FAIL Demo clean-up: " + pr.error));
   }
-  return LD.load(api, pack, { approvedBy: "Spreadsheet owner, installation, " + new Date().toISOString().slice(0, 10), asOf: new Date().toISOString().slice(0, 10), say: log }).then(function(res){
+  return LD.load(api, pack, { approvedBy: "Spreadsheet owner, installation, " + new Date().toISOString().slice(0, 10), asOf: new Date().toISOString().slice(0, 10), deadline: Date.now() + 240000, say: log }).then(function(res){
+    if (res.partial) { var shp = env.ss.getSheetByName("SOB Load Log") || env.ss.insertSheet("SOB Load Log"); shp.clear(); shp.getRange(1, 1, 1, 1).setValues([["Last run " + new Date().toISOString() + " - NOT FINISHED YET. Run installSOBRecords again; it continues where it stopped and adds nothing twice."]]); log("NOT FINISHED YET - run installSOBRecords again"); return "PARTIAL"; }
     var out = pre.slice();
     res.checks.forEach(function(c){ out.push((c.pass ? "PASS " : "FAIL ") + c.name + (c.detail ? " - " + c.detail : "")); });
     (res.pending || []).forEach(function(p){ out.push("WAITING FOR CHAIRPERSON: " + p); });

@@ -41,6 +41,7 @@
 
   /* Full, idempotent load. `o`: {approvedBy, asOf, dryRun, say(msg)}. Returns {ok, checks, state, pending[]}. */
   async function load(api, pack, o) {
+    let partial = false; const late = () => !!(o.deadline && Date.now() > o.deadline);   // the installer stops cleanly before Google's six-minute limit and is simply run again
     o = o || {}; const say = o.say || (() => {}), c = checks(), asOf = o.asOf || D.todayISO(), pending = [];
     const bad = validatePack(pack); if (bad.length) { c.add("records file is valid", false, bad.join(" ")); return { ok: false, checks: c.list, pending }; }
     if (!o.approvedBy || String(o.approvedBy).trim().length < 5) { c.add("an approver name, role and date is required", false); return { ok: false, checks: c.list, pending }; }
@@ -127,17 +128,19 @@
     if (!o.dryRun) {
       say("Recording the reconciliation exceptions…");
       let opened = 0, kept = 0, failed = [];
-      for (const d of (pack.discrepancies || [])) {
-        if ((db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)) { kept++; continue; }
-        const r = await api({ action: "command", name: "openDiscrepancy", args: d }); if (r.ok) { opened++; db = r.db; } else failed.push(d.subject + ": " + r.error);
+      const todoD = (pack.discrepancies || []).filter((d) => !(db.discrepancies || []).some((x) => x.subject === d.subject && x.kind === d.kind)); kept = (pack.discrepancies || []).length - todoD.length;
+      for (let i = 0; i < todoD.length; i += 25) {
+        if (late()) { partial = true; break; }
+        const r = await api({ action: "command", name: "openDiscrepancies", args: { items: todoD.slice(i, i + 25) } }); if (r.ok) opened += r.result.opened; else failed.push(r.error);
       }
+      db = await read();
       c.add("exception register: " + opened + " recorded, " + kept + " already there", failed.length === 0, failed.slice(0, 3).join("; "));
-      for (const res of (pack.resolutions || [])) {
-        const item = (db.discrepancies || []).find((x) => x.subject === res.subject && x.status === "Open"); if (!item) continue;
-        const r = await api({ action: "command", name: "resolveDiscrepancy", args: { id: item.id, decision: res.decision, reason: res.reason, evidence: res.evidence } });
-        if (r.ok && r.result && r.result.pendingApproval) pending.push(r.result.label + " (" + res.subject + ")");
-        if (r.ok) db = r.db; else c.add("resolution recorded: " + res.subject, false, r.error);
+      const todoR = (pack.resolutions || []).filter((res) => (db.discrepancies || []).some((x) => x.subject === res.subject && x.status === "Open"));
+      for (let i = 0; i < todoR.length && !partial; i += 25) {
+        if (late()) { partial = true; break; }
+        const r = await api({ action: "command", name: "resolveDiscrepancies", args: { items: todoR.slice(i, i + 25).map((x) => ({ subject: x.subject, decision: x.decision, reason: x.reason, evidence: x.evidence })) } }); if (!r.ok) c.add("resolutions recorded", false, r.error);
       }
+      db = await read();
     }
 
     /* 4. SOB-approved corrections: Super Admin REQUESTS, the Chairperson approves. Repayments that replace a voided consolidated one wait for that approval. */
@@ -148,6 +151,7 @@
       const voidStep = pack.plan.steps.find((s) => s.name === "voidEntry"), voided = voidStep && (db.transactions.find((t) => t.id === voidStep.args.id) || {}).voided;
       let submitted = 0, already = 0, waiting = 0, created = 0;
       for (const s of pack.plan.steps) {
+        if (late()) { partial = true; break; }
         const args = Object.assign({}, s.args); if (args.reason) args.reason += " | Approved by: " + o.approvedBy;
         if (s.name === "createEntry") {
           if (db.transactions.some((t) => !t.voided && t.memberId === args.memberId && t.date === args.date && t.amount === args.amount && t.type === args.type && t.loanId === args.loanId)) { already++; continue; }
@@ -161,6 +165,7 @@
       }
       c.add("corrections: " + submitted + " newly requested, " + already + " already requested/applied" + (waiting ? ", " + waiting + " repayments wait for the Chairperson to approve the void first (run this again afterwards)" : "") + (created ? ", " + created + " repayments recorded" : ""), true);
     }
+    if (partial) return { ok: false, partial: true, checks: c.list, pending };
     /* A register item for a loan date is closed only once the Chairperson-approved correction has actually been applied; items still needing an SOB decision stay open. */
     if (!o.dryRun && pack.plan && pack.plan.steps) {
       db = await read(); let closed = 0;
