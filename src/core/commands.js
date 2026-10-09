@@ -36,6 +36,7 @@
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
+    markLoanDateUnknown: (db, ctx, a) => RC.markLoanDateUnknown(db, ctx, a.loanId, a.reason, a.evidence),
     recordLoanComponents: (db, ctx, a) => RC.recordLoanComponents(db, ctx, a.loanId, a.components, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
     executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason }),
@@ -49,6 +50,8 @@
     importHistoricalLoans: (db, ctx, a) => HL.importHistoricalLoans(db, ctx, { batchId: a.batchId, source: a.source, accounts: a.accounts || [], events: a.events || [], dryRun: a.dryRun }),
     defineFinancialYears: (db, ctx, a) => FYR.defineFinancialYears(db, ctx, { years: a.years }),
     confirmFYProfit: (db, ctx, a) => RSV.confirmProfit(db, ctx, { year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    offsetHistoricalLoan: (db, ctx, a) => HL.offsetHistoricalLoan(db, ctx, { loanId: a.loanId, amount: a.amount, date: a.date, evidence: a.evidence, reason: a.reason }),
+    writeOffHistoricalLoan: (db, ctx, a) => PRC.writeOff(db, ctx, { loanId: a.loanId, principal: a.principal, interest: a.interest, date: a.date, lossYear: a.lossYear, evidence: a.evidence, reason: a.reason }),
     settleFinancialYear: (db, ctx, a) => PRC.settle(db, ctx, { year: a.year, expectedResult: a.expectedResult, evidence: a.evidence, reason: a.reason }),
     openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
@@ -63,7 +66,8 @@
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
-    recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
+    offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
+    markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
@@ -74,7 +78,8 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;

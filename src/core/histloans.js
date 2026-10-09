@@ -88,12 +88,41 @@
     });
     return { states: st, steps, excess, loans };
   }
+
+  /* Approved write-offs (Chairperson, with evidence). The PRINCIPAL part is a group loss; written-off interest was never counted as earned, so it is not a further loss. */
+  const writeOffsOf = (db, loanId, asOf) => (db.historicalWriteOffs || []).filter((x) => live(x) && x.loanId === loanId && (!asOf || x.date <= asOf));
+  function recordWriteOff(db, ctx, a) {
+    G.require(ctx, "reserve.manage"); a = a || {}; const loan = (db.historicalLoans || []).find((l) => l.id === a.loanId && live(l)); if (!loan) throw new Error("NOT_FOUND: historical loan " + a.loanId);
+    const principal = Number(a.principal) || 0, interest = Number(a.interest) || 0; if (principal < 0 || interest < 0 || principal + interest <= 0) throw new Error("INVALID: a write-off needs a positive principal and/or interest amount");
+    G.need(a.evidence, "evidence"); G.need(a.reason, "reason"); const date = a.date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    const p = position(db, loan.id, "9999-12-31");
+    if (principal > p.principalOutstanding) throw new Error("EXCEEDS_BALANCE: principal outstanding is only " + p.principalOutstanding); if (interest > p.interestOutstanding) throw new Error("EXCEEDS_BALANCE: interest outstanding is only " + p.interestOutstanding);
+    const rec = { id: G.uid("HWO"), loanId: loan.id, memberId: loan.memberId, date, principal, interest, lossYear: a.lossYear === undefined ? null : Number(a.lossYear), evidence: a.evidence, reason: a.reason, approvedBy: ctx.approvedBy || ctx.by, recordedBy: ctx.by, recordedAt: ctx.now };
+    (db.historicalWriteOffs = db.historicalWriteOffs || []).push(rec);
+    G.audit(db, ctx, "HistoricalLoan", loan.id, "Written off (approved)", { outstanding: p.outstanding }, { principal, interest, lossYear: rec.lossYear }, a.reason + " | evidence: " + a.evidence);
+    return rec;
+  }
+  /* Approved SAVINGS OFFSET: the member's own savings repay (part of) a historical loan, interest first. Two linked entries: Savings Offset (savings fall, no cash) + Historical Loan Repayment. Never more than the savings held or the loan outstanding. */
+  function offsetHistoricalLoan(db, ctx, a) {
+    G.require(ctx, "reconcile.manage"); a = a || {}; const loan = (db.historicalLoans || []).find((l) => l.id === a.loanId && live(l)); if (!loan) throw new Error("NOT_FOUND: historical loan " + a.loanId);
+    const amt = Number(a.amount), date = a.date || ctx.today; if (!(amt > 0)) throw new Error("INVALID: amount must be positive"); if (!dates.isISO(date)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    G.need(a.evidence, "evidence"); G.need(a.reason, "reason"); const m = db.members.find((x) => x.id === loan.memberId);
+    if (amt > L.memberSavingsAsOf(db, loan.memberId, date)) throw new Error("INSUFFICIENT_SAVINGS: the member holds " + L.memberSavingsAsOf(db, loan.memberId, date) + " on " + date);
+    const p = position(db, loan.id, "9999-12-31"); if (amt > p.outstanding) throw new Error("EXCEEDS_BALANCE: the loan outstanding is only " + p.outstanding);
+    const link = G.uid("OFS"), stamp = { approvalStatus: "Approved", approvedBy: ctx.approvedBy || ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now, memberId: loan.memberId, memberName: m.name, date, amount: amt, offsetId: link, evidence: a.evidence };
+    const sav = Object.assign({ id: G.uid("TXN"), type: "Savings Offset", purpose: "Savings offset against historical loan " + loan.id + " | " + a.reason, offsetLoanId: loan.id }, stamp);
+    const rep = Object.assign({ id: G.uid("TXN"), type: REPAY, purpose: "Historical loan repayment by savings offset | " + a.reason, histLoanIds: [loan.id], historical: true, historicalLoan: true, sourceRef: "OFFSET|" + link }, stamp);
+    db.transactions.push(sav, rep);
+    G.audit(db, ctx, "HistoricalLoan", loan.id, "Savings offset (approved)", { outstanding: p.outstanding, savings: L.memberSavingsAsOf(db, loan.memberId, date) + amt }, { offset: amt, savingsEntry: sav.id, repaymentEntry: rep.id }, a.reason + " | evidence: " + a.evidence);
+    return { offsetId: link, savingsEntry: sav, repaymentEntry: rep };
+  }
   /* Position of one historical loan as at a date. */
   function position(db, loanId, asOf) {
     const l = (db.historicalLoans || []).find((x) => x.id === loanId); if (!l) throw new Error("NOT_FOUND: historical loan " + loanId);
-    const w = walk(db, l.memberId, asOf), s = w.states[loanId];
-    return { loan: l, disbursed: s.disbursed, interestCharged: s.charged, interestReceived: s.interestPaid, principalRepaid: s.principalPaid, interestOutstanding: s.charged - s.interestPaid, principalOutstanding: s.disbursed - s.principalPaid,
-      outstanding: s.charged + s.disbursed - s.interestPaid - s.principalPaid, components: s.components, charges: s.charges, payments: s.payments, status: (s.charged + s.disbursed - s.interestPaid - s.principalPaid) <= 0 && s.disbursed > 0 ? "Settled" : "Open" };
+    const w = walk(db, l.memberId, asOf), s = w.states[loanId], wo = writeOffsOf(db, loanId, asOf), woP = wo.reduce((a, x) => a + x.principal, 0), woI = wo.reduce((a, x) => a + x.interest, 0);
+    const iOut = s.charged - s.interestPaid - woI, pOut = s.disbursed - s.principalPaid - woP, out = iOut + pOut;
+    return { loan: l, disbursed: s.disbursed, interestCharged: s.charged, interestReceived: s.interestPaid, principalRepaid: s.principalPaid, writtenOffPrincipal: woP, writtenOffInterest: woI, interestOutstanding: iOut, principalOutstanding: pOut,
+      outstanding: out, components: s.components, charges: s.charges, payments: s.payments, writeOffs: wo, status: out <= 0 && s.disbursed > 0 ? (woP + woI > 0 ? "Written off" : "Settled") : "Open" };
   }
   /* Everything in a financial year [from, to): charged / received are counted by the date of the interest record / the repayment. */
   function periodFigures(db, from, to) {
@@ -110,5 +139,5 @@
     (db.historicalLoans || []).filter(live).filter((l) => (!from || l.date >= from) && (!to || l.date < to)).forEach((l) => { const p = position(db, l.id, asOf); if (p.outstanding > 0) { r.interest += p.interestOutstanding; r.principal += p.principalOutstanding; r.loans++; } });
     return r;
   }
-  return { DISB, REPAY, idFor, loanIdFor, loansOf, importHistoricalLoans, walk, position, periodFigures, outstandingAt };
+  return { DISB, REPAY, idFor, loanIdFor, loansOf, importHistoricalLoans, writeOffsOf, recordWriteOff, offsetHistoricalLoan, walk, position, periodFigures, outstandingAt };
 });

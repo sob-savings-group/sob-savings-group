@@ -176,7 +176,11 @@
     if (pack.coverage && pack.coverage.rows) {
       const have = new Set(); db.transactions.forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.loanInterestRecords || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.historicalNotes || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); });
       const gone = pack.coverage.rows.filter((r) => !have.has(r));
-      c.add("every numeric row of the member sheets is accounted for: " + pack.coverage.rows.length + " rows posted, recorded as loan events or kept as audit notes; " + (pack.coverage.blankRows || []).length + " dated rows without an amount are held and disclosed, none posted", gone.length === 0 && pack.coverage.unaccounted === 0, gone.slice(0, 5).join(", "));
+      c.add("every numeric row of the member sheets is accounted for: " + pack.coverage.rows.length + " rows posted, recorded as loan events or kept as audit notes", gone.length === 0 && pack.coverage.unaccounted === 0, gone.slice(0, 5).join(", "));
+      /* Every source row without an amount is VOID: kept as an audit note with status VOID, and NOTHING posted against it. */
+      const voids = pack.coverage.voidRows || [], notes = new Map((db.historicalNotes || []).map((n) => [n.sourceRef, n])), posted = new Set(); db.transactions.forEach((x) => { if (x.sourceRef) posted.add(String(x.sourceRef).split("#")[0]); }); (db.loanInterestRecords || []).forEach((x) => { if (x.sourceRef) posted.add(String(x.sourceRef).split("#")[0]); });
+      const notVoid = voids.filter((r) => !notes.has(r) || notes.get(r).status !== "VOID"), leaked = voids.filter((r) => posted.has(r));
+      c.add("source rows without an amount are VOID: " + voids.length + " kept as audit notes (" + (pack.coverage.blankRows || []).length + " of them dated rows with a collector but no amount), none posted", voids.length > 0 && notVoid.length === 0 && leaked.length === 0, notVoid.concat(leaked).slice(0, 5).join(", "));
     }
     const un = I.unaccounted(db, asOf); c.add("ledger integrity: every error is accounted for in the reconciliation register", un.length === 0, un.map((f) => f.code + " " + f.detail).join("; "));
     return { ok: c.ok, checks: c.list, state: inspect(db, pack).state, pending };

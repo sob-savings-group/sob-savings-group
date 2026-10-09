@@ -43,12 +43,23 @@
     G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
     if (!dates.isISO(newDate)) throw new Error("INVALID: date must be YYYY-MM-DD");
     const loan = db.loans.find((l) => l.id === loanId); if (!loan) throw new Error("NOT_FOUND: loan " + loanId);
-    if (loan.date === newDate) throw new Error("INVALID: date unchanged");
+    if (loan.date === newDate && !loan.dateUnknown) throw new Error("INVALID: date unchanged");
     const prev = loan.date;
     (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: prev, newDate, reason, evidence, by: ctx.by, role: ctx.role });
-    loan.date = newDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
-    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; });
+    loan.date = newDate; delete loan.dateUnknown; delete loan.placeholderDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; delete t.dateUnknown; delete t.placeholderDate; });
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
+    return loan;
+  }
+  /* A start date that no document establishes is marked UNKNOWN instead of being kept as if it were fact. The system's placeholder stays on the record only so the ledger keeps its order; every report shows the loan as "date not established" and any interest shown is indicative. */
+  function markLoanDateUnknown(db, ctx, loanId, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    const loan = db.loans.find((l) => l.id === loanId); if (!loan || loan.voided) throw new Error("NOT_FOUND: loan " + loanId);
+    if (loan.dateUnknown) throw new Error("BAD_STATE: this loan's date is already marked unknown");
+    (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: loan.date, newDate: null, unknown: true, reason, evidence, by: ctx.by, role: ctx.role });
+    loan.dateUnknown = true; loan.placeholderDate = loan.date;
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.dateUnknown = true; t.placeholderDate = t.date; });
+    G.audit(db, ctx, "Loan", loanId, "Start date marked unknown", { date: loan.date }, { dateUnknown: true, placeholderDate: loan.date }, reason + " | evidence: " + evidence);
     return loan;
   }
   /* A consolidated loan stays ONE loan account; its dated component disbursements are kept on it for the record (they must add up to the loan amount exactly). */
@@ -82,5 +93,5 @@
     });
   }
   const summary = (db) => { const l = list(db); return { open: l.filter((x) => x.status === "Open").length, resolved: l.filter((x) => x.status === "Resolved").length, total: l.length }; };
-  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
+  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, markLoanDateUnknown, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
 });

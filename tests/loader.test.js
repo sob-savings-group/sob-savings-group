@@ -54,6 +54,11 @@ const o = { approvedBy: "Test Approver, Admin, 8 Oct 2026", asOf: "2026-10-08" }
     const r1 = await LD.load(b.api, bad, o); assert.ok(r1.checks.some((c) => /accounted for/.test(c.name) && !c.pass), "a missing source row is caught");
     const b2 = await boot(); const r2 = await LD.load(b2.api, pack, o); assert.ok(r2.checks.some((c) => /accounted for/.test(c.name) && c.pass), "the complete list passes");
   });
+  await t("rows without an amount are VOID: kept as audit notes with status VOID, and the load fails if one is missing or anything was posted against it", async () => {
+    const b = await boot(); const r = await LD.load(b.api, pack, o); const c = r.checks.find((x) => /without an amount are VOID/.test(x.name)); assert.ok(c && c.pass, "VOID check passes");
+    const db = (await b.api({ action: "getLedger" })).db, n = db.historicalNotes.find((x) => x.sourceRef === "T|a|r11"); assert.equal(n.status, "VOID"); assert.equal(n.isTransaction, false); assert.ok(!db.transactions.some((x) => String(x.sourceRef || "").startsWith("T|a|r11")));
+    const bad = JSON.parse(JSON.stringify(pack)); bad.coverage.voidRows.push("T|a|r999"); const b2 = await boot(); const r2 = await LD.load(b2.api, bad, o); assert.ok(r2.checks.some((x) => /without an amount are VOID/.test(x.name) && !x.pass), "a missing VOID note is caught");
+  });
   await t("a member cannot purge or load", async () => {
     const mt = (await s.call({ action: "login", id: "ADMIN", pin: "Adm1n-Setup-77" })).token; assert.ok(mt); const ids = (await api({ action: "getLedger" })).db.members[0].id;
     await api({ action: "createUser", user: { id: ids, name: "m", role: "Member", memberId: ids, pin: "123456" } }); const mm = s.session((await s.call({ action: "login", id: ids, pin: "123456" })).token);

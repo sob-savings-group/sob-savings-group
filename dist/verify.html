@@ -127,6 +127,8 @@
       case "Income": return { savings: 0, loan: 0, profit: 0, cashflow: amt };
       case "Expense": return { savings: 0, loan: 0, profit: 0, cashflow: -amt };
       case "Share-Out": return { savings: -amt, loan: 0, profit: 0, cashflow: -amt };
+      // Approved offset of a member's savings against a historical loan: savings fall, no cash moves (the matching Historical Loan Repayment is its other half).
+      case "Savings Offset": return { savings: -amt, loan: 0, profit: 0, cashflow: 0 };
       case "Interest":
       case "Penalty": return { savings: 0, loan: -amt, profit: 0, cashflow: 0 };
       default: return { savings: 0, loan: 0, profit: 0, cashflow: 0 };
@@ -1127,7 +1129,7 @@
     asOf = asOf || dates.todayISO(); const d = upTo(db, asOf);
     const rows = L.activeLoansAsAt(d, asOf).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
-      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
+      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, dateUnknown: !!l.dateUnknown, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
         monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
         unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });
@@ -1184,12 +1186,23 @@
     G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
     if (!dates.isISO(newDate)) throw new Error("INVALID: date must be YYYY-MM-DD");
     const loan = db.loans.find((l) => l.id === loanId); if (!loan) throw new Error("NOT_FOUND: loan " + loanId);
-    if (loan.date === newDate) throw new Error("INVALID: date unchanged");
+    if (loan.date === newDate && !loan.dateUnknown) throw new Error("INVALID: date unchanged");
     const prev = loan.date;
     (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: prev, newDate, reason, evidence, by: ctx.by, role: ctx.role });
-    loan.date = newDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
-    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; });
+    loan.date = newDate; delete loan.dateUnknown; delete loan.placeholderDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; delete t.dateUnknown; delete t.placeholderDate; });
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
+    return loan;
+  }
+  /* A start date that no document establishes is marked UNKNOWN instead of being kept as if it were fact. The system's placeholder stays on the record only so the ledger keeps its order; every report shows the loan as "date not established" and any interest shown is indicative. */
+  function markLoanDateUnknown(db, ctx, loanId, reason, evidence) {
+    G.require(ctx, "reconcile.manage"); G.need(reason, "reason"); G.need(evidence, "evidence");
+    const loan = db.loans.find((l) => l.id === loanId); if (!loan || loan.voided) throw new Error("NOT_FOUND: loan " + loanId);
+    if (loan.dateUnknown) throw new Error("BAD_STATE: this loan's date is already marked unknown");
+    (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: loan.date, newDate: null, unknown: true, reason, evidence, by: ctx.by, role: ctx.role });
+    loan.dateUnknown = true; loan.placeholderDate = loan.date;
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.dateUnknown = true; t.placeholderDate = t.date; });
+    G.audit(db, ctx, "Loan", loanId, "Start date marked unknown", { date: loan.date }, { dateUnknown: true, placeholderDate: loan.date }, reason + " | evidence: " + evidence);
     return loan;
   }
   /* A consolidated loan stays ONE loan account; its dated component disbursements are kept on it for the record (they must add up to the loan amount exactly). */
@@ -1223,7 +1236,7 @@
     });
   }
   const summary = (db) => { const l = list(db); return { open: l.filter((x) => x.status === "Open").length, resolved: l.filter((x) => x.status === "Resolved").length, total: l.length }; };
-  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
+  return { KINDS, openDiscrepancy, resolveDiscrepancy, correctLoanDate, markLoanDateUnknown, recordLoanComponents, correctEntryDate, loanDateImpact, summary };
 });
 
 /* src/core/integrity.js */
@@ -1543,7 +1556,7 @@
     const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
     notes.forEach((n) => {
       if (!n || !n.sourceRef) throw new Error("INVALID: annotation needs a sourceRef"); if (have.has(n.sourceRef)) { out.annotationsAlreadyRecorded++; return; } have.add(n.sourceRef); out.annotationsAdded++;
-      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
+      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), status: n.status ? String(n.status) : undefined, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
     });
     if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, annotations: out.annotationsAdded, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;
@@ -1734,12 +1747,41 @@
     });
     return { states: st, steps, excess, loans };
   }
+
+  /* Approved write-offs (Chairperson, with evidence). The PRINCIPAL part is a group loss; written-off interest was never counted as earned, so it is not a further loss. */
+  const writeOffsOf = (db, loanId, asOf) => (db.historicalWriteOffs || []).filter((x) => live(x) && x.loanId === loanId && (!asOf || x.date <= asOf));
+  function recordWriteOff(db, ctx, a) {
+    G.require(ctx, "reserve.manage"); a = a || {}; const loan = (db.historicalLoans || []).find((l) => l.id === a.loanId && live(l)); if (!loan) throw new Error("NOT_FOUND: historical loan " + a.loanId);
+    const principal = Number(a.principal) || 0, interest = Number(a.interest) || 0; if (principal < 0 || interest < 0 || principal + interest <= 0) throw new Error("INVALID: a write-off needs a positive principal and/or interest amount");
+    G.need(a.evidence, "evidence"); G.need(a.reason, "reason"); const date = a.date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    const p = position(db, loan.id, "9999-12-31");
+    if (principal > p.principalOutstanding) throw new Error("EXCEEDS_BALANCE: principal outstanding is only " + p.principalOutstanding); if (interest > p.interestOutstanding) throw new Error("EXCEEDS_BALANCE: interest outstanding is only " + p.interestOutstanding);
+    const rec = { id: G.uid("HWO"), loanId: loan.id, memberId: loan.memberId, date, principal, interest, lossYear: a.lossYear === undefined ? null : Number(a.lossYear), evidence: a.evidence, reason: a.reason, approvedBy: ctx.approvedBy || ctx.by, recordedBy: ctx.by, recordedAt: ctx.now };
+    (db.historicalWriteOffs = db.historicalWriteOffs || []).push(rec);
+    G.audit(db, ctx, "HistoricalLoan", loan.id, "Written off (approved)", { outstanding: p.outstanding }, { principal, interest, lossYear: rec.lossYear }, a.reason + " | evidence: " + a.evidence);
+    return rec;
+  }
+  /* Approved SAVINGS OFFSET: the member's own savings repay (part of) a historical loan, interest first. Two linked entries: Savings Offset (savings fall, no cash) + Historical Loan Repayment. Never more than the savings held or the loan outstanding. */
+  function offsetHistoricalLoan(db, ctx, a) {
+    G.require(ctx, "reconcile.manage"); a = a || {}; const loan = (db.historicalLoans || []).find((l) => l.id === a.loanId && live(l)); if (!loan) throw new Error("NOT_FOUND: historical loan " + a.loanId);
+    const amt = Number(a.amount), date = a.date || ctx.today; if (!(amt > 0)) throw new Error("INVALID: amount must be positive"); if (!dates.isISO(date)) throw new Error("INVALID: date must be YYYY-MM-DD");
+    G.need(a.evidence, "evidence"); G.need(a.reason, "reason"); const m = db.members.find((x) => x.id === loan.memberId);
+    if (amt > L.memberSavingsAsOf(db, loan.memberId, date)) throw new Error("INSUFFICIENT_SAVINGS: the member holds " + L.memberSavingsAsOf(db, loan.memberId, date) + " on " + date);
+    const p = position(db, loan.id, "9999-12-31"); if (amt > p.outstanding) throw new Error("EXCEEDS_BALANCE: the loan outstanding is only " + p.outstanding);
+    const link = G.uid("OFS"), stamp = { approvalStatus: "Approved", approvedBy: ctx.approvedBy || ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now, memberId: loan.memberId, memberName: m.name, date, amount: amt, offsetId: link, evidence: a.evidence };
+    const sav = Object.assign({ id: G.uid("TXN"), type: "Savings Offset", purpose: "Savings offset against historical loan " + loan.id + " | " + a.reason, offsetLoanId: loan.id }, stamp);
+    const rep = Object.assign({ id: G.uid("TXN"), type: REPAY, purpose: "Historical loan repayment by savings offset | " + a.reason, histLoanIds: [loan.id], historical: true, historicalLoan: true, sourceRef: "OFFSET|" + link }, stamp);
+    db.transactions.push(sav, rep);
+    G.audit(db, ctx, "HistoricalLoan", loan.id, "Savings offset (approved)", { outstanding: p.outstanding, savings: L.memberSavingsAsOf(db, loan.memberId, date) + amt }, { offset: amt, savingsEntry: sav.id, repaymentEntry: rep.id }, a.reason + " | evidence: " + a.evidence);
+    return { offsetId: link, savingsEntry: sav, repaymentEntry: rep };
+  }
   /* Position of one historical loan as at a date. */
   function position(db, loanId, asOf) {
     const l = (db.historicalLoans || []).find((x) => x.id === loanId); if (!l) throw new Error("NOT_FOUND: historical loan " + loanId);
-    const w = walk(db, l.memberId, asOf), s = w.states[loanId];
-    return { loan: l, disbursed: s.disbursed, interestCharged: s.charged, interestReceived: s.interestPaid, principalRepaid: s.principalPaid, interestOutstanding: s.charged - s.interestPaid, principalOutstanding: s.disbursed - s.principalPaid,
-      outstanding: s.charged + s.disbursed - s.interestPaid - s.principalPaid, components: s.components, charges: s.charges, payments: s.payments, status: (s.charged + s.disbursed - s.interestPaid - s.principalPaid) <= 0 && s.disbursed > 0 ? "Settled" : "Open" };
+    const w = walk(db, l.memberId, asOf), s = w.states[loanId], wo = writeOffsOf(db, loanId, asOf), woP = wo.reduce((a, x) => a + x.principal, 0), woI = wo.reduce((a, x) => a + x.interest, 0);
+    const iOut = s.charged - s.interestPaid - woI, pOut = s.disbursed - s.principalPaid - woP, out = iOut + pOut;
+    return { loan: l, disbursed: s.disbursed, interestCharged: s.charged, interestReceived: s.interestPaid, principalRepaid: s.principalPaid, writtenOffPrincipal: woP, writtenOffInterest: woI, interestOutstanding: iOut, principalOutstanding: pOut,
+      outstanding: out, components: s.components, charges: s.charges, payments: s.payments, writeOffs: wo, status: out <= 0 && s.disbursed > 0 ? (woP + woI > 0 ? "Written off" : "Settled") : "Open" };
   }
   /* Everything in a financial year [from, to): charged / received are counted by the date of the interest record / the repayment. */
   function periodFigures(db, from, to) {
@@ -1756,7 +1798,7 @@
     (db.historicalLoans || []).filter(live).filter((l) => (!from || l.date >= from) && (!to || l.date < to)).forEach((l) => { const p = position(db, l.id, asOf); if (p.outstanding > 0) { r.interest += p.interestOutstanding; r.principal += p.principalOutstanding; r.loans++; } });
     return r;
   }
-  return { DISB, REPAY, idFor, loanIdFor, loansOf, importHistoricalLoans, walk, position, periodFigures, outstandingAt };
+  return { DISB, REPAY, idFor, loanIdFor, loansOf, importHistoricalLoans, writeOffsOf, recordWriteOff, offsetHistoricalLoan, walk, position, periodFigures, outstandingAt };
 });
 
 /* src/core/reserve.js */
@@ -1867,7 +1909,8 @@
     const tx = L.activeTransactions(db).filter((t) => FY.yearOfEntry(db, t) === c.year), sum = (ty) => tx.filter((t) => t.type === ty).reduce((a, t) => a + Number(t.amount), 0);
     const credited = sum("Profit"), income = sum("Subscription") + sum("Income"), expenses = sum("Expense");
     const interestCharged = h.interestCharged + cur.charged, interestReceived = h.interestReceived + cur.received, receivable = hOut.interest + cur.receivable;
-    const earned = interestReceived + income - expenses, undistributed = earned - credited, av = RS.available(db, c.year);
+    const woLoss = (db.historicalWriteOffs || []).filter((x) => !x.voided && Number(x.lossYear) === c.year).reduce((a, x) => a + x.principal, 0);
+    const earned = interestReceived + income - expenses - woLoss, undistributed = earned - credited, av = RS.available(db, c.year);
     const groupLedger = (db.legacyAdministration || []).filter((r) => r && r.type === "Profit" && dates.isISO(r.date) && r.date >= from && r.date < to).reduce((a, r) => a + (Number(r.profitEarned) || 0), 0);
     const reserveIn = RS.live(db).filter((e) => (e.kind === "TRANSFER" || e.kind === "LOSS") && Number(e.fyYear) === c.year).reduce((a, e) => a + (e.kind === "LOSS" ? -1 : 1) * Number(e.amount), 0);   // net: gains in, losses out
     const flags = [];
@@ -1875,7 +1918,7 @@
     if (credited > earned) flags.push("Profit credited to members (" + credited + ") is MORE than the interest recorded as received (" + earned + "): UGX " + (credited - earned) + " is unexplained by the records.");
     if (h.excess > 0) flags.push("Historical repayments of UGX " + h.excess + " were more than the interest and loan recorded as due (kept visible, not allocated).");
     if (groupLedger && groupLedger !== earned) flags.push("The archived group bank ledger records profit of " + groupLedger + " for this year; the interest-first figure is " + earned + ".");
-    return { year: c.year, label: c.label, from, to: c.closedDate || null, status: c.status, interestCharged, interestReceived, interestReceivable: receivable, historicalCharged: h.interestCharged, currentCharged: cur.charged, otherIncome: income, expenses,
+    return { year: c.year, label: c.label, from, to: c.closedDate || null, status: c.status, interestCharged, interestReceived, interestReceivable: receivable, historicalCharged: h.interestCharged, currentCharged: cur.charged, otherIncome: income, expenses, writeOffLoss: woLoss,
       earnedRecorded: earned, profitCredited: credited, undistributed, groupLedgerProfit: groupLedger, verifiedProfit: av.verified, reservedFromYear: reserveIn, reserveAvailable: av.available, shortfall: av.shortfall, settled: (FY.byYear(db, c.year) || {}).settled || null, historicalLoanPrincipalOpenAtYearEnd: hOut.principal, historicalLoansOpenAtYearEnd: hOut.loans, flags };
   }
 
@@ -1901,10 +1944,32 @@
     G.audit(db, ctx, "FinancialYear", "FY" + c.year, "Settled into the General Reserve Fund", null, rec.settled, reason);
     return { year: c.year, result, credited: av.credited, reserveMovement: moved, entry };
   }
+
+  /* APPROVED WRITE-OFF of an uncollectible historical loan balance (Chairperson). The principal written off is a verified group loss of the year it is attributed to
+     (lossYear, a CLOSED year): it lowers that year's result, and if the year was already settled the loss is also reflected in the reserve now. Written-off interest was never
+     counted as earned, so it is no further loss. Nothing is ever written off automatically, and member savings are never touched. */
+  function writeOff(db, ctx, a) {
+    G.require(ctx, "reserve.manage"); a = a || {}; const principal = Number(a.principal) || 0;
+    let c = null;
+    if (principal > 0) {
+      c = FY.byYear(db, a.lossYear); if (!c) throw new Error("REQUIRED: lossYear (the closed financial year whose result bears this loss)");
+      if (c.status !== "Closed" || !c.closedDate) throw new Error("OPEN_YEAR: FY" + c.year + " has not closed; a loss cannot be charged to the reserve for an open year");
+    }
+    const rec = HL.recordWriteOff(db, ctx, a);
+    if (c) {
+      const y = (db.yearCycles || []).find((x) => x.year === c.year);
+      if (y.settled) {
+        const prev = y.verifiedProfit; y.verifiedProfit = Number(prev) - principal; (y.verifiedProfitHistory = y.verifiedProfitHistory || []).push({ at: ctx.now, by: ctx.approvedBy || ctx.by, previous: prev, amount: y.verifiedProfit, evidence: a.evidence, reason: "Approved write-off " + rec.id + ": " + a.reason });
+        const entry = RS.postYearResult(db, ctx, c, -principal, { evidence: a.evidence, reason: "Approved write-off of historical loan " + rec.loanId + ": " + a.reason });
+        (y.settled.lateWriteOffs = y.settled.lateWriteOffs || []).push({ id: rec.id, principal, reserveEntryId: entry ? entry.id : null });
+      }
+    }
+    return rec;
+  }
   const all = (db, asOf) => FY.table(db).map((c) => year(db, c.year, asOf));
   /* The reported "UGX 315,740": show what it is made of and which sources it can be compared with. */
   function creditedTotal(db) { const tx = L.activeTransactions(db).filter((t) => t.type === "Profit"), by = {}; tx.forEach((t) => { const y = FY.yearOfEntry(db, t); by[y] = (by[y] || 0) + Number(t.amount); }); return { total: tx.reduce((a, t) => a + Number(t.amount), 0), byYear: by, entries: tx.length }; }
-  return { year, all, creditedTotal, currentLoans, settle };
+  return { year, all, creditedTotal, currentLoans, settle, writeOff };
 });
 
 /* src/core/commands.js */
@@ -1946,6 +2011,7 @@
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     resolveDiscrepancy: (db, ctx, a) => RC.resolveDiscrepancy(db, ctx, a.id, { decision: a.decision, reason: a.reason, evidence: a.evidence, entry: a.entry }),
     correctLoanDate: (db, ctx, a) => RC.correctLoanDate(db, ctx, a.loanId, a.date, a.reason, a.evidence),
+    markLoanDateUnknown: (db, ctx, a) => RC.markLoanDateUnknown(db, ctx, a.loanId, a.reason, a.evidence),
     recordLoanComponents: (db, ctx, a) => RC.recordLoanComponents(db, ctx, a.loanId, a.components, a.reason, a.evidence),
     correctEntryDate: (db, ctx, a) => RC.correctEntryDate(db, ctx, a.id, a.date, a.reason, a.evidence),
     executeShareOut: (db, ctx, a) => C.executeShareOut(db, ctx, a.year, { date: a.date, force: a.force, reason: a.reason }),
@@ -1959,6 +2025,8 @@
     importHistoricalLoans: (db, ctx, a) => HL.importHistoricalLoans(db, ctx, { batchId: a.batchId, source: a.source, accounts: a.accounts || [], events: a.events || [], dryRun: a.dryRun }),
     defineFinancialYears: (db, ctx, a) => FYR.defineFinancialYears(db, ctx, { years: a.years }),
     confirmFYProfit: (db, ctx, a) => RSV.confirmProfit(db, ctx, { year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    offsetHistoricalLoan: (db, ctx, a) => HL.offsetHistoricalLoan(db, ctx, { loanId: a.loanId, amount: a.amount, date: a.date, evidence: a.evidence, reason: a.reason }),
+    writeOffHistoricalLoan: (db, ctx, a) => PRC.writeOff(db, ctx, { loanId: a.loanId, principal: a.principal, interest: a.interest, date: a.date, lossYear: a.lossYear, evidence: a.evidence, reason: a.reason }),
     settleFinancialYear: (db, ctx, a) => PRC.settle(db, ctx, { year: a.year, expectedResult: a.expectedResult, evidence: a.evidence, reason: a.reason }),
     openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
@@ -1973,7 +2041,8 @@
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
-    recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
+    offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
+    markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
@@ -1984,7 +2053,8 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
@@ -2291,7 +2361,11 @@
     if (pack.coverage && pack.coverage.rows) {
       const have = new Set(); db.transactions.forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.loanInterestRecords || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.historicalNotes || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); });
       const gone = pack.coverage.rows.filter((r) => !have.has(r));
-      c.add("every numeric row of the member sheets is accounted for: " + pack.coverage.rows.length + " rows posted, recorded as loan events or kept as audit notes; " + (pack.coverage.blankRows || []).length + " dated rows without an amount are held and disclosed, none posted", gone.length === 0 && pack.coverage.unaccounted === 0, gone.slice(0, 5).join(", "));
+      c.add("every numeric row of the member sheets is accounted for: " + pack.coverage.rows.length + " rows posted, recorded as loan events or kept as audit notes", gone.length === 0 && pack.coverage.unaccounted === 0, gone.slice(0, 5).join(", "));
+      /* Every source row without an amount is VOID: kept as an audit note with status VOID, and NOTHING posted against it. */
+      const voids = pack.coverage.voidRows || [], notes = new Map((db.historicalNotes || []).map((n) => [n.sourceRef, n])), posted = new Set(); db.transactions.forEach((x) => { if (x.sourceRef) posted.add(String(x.sourceRef).split("#")[0]); }); (db.loanInterestRecords || []).forEach((x) => { if (x.sourceRef) posted.add(String(x.sourceRef).split("#")[0]); });
+      const notVoid = voids.filter((r) => !notes.has(r) || notes.get(r).status !== "VOID"), leaked = voids.filter((r) => posted.has(r));
+      c.add("source rows without an amount are VOID: " + voids.length + " kept as audit notes (" + (pack.coverage.blankRows || []).length + " of them dated rows with a collector but no amount), none posted", voids.length > 0 && notVoid.length === 0 && leaked.length === 0, notVoid.concat(leaked).slice(0, 5).join(", "));
     }
     const un = I.unaccounted(db, asOf); c.add("ledger integrity: every error is accounted for in the reconciliation register", un.length === 0, un.map((f) => f.code + " " + f.detail).join("; "));
     return { ok: c.ok, checks: c.list, state: inspect(db, pack).state, pending };
@@ -2579,7 +2653,7 @@
   function loanMemberStatement(db, loanId, asOf) {
     const loan = db.loans.find((l) => l.id === loanId), w = L.loanInterestPosition(loan, db, asOf), v = LN.loanView(db, loan, asOf);
     const cols = ["Date", "Event", "Amount", "Interest paid", "Loan reduced", "Loan left"]; let left = Number(loan.loanAmount);
-    const rows = [{ Date: dates.toDisplay(loan.date), Event: "Loan paid out", Amount: Number(loan.loanAmount), "Interest paid": "", "Loan reduced": "", "Loan left": left }];
+    const rows = [{ Date: loan.dateUnknown ? "Not established" : dates.toDisplay(loan.date), Event: loan.dateUnknown ? "Loan paid out (date not established; placeholder " + dates.toDisplay(loan.date) + ")" : "Loan paid out", Amount: Number(loan.loanAmount), "Interest paid": "", "Loan reduced": "", "Loan left": left }];
     w.steps.forEach((x) => { left -= x.principal; rows.push({ Date: dates.toDisplay(x.date), Event: "Repayment", Amount: x.amount, "Interest paid": x.interest, "Loan reduced": x.principal, "Loan left": left }); });
     const rep = R("Loan statement — " + name(db, loan.memberId) + " (" + loan.id + ")", cols, rows, {});
     const gs = (db.guarantees || []).filter((g) => g.loanId === loanId && g.status !== "Declined" && g.status !== "Requested");

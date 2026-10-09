@@ -134,7 +134,7 @@
     asOf = asOf || dates.todayISO(); const d = upTo(db, asOf);
     const rows = L.activeLoansAsAt(d, asOf).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
-      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
+      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, dateUnknown: !!l.dateUnknown, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
         monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
         unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });

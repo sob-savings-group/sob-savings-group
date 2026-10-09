@@ -47,6 +47,8 @@
       case "Income": return { savings: 0, loan: 0, profit: 0, cashflow: amt };
       case "Expense": return { savings: 0, loan: 0, profit: 0, cashflow: -amt };
       case "Share-Out": return { savings: -amt, loan: 0, profit: 0, cashflow: -amt };
+      // Approved offset of a member's savings against a historical loan: savings fall, no cash moves (the matching Historical Loan Repayment is its other half).
+      case "Savings Offset": return { savings: -amt, loan: 0, profit: 0, cashflow: 0 };
       case "Interest":
       case "Penalty": return { savings: 0, loan: -amt, profit: 0, cashflow: 0 };
       default: return { savings: 0, loan: 0, profit: 0, cashflow: 0 };

@@ -153,7 +153,7 @@
   function loanMemberStatement(db, loanId, asOf) {
     const loan = db.loans.find((l) => l.id === loanId), w = L.loanInterestPosition(loan, db, asOf), v = LN.loanView(db, loan, asOf);
     const cols = ["Date", "Event", "Amount", "Interest paid", "Loan reduced", "Loan left"]; let left = Number(loan.loanAmount);
-    const rows = [{ Date: dates.toDisplay(loan.date), Event: "Loan paid out", Amount: Number(loan.loanAmount), "Interest paid": "", "Loan reduced": "", "Loan left": left }];
+    const rows = [{ Date: loan.dateUnknown ? "Not established" : dates.toDisplay(loan.date), Event: loan.dateUnknown ? "Loan paid out (date not established; placeholder " + dates.toDisplay(loan.date) + ")" : "Loan paid out", Amount: Number(loan.loanAmount), "Interest paid": "", "Loan reduced": "", "Loan left": left }];
     w.steps.forEach((x) => { left -= x.principal; rows.push({ Date: dates.toDisplay(x.date), Event: "Repayment", Amount: x.amount, "Interest paid": x.interest, "Loan reduced": x.principal, "Loan left": left }); });
     const rep = R("Loan statement — " + name(db, loan.memberId) + " (" + loan.id + ")", cols, rows, {});
     const gs = (db.guarantees || []).filter((g) => g.loanId === loanId && g.status !== "Declined" && g.status !== "Requested");

@@ -49,7 +49,7 @@
     const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));
     notes.forEach((n) => {
       if (!n || !n.sourceRef) throw new Error("INVALID: annotation needs a sourceRef"); if (have.has(n.sourceRef)) { out.annotationsAlreadyRecorded++; return; } have.add(n.sourceRef); out.annotationsAdded++;
-      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
+      if (!a.dryRun) (db.historicalNotes = db.historicalNotes || []).push({ id: "HNO-" + hash(n.sourceRef) + hash(n.sourceRef.split("").reverse().join("")), sourceRef: String(n.sourceRef), memberId: n.memberId || "", date: n.date || "", amount: n.amount === undefined ? null : n.amount, note: String(n.note || "").slice(0, 400), status: n.status ? String(n.status) : undefined, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now, isTransaction: false });
     });
     if (!a.dryRun) G.audit(db, ctx, "HistoricalImport", batchId, "Imported", null, { source, added: out.added, alreadyImported: out.alreadyImported, possibleDuplicates: out.possibleDuplicates.length, annotations: out.annotationsAdded, sum: out.sum }, "Verified historical records; original dates and source references preserved");
     return out;
