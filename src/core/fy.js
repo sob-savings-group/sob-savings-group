@@ -34,7 +34,8 @@
     L.activeTransactions(db).forEach((t) => {
       if (!t.memberId || !per[t.memberId]) return; const e = eff(t); if (!e) return; const y = yearOfEntry(db, t, tb), r = per[t.memberId];
       if (y < cyc.year) r.opening += e;
-      else if (y === cyc.year) { if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e; }
+      else if (y === cyc.year) { if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" && cyc.closedDate && t.date === cyc.closedDate) r.shareOuts += -e;   /* a cash-out recorded on the share-out day is part of that share-out (Chairperson decision, 9 Oct 2026) */
+      else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e; }
     });
     const rows = Object.keys(per).map((k) => per[k]).filter((r) => r.opening || r.deposits || r.profit || r.withdrawals || r.shareOuts || r.other);
     rows.forEach((r) => { r.closing = r.opening + r.deposits + r.profit - r.withdrawals - r.shareOuts + r.other; r.carriedForward = cyc.status === "Closed" ? r.closing : null; });

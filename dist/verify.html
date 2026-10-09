@@ -1588,7 +1588,8 @@
     L.activeTransactions(db).forEach((t) => {
       if (!t.memberId || !per[t.memberId]) return; const e = eff(t); if (!e) return; const y = yearOfEntry(db, t, tb), r = per[t.memberId];
       if (y < cyc.year) r.opening += e;
-      else if (y === cyc.year) { if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e; }
+      else if (y === cyc.year) { if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" && cyc.closedDate && t.date === cyc.closedDate) r.shareOuts += -e;   /* a cash-out recorded on the share-out day is part of that share-out (Chairperson decision, 9 Oct 2026) */
+      else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e; }
     });
     const rows = Object.keys(per).map((k) => per[k]).filter((r) => r.opening || r.deposits || r.profit || r.withdrawals || r.shareOuts || r.other);
     rows.forEach((r) => { r.closing = r.opening + r.deposits + r.profit - r.withdrawals - r.shareOuts + r.other; r.carriedForward = cyc.status === "Closed" ? r.closing : null; });
@@ -1684,7 +1685,7 @@
     const keys = new Set([...haveLoan.keys(), ...newAccounts.map((x) => x.key)]), toAdd = [], seenRef = new Set();
     events.forEach((e) => {
       if (!e || !e.sourceRef) return bad("sourceRef required", e); if (!KINDS.includes(e.kind)) return bad("kind must be one of " + KINDS.join("/"), e);
-      if (!members.has(e.memberId)) return bad("unknown member " + e.memberId, e); if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD", e); if (!(Number(e.amount) > 0)) return bad("amount must be positive", e);
+      if (!members.has(e.memberId)) return bad("unknown member " + e.memberId, e); if (e.dateUnknown) { if (!dates.isISO(e.dateAfter)) return bad("dateUnknown events need dateAfter (the last dated source row before it)", e); e.date = e.dateAfter; } if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD", e); if (!(Number(e.amount) > 0)) return bad("amount must be positive", e);
       if (e.kind !== "REPAYMENT" && !keys.has(e.loanKey)) return bad("unknown loan " + e.loanKey, e);
       if (e.kind === "REPAYMENT" && (e.loanKeys || []).some((k) => !keys.has(k))) return bad("unknown loan in loanKeys", e);
       if (haveRef.has(e.sourceRef)) { out.alreadyImported++; return; } if (seenRef.has(e.sourceRef)) return bad("duplicate sourceRef inside batch", e); seenRef.add(e.sourceRef); toAdd.push(e);
@@ -1696,11 +1697,11 @@
     db.historicalLoans = db.historicalLoans || []; db.loanInterestRecords = db.loanInterestRecords || [];
     newAccounts.forEach((x) => {
       const m = db.members.find((y) => y.id === x.memberId);
-      db.historicalLoans.push({ id: loanIdFor(x.key), key: x.key, memberId: x.memberId, memberName: m.name, date: x.date, registerDate: x.registerDate || "", registerAmount: x.registerAmount === undefined ? null : Number(x.registerAmount), registerRef: x.registerRef || "", evidence: String(x.evidence), note: x.note || "", historical: true, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now });
+      db.historicalLoans.push({ id: loanIdFor(x.key), key: x.key, memberId: x.memberId, memberName: m.name, date: x.date, registerDate: x.registerDate || "", registerAmount: x.registerAmount === undefined ? null : Number(x.registerAmount), registerRef: x.registerRef || "", evidence: String(x.evidence), note: x.note || "", registerCorrection: x.registerCorrection || undefined, historical: true, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now });
       G.audit(db, ctx, "HistoricalLoan", loanIdFor(x.key), "Recorded", null, { memberId: x.memberId, date: x.date, registerRef: x.registerRef || "" }, String(x.evidence).slice(0, 300));
     });
     toAdd.forEach((e) => {
-      const m = db.members.find((y) => y.id === e.memberId), amt = Number(e.amount), base = { memberId: e.memberId, memberName: m.name, date: e.date, amount: amt, historical: true, historicalLoan: true, sourceRef: e.sourceRef, batchId, source, decisionNo: e.decisionNo === undefined ? undefined : e.decisionNo, note: e.note || undefined };
+      const m = db.members.find((y) => y.id === e.memberId), amt = Number(e.amount), base = { memberId: e.memberId, memberName: m.name, date: e.date, amount: amt, historical: true, historicalLoan: true, sourceRef: e.sourceRef, batchId, source, decisionNo: e.decisionNo === undefined ? undefined : e.decisionNo, note: e.note || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined };
       if (e.kind === "INTEREST") db.loanInterestRecords.push(Object.assign({ id: idFor("LIR", e.sourceRef), loanId: loanIdFor(e.loanKey), kind: "CHARGED", recordedBy: ctx.by, recordedAt: ctx.now }, base, { historicalLoan: undefined }));
       else if (e.kind === "DISBURSEMENT") db.transactions.push(Object.assign({ id: idFor("HIS", e.sourceRef), type: DISB, purpose: "Historical loan paid out", histLoanId: loanIdFor(e.loanKey), approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now }, base));
       else db.transactions.push(Object.assign({ id: idFor("HIS", e.sourceRef), type: REPAY, purpose: "Historical loan repayment", histLoanIds: (e.loanKeys || []).map(loanIdFor), approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now }, base));
@@ -1728,7 +1729,7 @@
           const dp = Math.min(amt, Math.max(0, s.disbursed - s.principalPaid)); s.principalPaid += dp; amt -= dp;
           if (di || dp) { parts.push({ loanId: l.id, interest: di, principal: dp }); s.payments.push({ date: e.t.date, entryId: e.t.id, interest: di, principal: dp }); } });
         if (amt > 0) excess += amt;
-        steps.push({ entryId: e.t.id, date: e.t.date, amount: Number(e.t.amount), parts, excess: amt > 0 ? amt : 0, decisionNo: e.t.decisionNo, sourceRef: e.t.sourceRef });
+        steps.push({ entryId: e.t.id, date: e.t.date, amount: Number(e.t.amount), parts, excess: amt > 0 ? amt : 0, decisionNo: e.t.decisionNo, sourceRef: e.t.sourceRef, dateUnknown: !!e.t.dateUnknown });
       }
     });
     return { states: st, steps, excess, loans };
@@ -2290,10 +2291,10 @@
     }
     if (ctl.financialYears !== undefined) add("Financial years defined by share-out", ctl.financialYears, FY.table(db).length);
     const histLoans = (db.historicalLoans || []).filter((l) => !l.voided).map((l) => { const p = HL.position(db, l.id, asOf), mm = db.members.find((x) => x.id === l.memberId) || {};
-      return { loanId: l.id, memberId: l.memberId, member: mm.name || l.memberId, date: l.date, registerAmount: l.registerAmount, disbursed: p.disbursed, interestCharged: p.interestCharged, interestReceived: p.interestReceived, principalRepaid: p.principalRepaid, interestOutstanding: p.interestOutstanding, principalOutstanding: p.principalOutstanding, status: p.status, evidence: l.registerRef + (l.note ? " - " + l.note : "") }; });
+      return { loanId: l.id, memberId: l.memberId, member: mm.name || l.memberId, date: l.date, registerAmount: l.registerAmount, disbursed: p.disbursed, interestCharged: p.interestCharged, interestReceived: p.interestReceived, principalRepaid: p.principalRepaid, interestOutstanding: p.interestOutstanding, principalOutstanding: p.principalOutstanding, status: p.status, registerCorrection: l.registerCorrection || null, evidence: l.registerRef + (l.note ? " - " + l.note : "") + (l.registerCorrection ? " | CORRECTED by Chairperson: " + l.registerCorrection : "") }; });
     const remaining = [];
     histLoans.filter((x) => x.interestOutstanding + x.principalOutstanding > 0).forEach((x) => remaining.push({ item: "Historical loan not settled by the records: " + x.memberId + " " + x.member + " (" + x.loanId + ")", amount: x.interestOutstanding + x.principalOutstanding, detail: "principal " + x.principalOutstanding + " + interest " + x.interestOutstanding + " unpaid at the last record; no record carries it into the current loan register or settles it" }));
-    histLoans.filter((x) => x.registerAmount != null && x.registerAmount !== x.disbursed).forEach((x) => remaining.push({ item: "Loan register amount differs from the disbursements recorded: " + x.memberId + " " + x.member, amount: x.registerAmount - x.disbursed, detail: "register " + x.registerAmount + " vs member-sheet disbursements " + x.disbursed }));
+    histLoans.filter((x) => x.registerAmount != null && x.registerAmount !== x.disbursed && !x.registerCorrection).forEach((x) => remaining.push({ item: "Loan register amount differs from the disbursements recorded: " + x.memberId + " " + x.member, amount: x.registerAmount - x.disbursed, detail: "register " + x.registerAmount + " vs member-sheet disbursements " + x.disbursed }));
     [...new Set((db.historicalLoans || []).map((l) => l.memberId))].forEach((mid) => { const w = HL.walk(db, mid, asOf); if (w.excess > 0) remaining.push({ item: "Repayments above what the records show as due: " + mid + " " + ((db.members.find((x) => x.id === mid) || {}).name || ""), amount: w.excess, detail: "kept visible; no interest or loan record explains it" }); });
     rows.filter((r) => r.savings < 0).forEach((r) => remaining.push({ item: "Negative savings: " + r.id + " " + r.name, amount: r.savings, detail: "the recorded withdrawals/share-outs exceed the recorded deposits" }));
     (pack.observations || []).forEach((o2) => remaining.push({ item: o2.item, amount: o2.amount === undefined ? "" : o2.amount, detail: o2.detail }));
@@ -2368,7 +2369,7 @@
     const w = HL.walk(db, l.memberId, asOf), st = w.states[loanId], rows = []; let left = 0;
     st.components.forEach((c) => rows.push({ date: c.date, event: "Loan paid out" + (c.decisionNo ? " (decision #" + c.decisionNo + ")" : ""), amount: c.amount, interest: "", principal: "" }));
     st.charges.forEach((c) => rows.push({ date: c.date, event: "Interest charged" + (c.decisionNo ? " (decision #" + c.decisionNo + ")" : ""), amount: c.amount, interest: "", principal: "" }));
-    w.steps.forEach((x) => { const part = x.parts.find((q) => q.loanId === loanId); if (part) rows.push({ date: x.date, event: "Repayment" + (x.decisionNo ? " (decision #" + x.decisionNo + ")" : ""), amount: x.amount, interest: part.interest, principal: part.principal }); });
+    w.steps.forEach((x) => { const part = x.parts.find((q) => q.loanId === loanId); if (part) rows.push({ date: x.date, event: "Repayment" + (x.dateUnknown ? " - date not recorded in the source; listed after this date" : "") + (x.decisionNo ? " (decision #" + x.decisionNo + ")" : ""), amount: x.amount, interest: part.interest, principal: part.principal }); });
     rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)); const out = rows.map((r) => { if (r.event.indexOf("Loan paid out") === 0) left += r.amount; else if (r.event.indexOf("Interest charged") === 0) left += r.amount; else left -= (Number(r.interest) || 0) + (Number(r.principal) || 0); return Object.assign({}, r, { date: dates.toDisplay(r.date), owedAfter: left }); });
     return R("Historical loan statement — " + nm(db, l.memberId) + " (" + l.registerRef + ")", ["date", "event", "amount", "interest", "principal", "owedAfter"], out, { evidence: l.evidence }, { date: "Date", event: "Event", amount: "Amount", interest: "To interest", principal: "To loan", owedAfter: "Owed after" });
   }

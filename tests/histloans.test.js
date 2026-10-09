@@ -54,4 +54,13 @@ t("reports: the historical loan book and a loan statement list every event with 
   const db = fresh(); load(db); const rep = FR.historicalLoans(db, "2026-10-08"); assert.equal(rep.rows.length, 2); assert.equal(rep.totals.principalUnpaid, 77500); assert.equal(rep.rows[1].registerAmount, 2000000, "register amount shown beside what was disbursed");
   const st = FR.historicalLoanStatement(db, HL.loanIdFor("A2"), "2026-10-08"); assert.ok(st.rows.some((r) => /decision #5/.test(r.event))); assert.equal(st.rows[st.rows.length - 1].owedAfter, 77500);
 });
+t("an undated repayment keeps its source position (no date invented) and a Chairperson-corrected register amount is recorded, not overwritten", () => {
+  const db = fresh(); const acc = ACC.map((a) => a.key === "A2" ? Object.assign({}, a, { registerCorrection: "register overstated by 450000" }) : a);
+  const ev = EV.concat([{ kind: "REPAYMENT", memberId: "SOB-001", dateUnknown: true, dateAfter: "2025-11-09", amount: 10000, sourceRef: "s10", loanKeys: ["A1", "A2"], decisionNo: "R3" }]);
+  CMD.run(db, at("2026-10-08"), "importHistoricalLoans", { batchId: "HL", source: "test", accounts: acc, events: ev });
+  const x = db.transactions.find((y) => y.sourceRef === "s10"); assert.equal(x.dateUnknown, true); assert.equal(x.dateAfter, "2025-11-09"); assert.equal(x.date, "2025-11-09");
+  assert.throws(() => CMD.run(fresh(), at("2026-10-08"), "importHistoricalLoans", { batchId: "H2", source: "t", accounts: ACC, events: [{ kind: "REPAYMENT", memberId: "SOB-001", dateUnknown: true, amount: 5, sourceRef: "q", loanKeys: ["A1"] }] }), /dateAfter/);
+  const l = db.historicalLoans.find((y) => y.key === "A2"); assert.equal(l.registerAmount, 2000000); assert.match(l.registerCorrection, /overstated/);
+  assert.equal(HL.position(db, HL.loanIdFor("A2")).principalOutstanding, 77500 - 10000);
+});
 console.log(pass + " historical-loan tests passed");

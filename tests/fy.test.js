@@ -35,7 +35,7 @@ t("opening, movements, closing and carry-forward chain from year to year and tie
   const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS });
   const p24 = FY.position(db, 2024), p25 = FY.position(db, 2025), p26 = FY.position(db, 2026), a = (p) => p.rows.find((r) => r.memberId === "SOB-001");
   assert.deepEqual([a(p24).opening, a(p24).deposits, a(p24).shareOuts, a(p24).closing, a(p24).carriedForward], [0, 1000, 700, 300, 300]);
-  assert.deepEqual([a(p25).opening, a(p25).deposits, a(p25).profit, a(p25).withdrawals, a(p25).shareOuts, a(p25).closing], [300, 150, 20, 10, 300, 160]);
+  assert.deepEqual([a(p25).opening, a(p25).deposits, a(p25).profit, a(p25).withdrawals, a(p25).shareOuts, a(p25).closing], [300, 150, 20, 0, 310, 160]);
   assert.deepEqual([a(p26).opening, a(p26).deposits, a(p26).closing, a(p26).carriedForward], [160, 45, 205, null]);
   assert.equal(a(p26).closing, L.memberSavings(db, "SOB-001")); assert.deepEqual(FY.check(db), []);
   const m = FY.memberYears(db, "SOB-001"); assert.equal(m[1].opening, m[0].closing); assert.equal(m[2].opening, m[1].closing);
@@ -51,5 +51,9 @@ t("executing a share-out opens the next financial year ON the share-out day (not
 });
 t("annual summary follows the share-out dates", () => {
   const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS }); assert.ok(/FY2025 summary \(01\/12\/2024|FY2025 summary/.test(R.annualSummary(db, 2025).title));
+});
+t("a cash-out recorded on the share-out day is reported as part of that share-out", () => {
+  const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS }); const r = FY.position(db, 2025).rows.find((x) => x.memberId === "SOB-001");
+  assert.equal(r.shareOuts, 310, "300 share-out + 10 cash-out typed Withdraw on 21 Dec 2025"); assert.equal(FY.position(db, 2025).totals.withdrawals, FY.position(db, 2025).rows.reduce((a, x) => a + x.withdrawals, 0));
 });
 console.log(pass + " financial-year tests passed");

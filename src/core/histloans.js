@@ -39,7 +39,7 @@
     const keys = new Set([...haveLoan.keys(), ...newAccounts.map((x) => x.key)]), toAdd = [], seenRef = new Set();
     events.forEach((e) => {
       if (!e || !e.sourceRef) return bad("sourceRef required", e); if (!KINDS.includes(e.kind)) return bad("kind must be one of " + KINDS.join("/"), e);
-      if (!members.has(e.memberId)) return bad("unknown member " + e.memberId, e); if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD", e); if (!(Number(e.amount) > 0)) return bad("amount must be positive", e);
+      if (!members.has(e.memberId)) return bad("unknown member " + e.memberId, e); if (e.dateUnknown) { if (!dates.isISO(e.dateAfter)) return bad("dateUnknown events need dateAfter (the last dated source row before it)", e); e.date = e.dateAfter; } if (!dates.isISO(e.date)) return bad("date must be YYYY-MM-DD", e); if (!(Number(e.amount) > 0)) return bad("amount must be positive", e);
       if (e.kind !== "REPAYMENT" && !keys.has(e.loanKey)) return bad("unknown loan " + e.loanKey, e);
       if (e.kind === "REPAYMENT" && (e.loanKeys || []).some((k) => !keys.has(k))) return bad("unknown loan in loanKeys", e);
       if (haveRef.has(e.sourceRef)) { out.alreadyImported++; return; } if (seenRef.has(e.sourceRef)) return bad("duplicate sourceRef inside batch", e); seenRef.add(e.sourceRef); toAdd.push(e);
@@ -51,11 +51,11 @@
     db.historicalLoans = db.historicalLoans || []; db.loanInterestRecords = db.loanInterestRecords || [];
     newAccounts.forEach((x) => {
       const m = db.members.find((y) => y.id === x.memberId);
-      db.historicalLoans.push({ id: loanIdFor(x.key), key: x.key, memberId: x.memberId, memberName: m.name, date: x.date, registerDate: x.registerDate || "", registerAmount: x.registerAmount === undefined ? null : Number(x.registerAmount), registerRef: x.registerRef || "", evidence: String(x.evidence), note: x.note || "", historical: true, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now });
+      db.historicalLoans.push({ id: loanIdFor(x.key), key: x.key, memberId: x.memberId, memberName: m.name, date: x.date, registerDate: x.registerDate || "", registerAmount: x.registerAmount === undefined ? null : Number(x.registerAmount), registerRef: x.registerRef || "", evidence: String(x.evidence), note: x.note || "", registerCorrection: x.registerCorrection || undefined, historical: true, batchId, source, recordedBy: ctx.by, recordedAt: ctx.now });
       G.audit(db, ctx, "HistoricalLoan", loanIdFor(x.key), "Recorded", null, { memberId: x.memberId, date: x.date, registerRef: x.registerRef || "" }, String(x.evidence).slice(0, 300));
     });
     toAdd.forEach((e) => {
-      const m = db.members.find((y) => y.id === e.memberId), amt = Number(e.amount), base = { memberId: e.memberId, memberName: m.name, date: e.date, amount: amt, historical: true, historicalLoan: true, sourceRef: e.sourceRef, batchId, source, decisionNo: e.decisionNo === undefined ? undefined : e.decisionNo, note: e.note || undefined };
+      const m = db.members.find((y) => y.id === e.memberId), amt = Number(e.amount), base = { memberId: e.memberId, memberName: m.name, date: e.date, amount: amt, historical: true, historicalLoan: true, sourceRef: e.sourceRef, batchId, source, decisionNo: e.decisionNo === undefined ? undefined : e.decisionNo, note: e.note || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined };
       if (e.kind === "INTEREST") db.loanInterestRecords.push(Object.assign({ id: idFor("LIR", e.sourceRef), loanId: loanIdFor(e.loanKey), kind: "CHARGED", recordedBy: ctx.by, recordedAt: ctx.now }, base, { historicalLoan: undefined }));
       else if (e.kind === "DISBURSEMENT") db.transactions.push(Object.assign({ id: idFor("HIS", e.sourceRef), type: DISB, purpose: "Historical loan paid out", histLoanId: loanIdFor(e.loanKey), approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now }, base));
       else db.transactions.push(Object.assign({ id: idFor("HIS", e.sourceRef), type: REPAY, purpose: "Historical loan repayment", histLoanIds: (e.loanKeys || []).map(loanIdFor), approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now }, base));
@@ -83,7 +83,7 @@
           const dp = Math.min(amt, Math.max(0, s.disbursed - s.principalPaid)); s.principalPaid += dp; amt -= dp;
           if (di || dp) { parts.push({ loanId: l.id, interest: di, principal: dp }); s.payments.push({ date: e.t.date, entryId: e.t.id, interest: di, principal: dp }); } });
         if (amt > 0) excess += amt;
-        steps.push({ entryId: e.t.id, date: e.t.date, amount: Number(e.t.amount), parts, excess: amt > 0 ? amt : 0, decisionNo: e.t.decisionNo, sourceRef: e.t.sourceRef });
+        steps.push({ entryId: e.t.id, date: e.t.date, amount: Number(e.t.amount), parts, excess: amt > 0 ? amt : 0, decisionNo: e.t.decisionNo, sourceRef: e.t.sourceRef, dateUnknown: !!e.t.dateUnknown });
       }
     });
     return { states: st, steps, excess, loans };
