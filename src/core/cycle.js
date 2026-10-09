@@ -30,7 +30,9 @@
   function ensureCycle(db, year, openedDate) {
     db.yearCycles = db.yearCycles || [];
     let c = db.yearCycles.find((x) => x.year === Number(year));
-    if (!c) { c = { year: Number(year), status: "Open", openedDate: openedDate || year + "-01-01", closedDate: null, shareOutId: null }; db.yearCycles.push(c); }
+    /* A year begins the day the previous year's share-out was held (never an assumed 1 January); only the very first year falls back to 1 January. */
+    const prev = db.yearCycles.filter((x) => x.year < Number(year) && x.closedDate).sort((a, b) => b.year - a.year)[0];
+    if (!c) { c = { year: Number(year), status: "Open", openedDate: openedDate || (prev && prev.closedDate) || year + "-01-01", closedDate: null, shareOutId: null }; db.yearCycles.push(c); }
     return c;
   }
 
@@ -71,7 +73,7 @@
     event.totalWithdrawn = event.entries.reduce((a, e) => a + e.savingsWithdrawn, 0);
     (db.shareOutEvents = db.shareOutEvents || []).push(event);
     Object.assign(cycle, { status: "Closed", closedDate: date, shareOutId: event.id });
-    ensureCycle(db, year + 1, dates.addDays(date, 1)); // next cycle begins automatically; nothing is deleted
+    ensureCycle(db, year + 1, date); // the next financial year begins on the share-out day itself (entries other than the share-out belong to it); nothing is deleted
     G.audit(db, ctx, "YearCycle", String(year), "Share-out executed and year closed", { status: "Open" }, { status: "Closed", totalWithdrawn: event.totalWithdrawn, loanHolders: event.loanHolders.length, committedRetained: pv.totals.committedRetained }, o.reason);
     return event;
   }

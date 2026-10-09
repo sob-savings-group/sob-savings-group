@@ -43,7 +43,7 @@
       if (a.dryRun) return;
       const m = db.members.find((x) => x.id === e.memberId);
       db.transactions.push({ id: idFor(e.sourceRef), date: e.date, memberId: e.memberId, memberName: m.name, amount: amt, type: e.type, purpose: e.purpose || e.type,
-        historical: true, originalName: e.originalName || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined, dateBefore: e.dateUnknown && e.dateBefore ? e.dateBefore : undefined, sourceOrder: e.sourceOrder === undefined ? undefined : e.sourceOrder, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
+        historical: true, originalName: e.originalName || undefined, dateUnknown: e.dateUnknown ? true : undefined, dateAfter: e.dateUnknown ? e.dateAfter : undefined, dateBefore: e.dateUnknown && e.dateBefore ? e.dateBefore : undefined, sourceOrder: e.sourceOrder === undefined ? undefined : e.sourceOrder, decisionNo: e.decisionNo === undefined ? undefined : e.decisionNo, originalAmount: e.originalAmount === undefined ? undefined : Number(e.originalAmount), correctionNote: e.correctionNote || undefined, sourceRef: e.sourceRef, batchId, source, approvalStatus: "Approved", approvedBy: ctx.by, approvedAt: ctx.now, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now });
     });
     /* Audit ANNOTATIONS: workbook rows with no amount, no date or a zero amount. They are disclosed and kept for the record but are NEVER ledger transactions. */
     const have = new Set((db.historicalNotes || []).map((n) => n.sourceRef));

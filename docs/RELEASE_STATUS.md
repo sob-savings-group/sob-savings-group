@@ -50,3 +50,11 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 ## Candidate 5 - settled decisions applied
 - Bishop = SOB-003; undated rows keep source position (dateUnknown/dateAfter/dateBefore); consolidated loans keep `components` via the Chairperson-gated `recordLoanComponents`; `guarantorPolicyStart` 2027-01-01; report shows deposits, profit, withdrawals, share-outs and actual savings; one-step `installSOBRecords`.
 - Tests: tests/decisions.test.js, tests/loader.test.js, tests/install.test.js, e2e/records.js.
+
+## Candidate 6 - financial years, historical loans, General Reserve, profit reconciliation
+- **Financial years follow the actual share-outs** (`src/core/fy.js`): each year closes at its approved share-out and the next opens that same day; 31 December is never assumed. Savings not withdrawn carry forward. Years are defined once, with evidence, by the loader (idempotent; changing a defined year is refused).
+- **Historical loan accounts** (`src/core/histloans.js`): separate from today's loan book (no effect on savings, cash or loans owed). Interest is a loan-interest record, repayments are allocated interest-first, oldest loan first (derived, never duplicated). Unsupported loan accounts are never created: gaps are reported.
+- **SOB General Reserve Fund** (`src/core/reserve.js`): collective; only verified, unallocated group profit can enter it; every movement needs evidence, Admin request + Chairperson approval, audited. Members' savings and approved-but-uncollected distributions can never be moved.
+- **Profit reconciliation** (`src/core/profitrec.js`, `finreports.js`): charged / received / receivable / credited / undistributed / reserve per year. Member credits are never presented as group profit earned; gaps are shown, not plugged.
+- **Reconciliation report** shows original, approved correction, revised and remaining differences for every account. The earlier savings total is not presented as verified.
+- Tested locally: tests/fy, histloans, reserve, loader, decisions, install; e2e/records. NOT yet verified on the real Google Sheet and not live-tested. The current production system stays until the corrected package is installed and verified there.

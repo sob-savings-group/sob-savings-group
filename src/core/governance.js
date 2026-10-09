@@ -9,7 +9,7 @@
   /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
      (reviews/approves, never inputs). The Treasurer reviews (read-only on figures). "Committee" is the generic read-only reviewer. */
   const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
-    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
+    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "reserve.manage", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
   const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
   const READ = ["report.view", "audit.view", "shareout.preview"];
   const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones

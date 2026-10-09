@@ -16,7 +16,7 @@ const o = { approvedBy: "Test Approver, Admin, 8 Oct 2026", asOf: "2026-10-08" }
   let r1;
   await t("first load: every check passes, 1 correction requested, repayment waits", async () => {
     r1 = await LD.load(api, pack, o); assert.ok(r1.ok, JSON.stringify(r1.checks.filter((c) => !c.pass))); assert.equal(r1.pending.length, 3); assert.ok(r1.checks.some((c) => /wait for the Chairperson/.test(c.name)));
-    const db = (await api({ action: "getLedger" })).db; assert.equal(db.members.length, pack.controls.members); assert.equal(db.transactions.filter((x) => x.historical).length, 6); const u = db.transactions.find((x) => x.sourceRef === "T|b|r9"); assert.ok(u && u.dateUnknown === true && u.date === "2023-07-01" && u.dateBefore === "2023-12-21", "undated row keeps its source position without an invented date"); assert.ok((db.historicalNotes || []).some((n) => /LOAN EVENT/.test(n.note) && n.isTransaction === false)); assert.equal(db.discrepancies.find((d) => d.subject === pack.discrepancies[0].subject).status, "Resolved"); assert.equal(db.discrepancies.length, pack.discrepancies.length);
+    const db = (await api({ action: "getLedger" })).db; assert.equal(db.members.length, pack.controls.members); assert.equal(db.transactions.filter((x) => x.historical && !x.historicalLoan).length, 6); const u = db.transactions.find((x) => x.sourceRef === "T|b|r9"); assert.ok(u && u.dateUnknown === true && u.date === "2023-07-01" && u.dateBefore === "2023-12-21", "undated row keeps its source position without an invented date"); assert.ok((db.historicalNotes || []).some((n) => /LOAN EVENT/.test(n.note) && n.isTransaction === false)); assert.equal(db.discrepancies.find((d) => d.subject === pack.discrepancies[0].subject).status, "Resolved"); assert.equal(db.discrepancies.length, pack.discrepancies.length);
   });
   await t("the Super Admin cannot approve their own requests", async () => { const db = (await api({ action: "getLedger" })).db; const q = db.approvalRequests[0]; assert.ok(!(await api({ action: "command", name: "approveRequest", args: { id: q.id } })).ok); });
   await t("Chairperson approves; second load records the replacement repayment once", async () => {
@@ -24,12 +24,19 @@ const o = { approvedBy: "Test Approver, Admin, 8 Oct 2026", asOf: "2026-10-08" }
     const r2 = await LD.load(api, pack, o); assert.ok(r2.ok, JSON.stringify(r2.checks.filter((c) => !c.pass))); assert.equal(r2.pending.length, 0);
     db = (await api({ action: "getLedger" })).db; assert.equal(db.transactions.filter((x) => /test split/.test(x.purpose || "") && !x.voided).length, 1); const l2 = db.loans.find((l) => l.components); assert.ok(l2 && l2.components.length === 2 && l2.components.reduce((a, c) => a + c.amount, 0) === l2.loanAmount, "consolidated loan keeps one account and its components");
   });
+  await t("historical loans, interest records and financial years are loaded once, apart from the live loan book", async () => {
+    const db = (await api({ action: "getLedger" })).db, FYM = require("../src/core/fy.js"), HL = require("../src/core/histloans.js");
+    assert.equal(db.historicalLoans.length, 1); assert.equal(db.loanInterestRecords.length, 1); assert.equal(db.transactions.filter((x) => x.historicalLoan).length, 2);
+    assert.deepEqual(FYM.table(db).map((y) => y.label + ":" + y.openedDate + ":" + (y.closedDate || "open")), ["FY2023:2023-05-19:2023-12-21", "FY2025:2023-12-21:2025-12-21", "FY2026:2025-12-21:open"]); assert.deepEqual(FYM.check(db), []);
+    const p = HL.position(db, db.historicalLoans[0].id, o.asOf); assert.deepEqual([p.interestReceived, p.principalRepaid, p.interestOutstanding, p.principalOutstanding], [5000, 55000, 0, 45000]);
+    assert.equal(db.loans.filter((l) => !l.legacy).length, 0, "no historical loan entered the live loan book");
+  });
   await t("running again adds nothing at all", async () => { const a = (await api({ action: "getLedger" })).db, r = await LD.load(api, pack, o), b = (await api({ action: "getLedger" })).db; assert.ok(r.ok); assert.equal(a.transactions.length, b.transactions.length); assert.equal(a.auditLog.length, b.auditLog.length); assert.equal(a.discrepancies.length, b.discrepancies.length); assert.equal(a.approvalRequests.length, b.approvalRequests.length); });
   await t("savings stay cumulative: loans are never netted off; available = savings - commitments", async () => {
     const db = (await api({ action: "getLedger" })).db, rep = LD.build(db, pack, o.asOf); const loanMember = rep.rows.find((x) => x.loanPrincipal > 0);
     assert.ok(loanMember && loanMember.savings === L.memberSavings(db, loanMember.id)); assert.equal(loanMember.available, loanMember.savings - loanMember.committed); assert.equal(loanMember.memoNet, loanMember.savings - loanMember.loanOwed);
     assert.equal(rep.totals.savings, L.computeGroupTotals(db, o.asOf).groupSavings); assert.ok(rep.controls.every((c) => c.pass), JSON.stringify(rep.controls.filter((c) => !c.pass)));
-    assert.equal(LD.asReports(rep).length, 3);
+    assert.equal(LD.asReports(rep).length, 8); assert.deepEqual(rep.remaining.map((x) => x.item).filter((x) => /test observation/.test(x)).length, 1);
   });
   await t("a ledger of demo members is detected as foreign; loading is refused; real ledgers are never purged", async () => {
     const { s: s2, api: a2 } = await boot(); const demo = M.migrateLegacy(synth.build().legacy, "2026-03-31"); assert.ok((await a2({ action: "importSnapshot", db: demo })).ok);

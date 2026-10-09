@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     voidEntry: (db, ctx, a) => { const t = G.voidEntry(db, ctx, a.id, a.reason); LN.onRepaymentRemoved(db, ctx, t, a.reason); return t; },          // a voided repayment re-commits what it released
@@ -46,6 +46,12 @@
     sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
     cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
     importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries || [], annotations: a.annotations, dryRun: a.dryRun }),
+    importHistoricalLoans: (db, ctx, a) => HL.importHistoricalLoans(db, ctx, { batchId: a.batchId, source: a.source, accounts: a.accounts || [], events: a.events || [], dryRun: a.dryRun }),
+    defineFinancialYears: (db, ctx, a) => FYR.defineFinancialYears(db, ctx, { years: a.years }),
+    confirmFYProfit: (db, ctx, a) => RSV.confirmProfit(db, ctx, { year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    utilizeReserve: (db, ctx, a) => RSV.utilizeReserve(db, ctx, { date: a.date, amount: a.amount, purpose: a.purpose, evidence: a.evidence, reason: a.reason }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
@@ -59,6 +65,8 @@
     recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
+    confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
+    transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
   const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -67,6 +75,10 @@
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
     if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "distributeProfit") return "Profit distribution " + a.period;
+    if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
+    if (name === "openReserve") return "Reserve opening balance UGX " + a.amount + " on " + a.date;
+    if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
+    if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
     return a.id || "";
   };

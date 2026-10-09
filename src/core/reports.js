@@ -2,9 +2,9 @@
    the on-screen table, CSV export and print-ready HTML. Blocked (pending SOB decision) reports return {blocked:true, reason}. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./kpis.js") : root.SOB.kpis, isNode ? require("./profit.js") : root.SOB.profit);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./kpis.js") : root.SOB.kpis, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./fy.js") : root.SOB.fy);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reports = api; }
-})(typeof self !== "undefined" ? self : this, function (dates, L, LN, C, K, PR) {
+})(typeof self !== "undefined" ? self : this, function (dates, L, LN, C, K, PR, FY) {
   const name = (db, id) => (db.members.find((m) => m.id === id) || {}).name || id;
   const sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const R = (title, columns, rows, totals) => ({ title, columns, rows, totals: totals || {} });
@@ -72,7 +72,7 @@
     return R("Income & expenses", ["date", "type", "purpose", "amount"], rows, { income: sum(rows.filter((r) => r.type !== "Expense"), "amount"), expenses: sum(rows.filter((r) => r.type === "Expense"), "amount") });
   }
   function shareOut(db, year, asOf) {
-    const p = C.previewShareOut(db, year, asOf || year + "-12-31");
+    const p = C.previewShareOut(db, year, asOf || dates.todayISO());
     return R("December share-out " + year + " (preview)", ["memberId", "name", "savings", "committed", "available", "withdraw", "retained", "outstandingLoan", "savingsAction"], p.rows, p.totals);
   }
   /* Latest posted distribution (or a named period) with every factor and per-member figure; a preview needs pool + date. */
@@ -87,8 +87,10 @@
     return R("Interest vs principal received (" + L.confirmedAllocation(db).replace("_", " ").toLowerCase() + ")", ["loanId", "member", "repaid", "toInterest", "toPenalties", "toPrincipal"], rows, { rule: L.confirmedAllocation(db) });
   }
   function annualSummary(db, year) {
-    const end = year + "-12-31", d = K.dashboard(db, end < dates.todayISO() ? end : dates.todayISO(), { year: Number(year) });   // a year still running is summarised to today, never into the future
-    return R("Annual summary " + year, ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
+    /* A financial year runs from one share-out to the next (never 1 Jan - 31 Dec); a year still running is summarised to today, never into the future. */
+    const cyc = FY.byYear(db, year), today = dates.todayISO(), end = cyc ? (cyc.closedDate && dates.addDays(cyc.closedDate, -1) < today ? dates.addDays(cyc.closedDate, -1) : today) : (year + "-12-31" < today ? year + "-12-31" : today);
+    const d = cyc ? K.dashboard(db, end, { from: cyc.openedDate }) : K.dashboard(db, end, { year: Number(year) });
+    return R((cyc ? "Financial year FY" + year + " summary (" + dates.toDisplay(cyc.openedDate) + " – " + (cyc.closedDate ? dates.toDisplay(cyc.closedDate) : "to date") + ")" : "Annual summary " + year), ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
   }
   const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   function toCSV(rep) {
@@ -137,8 +139,15 @@
     const rows = h.map((t) => ({ Date: dates.toDisplay(t.date), Transaction: TYPE_LABEL[t.type] || t.type, Details: t.purpose && t.purpose !== t.type ? t.purpose : "", Amount: Number(t.amount), "Effect on savings": L.classifyTransaction(t).savings, "Savings balance": t.runningSavings, _open: { kind: "entry", id: t.id } }));
     const rep = R("Savings statement — " + name(db, memberId) + " (" + memberId + ")", cols, rows, {});
     rep.period = from ? dates.longDate(from) + " – " + dates.longDate(asOf) : (period && period.to ? "As at " + dates.longDate(asOf) : undefined);
-    rep.summary = (from ? [["Savings brought forward on " + dates.longDate(from), L.memberSavingsAsOf(db, memberId, dates.addDays(from, -1))]] : []).concat([["Total savings" + (period && period.to ? " (as at " + dates.longDate(asOf) + ")" : ""), pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]]).concat(owed ? [["Loan owed", owed]] : []);
+    rep.summary = (from ? [["Savings brought forward on " + dates.longDate(from), L.memberSavingsAsOf(db, memberId, dates.addDays(from, -1))]] : []).concat([["Total savings" + (period && period.to ? " (as at " + dates.longDate(asOf) + ")" : ""), pos.savings], ["Held for loans you guarantee", pos.committed], ["Available to you", pos.available]]).concat(owed ? [["Loan owed", owed]] : []).concat(fyLines(db, memberId, asOf));
     rep.position = pos; rep.hideTotals = true; return rep;
+  }
+  /* Financial-year lines for a statement: each year is bounded by the actual share-outs, and what was not withdrawn carries forward. */
+  function fyLines(db, memberId, asOf) {
+    const out = []; FY.memberYears(db, memberId).forEach((y) => { if (y.openedDate > asOf || !(y.opening || y.deposits || y.profit || y.withdrawals || y.shareOuts || y.closing)) return;
+      const span = dates.longDate(y.openedDate) + (y.closedDate ? " – " + dates.longDate(y.closedDate) : " – now");
+      out.push([y.label + " (" + span + "): savings brought forward", y.opening]); out.push([y.label + " closing" + (y.closedDate && y.closedDate <= asOf ? " - carried forward to the next year" : " to date"), y.closing]); });
+    return out;
   }
   /* One loan, in plain words: what was paid out, each repayment split into interest and loan, and who guarantees it. */
   function loanMemberStatement(db, loanId, asOf) {

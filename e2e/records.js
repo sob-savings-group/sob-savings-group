@@ -31,7 +31,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok(/DRY RUN/.test(await pg.textContent("#records-result")) && (await pg.locator("#records-report").count()) === 0, "check-only writes nothing");
   await pg.click("#records-load"); await pg.waitForSelector("#records-report", { timeout: 180000 });
   ok(!/FAIL /.test(await pg.textContent("#records-result")), "every check passes after loading");
-  ok((await pg.locator("#records-report table").count()) === 3, "reconciliation report: member table, control totals and exceptions");
+  ok((await pg.locator("#records-report table").count()) >= 8, "reconciliation report: members, controls, financial years, profit, historical loans, reserve and remaining differences");
   ok(/Actual savings/.test(await pg.textContent("#records-report")) && /Available savings/.test(await pg.textContent("#records-report")), "savings and available savings are shown separately");
   const [dl] = await Promise.all([pg.waitForEvent("download"), pg.locator("#records-report >> text=Download CSV").first().click()]); const csv = fs.readFileSync(await dl.path(), "utf8"); ok(/Actual savings/.test(csv) && csv.split("\n").length > 5, "report downloads as CSV");
   await pg.click("#records-load"); await pg.waitForFunction(() => /already in the Sheet/.test((document.querySelector("#records-result") || {}).textContent || ""), null, { timeout: 120000 }); ok(true, "loading again adds nothing twice");
