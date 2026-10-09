@@ -31,6 +31,27 @@
     smsFailures: { sheet: "SmsFailures", cols: [] },
     legacyAdministration: { sheet: "LegacyAdministration", cols: [] }
   };
+  /* GOOGLE SHEETS CONVERTS TEXT THAT LOOKS LIKE A DATE / DATE-TIME / NUMBER into a real date or number when a script writes it, and getValues then returns a Date.
+     Two defences: (1) text columns are formatted as plain text, so Sheets stores exactly what was written; (2) any Date that still comes back is turned into the text it must have been
+     (yyyy-MM-dd for a calendar day, a full ISO timestamp otherwise), using the spreadsheet's own time zone. */
+  const NUMERIC = new Set(["amount", "loanAmount", "assignedMonthlyInterest", "graceMonths", "forYear", "year", "totalWithdrawn", "airtimeAmount", "fee", "total", "attempts"]);
+  const isDate = (v) => Object.prototype.toString.call(v) === "[object Date]" && !isNaN(v.getTime());
+  const tzOf = (ss) => { try { if (ss && ss.getSpreadsheetTimeZone) return ss.getSpreadsheetTimeZone() || "Africa/Kampala"; } catch (e) {} return "Africa/Kampala"; };
+  function stamp(d, tz) {
+    if (typeof Utilities !== "undefined" && Utilities.formatDate) return Utilities.formatDate(d, tz, "yyyy-MM-dd HH:mm:ss");
+    const p = {}; new Intl.DateTimeFormat("en-CA", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(d).forEach((x) => { p[x.type] = x.value; });
+    return p.year + "-" + p.month + "-" + p.day + " " + p.hour + ":" + p.minute + ":" + p.second;
+  }
+  const fixCell = (v, tz) => { if (!isDate(v)) return v; const t = stamp(v, tz); return t.slice(11) === "00:00:00" && v.getMilliseconds() === 0 ? t.slice(0, 10) : v.toISOString(); };
+  function ensureText(sh, cols, needRows) {
+    try {
+      if (!sh.getRange || !sh.getMaxRows) return;
+      let max = sh.getMaxRows(); if (max < needRows + 100) { sh.insertRowsAfter(max, needRows + 500 - max); max = sh.getMaxRows(); }   // formatting can only cover rows that exist
+      const textAt = cols.map((c) => !NUMERIC.has(c)).concat([true]), first = textAt.indexOf(true), probe = sh.getRange(max, first + 1, 1, 1);
+      if (probe.getNumberFormat && probe.getNumberFormat() === "@") return;
+      for (let i = 0; i < textAt.length; i++) { if (!textAt[i]) continue; let j = i; while (j + 1 < textAt.length && textAt[j + 1]) j++; sh.getRange(1, i + 1, max, j - i + 1).setNumberFormat("@"); i = j; }   // one call per run of text columns
+    } catch (e) { /* formatting is a safeguard; reading still repairs any converted value */ }
+  }
   const META = "Meta";
   const enc = (v) => (v === undefined || v === null ? "" : (typeof v === "object" ? "json:" + JSON.stringify(v) : v));
   const dec = (v) => (typeof v === "string" && v.startsWith("json:") ? JSON.parse(v.slice(5)) : v === "" ? undefined : v);
@@ -52,7 +73,7 @@
   function readCollection(ss, k) {
     const c = COLLECTIONS[k]; const sh = ss.getSheetByName(c.sheet);
     if (!sh || sh.getLastRow() < 2) return [];
-    const rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues();
+    const tz = tzOf(ss), rows = sh.getRange(2, 1, sh.getLastRow() - 1, c.cols.length + 1).getValues().map((r) => r.map((v) => fixCell(v, tz)));
     if (!c.cols.length) return rows.map((r) => dec(r[0])).filter((x) => x !== undefined);
     return rows.filter((r) => r.some((v) => v !== "")).map((r) => fromRow(c.cols, r));
   }
@@ -62,8 +83,22 @@
     const rows = c.cols.length ? list.map((o) => toRow(c.cols, o)) : list.map((o) => [enc(o)]); const width = c.cols.length ? c.cols.length + 1 : 1;   // exactly as wide as the range: Sheets rejects ragged data
     rows.forEach((r, i) => r.forEach((v) => { if (typeof v === "string" && v.length > CELL_LIMIT) throw new Error("CELL_TOO_LARGE: " + k + " row " + (i + 1) + " exceeds the Sheets cell limit"); }));
     if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(width, sh.getLastColumn())).clearContent();
+    if (c.cols.length) ensureText(sh, c.cols, rows.length + 1);
     sh.getRange(1, 1, 1, width).setValues([header]);
     if (rows.length) sh.getRange(2, 1, rows.length, width).setValues(rows);
+  }
+  /* An EARLIER version wrote dates that Google Sheets converted and then saved them back in a shifted form. Detect exactly that damage, so the installer can clear the partial install and reload from the verified records. */
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+  function damagedByEarlierVersion(ss) {
+    const bad = (list, f) => list.some((r) => r[f] !== undefined && r[f] !== "" && !(typeof r[f] === "string" && ISO_DAY.test(r[f])));
+    const tx = readCollection(ss, "transactions"), mem = readCollection(ss, "members"), cyc = readCollection(ss, "yearCycles"), loans = readCollection(ss, "loans");
+    const damaged = bad(tx, "date") || bad(mem, "regDate") || bad(cyc, "openedDate") || bad(cyc, "closedDate") || bad(loans, "date");
+    const approved = readCollection(ss, "approvalRequests").some((q) => q && (q.status === "Approved"));
+    return { damaged, approved };
+  }
+  /* Clears every ledger table (never the sign-ins, never the backups). Only ever called by the installer on a partial install, before anything was approved. */
+  function resetPlatformData(ss) {
+    Object.keys(COLLECTIONS).forEach((k) => { if (k === "users") return; const sh = ss.getSheetByName(COLLECTIONS[k].sheet); if (sh && sh.getLastRow() > 1) writeCollection(ss, k, []); });
   }
   function readAll(ss) {
     const db = {};
@@ -91,12 +126,12 @@
   }
   function readMeta(ss) {
     const sh = ss.getSheetByName(META); const m = {};
-    if (sh && sh.getLastRow() >= 1) sh.getRange(1, 1, sh.getLastRow(), 2).getValues().forEach((r) => { if (r[0]) m[r[0]] = r[1]; });
+    if (sh && sh.getLastRow() >= 1) { const tz = tzOf(ss); sh.getRange(1, 1, sh.getLastRow(), 2).getValues().forEach((r) => { if (r[0]) m[r[0]] = fixCell(r[1], tz); }); }
     return m;
   }
   function writeMeta(ss, m) {
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, writeChanged, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow };
+  return { COLLECTIONS, writeChanged, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow, damagedByEarlierVersion, resetPlatformData };
 });

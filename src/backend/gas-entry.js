@@ -104,7 +104,13 @@ function installSOBRecords(){
   var api = function(b){ return __M['backend/api'].handle(env, Object.assign({ token: token }, b)); };
   var log = function(m){ Logger.log(m); };
   /* Demo clean-up: only when EVERY member is a "Demo Member NNN" sample record and none is a real SOB member (the server enforces this again and takes a backup first). */
-  var cur = S.readAll(env.ss), pre = [];
+  var pre = [], dmg = S.damagedByEarlierVersion(env.ss);
+  if (dmg.damaged) {
+    if (dmg.approved) throw new Error("The records in this Sheet were saved by an earlier version AND approvals have already been made. Nothing was changed. Please send this message to your support person.");
+    S.resetPlatformData(env.ss); log("Cleared a partial install made by the previous version (dates were saved incorrectly). Nothing had been approved. Reloading from the verified records…");
+    pre.push("PASS Partial install from the previous version cleared (nothing had been approved); reloaded from the verified records");
+  }
+  var cur = S.readAll(env.ss);
   if (cur.members.length && cur.members.every(function(m){ return /^demo member \d+$/i.test(String(m.name).trim()); })) {
     var pr = api({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames: cur.members.map(function(m){ return m.name; }), realNames: LD.realNames(pack) });
     pre.push((pr.ok ? "PASS Demo records removed (backup " + pr.backup + "); " + JSON.stringify(pr.removed) : "FAIL Demo clean-up: " + pr.error));
