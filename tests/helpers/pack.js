@@ -30,6 +30,7 @@ function makePack() {
       { name: "voidEntry", args: { id: rep.id, reason: "test consolidated" } },
       { name: "createEntry", args: { date: "2026-01-02", memberId: rep.memberId, amount: rep.amount, type: "Loan Repayment", loanId: rep.loanId, purpose: "Loan Repayment (test split)" } }] },
     controls: { members: legacy.members.length + 1, legacyTransactions: legacy.transactions.length, historyEntries: entries.length, historyByType: by, heldExceptions: 0, annotations: 1, historyLoanAccounts: 1, historyLoanEvents: { DISBURSEMENT: { count: lcount("DISBURSEMENT"), sum: lsum("DISBURSEMENT") }, INTEREST: { count: lcount("INTEREST"), sum: lsum("INTEREST") }, REPAYMENT: { count: lcount("REPAYMENT"), sum: lsum("REPAYMENT") } }, financialYears: 3 },
+    coverage: { rows: entries.map((e) => e.sourceRef).concat(loans.events.map((e) => e.sourceRef.split("#")[0])), unaccounted: 0, blankRows: [] },
     missing: ["test: identity of a sheet"], decisions: ["test decision"], baseline: null, observations: [{ item: "test observation", amount: 1, detail: "synthetic" }]
   };
 }

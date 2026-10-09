@@ -144,7 +144,7 @@
     if (!o.dryRun && pack.plan && pack.plan.steps) {
       say("Submitting the approved corrections for the Chairperson…");
       db = await read();
-      const reqs = db.approvalRequests || [], targetOf = (s) => s.args.loanId || s.args.id;
+      const reqs = db.approvalRequests || [], targetOf = (s) => s.args.loanId || s.args.id || s.args.year;
       const voidStep = pack.plan.steps.find((s) => s.name === "voidEntry"), voided = voidStep && (db.transactions.find((t) => t.id === voidStep.args.id) || {}).voided;
       let submitted = 0, already = 0, waiting = 0, created = 0;
       for (const s of pack.plan.steps) {
@@ -173,6 +173,11 @@
       if (closed) c.add("register: " + closed + " loan-date item(s) closed because their approved correction is now applied", true);
     }
     db = await read();
+    if (pack.coverage && pack.coverage.rows) {
+      const have = new Set(); db.transactions.forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.loanInterestRecords || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); }); (db.historicalNotes || []).forEach((x) => { if (x.sourceRef) have.add(String(x.sourceRef).split("#")[0]); });
+      const gone = pack.coverage.rows.filter((r) => !have.has(r));
+      c.add("every numeric row of the member sheets is accounted for: " + pack.coverage.rows.length + " rows posted, recorded as loan events or kept as audit notes; " + (pack.coverage.blankRows || []).length + " dated rows without an amount are held and disclosed, none posted", gone.length === 0 && pack.coverage.unaccounted === 0, gone.slice(0, 5).join(", "));
+    }
     const un = I.unaccounted(db, asOf); c.add("ledger integrity: every error is accounted for in the reconciliation register", un.length === 0, un.map((f) => f.code + " " + f.detail).join("; "));
     return { ok: c.ok, checks: c.list, state: inspect(db, pack).state, pending };
   }
@@ -230,7 +235,7 @@
       R("Financial years (set by the actual share-outs)", ["label", "openedDate", "closedDate", "status", "opening", "deposits", "profit", "withdrawals", "shareOuts", "closing", "carriedForward"], rep.years.map((y) => Object.assign({}, y, { openedDate: D.toDisplay(y.openedDate), closedDate: y.closedDate ? D.toDisplay(y.closedDate) : "open", carriedForward: y.carriedForward === null ? "" : y.carriedForward })), {}, { label: "Year", openedDate: "Began", closedDate: "Share-out held", status: "Status", opening: "Opening (carried in)", deposits: "Savings deposited", profit: "Profit credited", withdrawals: "Withdrawals", shareOuts: "Share-outs paid", closing: "Closing", carriedForward: "Carried forward to next year" }),
       R("Profit reconciliation by financial year", ["label", "interestCharged", "interestReceived", "interestReceivable", "otherIncome", "expenses", "earnedRecorded", "profitCredited", "undistributed", "groupLedgerProfit", "verifiedProfit", "reservedFromYear"], rep.profit.map((p) => Object.assign({}, p, { verifiedProfit: p.verifiedProfit === null ? "not verified" : p.verifiedProfit })), { memberProfitCreditsAllYears: rep.profitCredited.total }, { label: "Year", interestCharged: "Loan interest charged", interestReceived: "Loan interest received", interestReceivable: "Interest receivable at year end", otherIncome: "Other income", expenses: "Expenses", earnedRecorded: "Profit earned (recorded)", profitCredited: "Profit credited to members", undistributed: "Undistributed (earned less credited)", groupLedgerProfit: "Group bank-ledger profit (archive)", verifiedProfit: "Verified by Chairperson", reservedFromYear: "Moved to General Reserve" }),
       R("Historical loan accounts (before the current loan register)", ["memberId", "member", "date", "registerAmount", "disbursed", "interestCharged", "interestReceived", "principalRepaid", "interestOutstanding", "principalOutstanding", "status", "evidence"], rep.histLoans, {}, { memberId: "ID", member: "Member", date: "Date", registerAmount: "Loan register amount", disbursed: "Disbursed (member sheet)", interestCharged: "Interest charged", interestReceived: "Interest received", principalRepaid: "Principal repaid", interestOutstanding: "Interest unpaid", principalOutstanding: "Principal unpaid", status: "Status", evidence: "Evidence" }),
-      R("General Reserve Fund", ["label", "opening", "openingBalanceIntroduced", "transfers", "utilization", "closing"], rep.reserve.rows, { balance: rep.reserve.balance }, { label: "Year", opening: "Opening", openingBalanceIntroduced: "Opening balance recorded", transfers: "Approved transfers in", utilization: "Utilised", closing: "Closing" }),
+      R("General Reserve Fund", ["label", "opening", "openingBalanceIntroduced", "transfers", "losses", "utilization", "closing"], rep.reserve.rows, { balance: rep.reserve.balance }, { label: "Year", opening: "Opening", openingBalanceIntroduced: "Opening balance recorded", transfers: "Verified profit transferred in", losses: "Verified losses reflected", utilization: "Utilised", closing: "Closing" }),
       R("Reconciliation: remaining differences (not adjusted, for the Chairperson)", ["item", "amount", "detail"], rep.remaining, { total: rep.remaining.length }, { item: "Item", amount: "UGX", detail: "Evidence" }),
       R("Reconciliation: control totals", ["name", "expected", "actual", "pass", "note"], rep.controls.map((c) => Object.assign({}, c, { pass: c.pass ? "OK" : "DIFFERENT" })), {}, { name: "Control", expected: "Source records", actual: "Platform", pass: "Result", note: "Note" }),
       R("Reconciliation: exceptions and open items", ["kind", "subject", "summary", "status", "decision"], rep.register, { total: rep.register.length }, { kind: "Kind", subject: "Subject", summary: "What is uncertain", status: "Status", decision: "Decision" })

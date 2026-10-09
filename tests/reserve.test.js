@@ -58,4 +58,28 @@ t("the opening balance can be recorded once, with evidence; Treasurer, Member an
   assert.throws(() => CMD.run(db, at("2026-10-09"), "openReserve", { date: "2025-12-21", amount: 1, evidence: "e", reason: "r" }), /ALREADY_OPENED/);
   ["treas", "member", "chair"].forEach((w) => assert.throws(() => CMD.run(db, at("2026-10-09", w), "transferToReserve", { year: 2025, date: "2026-10-09", amount: 1, evidence: "e", reason: "r" }), /FORBIDDEN/));
 });
+const settle = (db, a) => approve(db, CMD.run(db, at("2026-10-09"), "settleFinancialYear", Object.assign({ evidence: "ledger", reason: "year-end policy" }, a)));
+t("settling a completed year moves the verified unallocated profit into the reserve; the figure is computed from the records, not typed in", () => {
+  const db = world(); assert.throws(() => CMD.run(db, at("2026-10-09"), "settleFinancialYear", { year: 2025, expectedResult: 999, evidence: "e", reason: "r" }), /RESULT_DIFFERS/);
+  assert.throws(() => CMD.run(db, at("2026-10-09", "treas"), "settleFinancialYear", { year: 2025, evidence: "e", reason: "r" }), /FORBIDDEN|PERMISSION/i);
+  const r = CMD.run(db, at("2026-10-09"), "settleFinancialYear", { year: 2025, expectedResult: 200000, evidence: "ledger", reason: "policy" }); assert.ok(r.pendingApproval, "the Super Admin only requests");
+  assert.equal(RS.balance(db), 0, "nothing moves before the Chairperson approves"); approve(db, r);
+  assert.equal(RS.balance(db), 110000, "200,000 earned less 90,000 credited to members"); const c = FY.byYear(db, 2025); assert.equal(c.verifiedProfit, 200000); assert.equal(c.settled.reserveMovement, 110000);
+  assert.throws(() => CMD.run(db, at("2026-10-09"), "settleFinancialYear", { year: 2025, evidence: "e", reason: "r" }), /ALREADY_SETTLED/);
+  assert.equal(L.memberSavings(db, "SOB-001"), 1060000, "member savings untouched"); assert.equal(L.memberSavings(db, "SOB-002"), 530000);
+  const st = RS.statement(db).rows; assert.deepEqual(st.map((x) => [x.label, x.opening, x.transfers, x.closing]), [["FY2025", 0, 110000, 110000], ["FY2026", 110000, 0, 110000]], "the balance carries into FY2026");
+});
+t("a year whose distributions exceeded its verified result reflects the loss; the negative balance carries forward", () => {
+  const db = world(); CMD.run(db, at("2026-10-08"), "importHistoricalEntries", { batchId: "B2", source: "t", entries: [{ memberId: "SOB-001", date: "2025-09-10", amount: 500000, sourceRef: "p9", type: "Profit" }] });
+  settle(db, { year: 2025 }); assert.equal(RS.balance(db), -390000, "200,000 earned - 590,000 credited"); const e = RS.live(db)[0]; assert.equal(e.kind, "LOSS");
+  const row = RS.statement(db).rows; assert.equal(row[0].losses, 390000); assert.equal(row[1].opening, -390000, "negative balance carried into FY2026");
+  assert.throws(() => CMD.run(db, at("2026-10-09"), "utilizeReserve", { date: "2026-10-09", amount: 1, purpose: "x", evidence: "e", reason: "r" }), /INSUFFICIENT_RESERVE/, "a negative reserve cannot be spent");
+});
+t("the open year is excluded: its result stays separate until it closes", () => {
+  const db = world(); assert.throws(() => CMD.run(db, at("2026-10-09"), "settleFinancialYear", { year: 2026, evidence: "e", reason: "r" }), /OPEN_YEAR/); assert.equal(RS.balance(db), 0);
+});
+t("settling never touches member savings, loans owed or unexplained differences", () => {
+  const db = world(); const before = JSON.stringify([L.computeGroupTotals(db), (db.historicalLoans || []).length]); settle(db, { year: 2025 });
+  assert.equal(JSON.stringify([L.computeGroupTotals(db), (db.historicalLoans || []).length]), before);
+});
 console.log(pass + " reserve and profit-reconciliation tests passed");

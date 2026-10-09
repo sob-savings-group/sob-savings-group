@@ -48,14 +48,14 @@
     return R("Historical loan statement — " + nm(db, l.memberId) + " (" + l.registerRef + ")", ["date", "event", "amount", "interest", "principal", "owedAfter"], out, { evidence: l.evidence }, { date: "Date", event: "Event", amount: "Amount", interest: "To interest", principal: "To loan", owedAfter: "Owed after" });
   }
   function generalReserve(db) {
-    const st = RS.statement(db), rows = st.rows.map((r) => ({ year: r.label, opening: r.opening, openingRecorded: r.openingBalanceIntroduced, transfers: r.transfers, utilization: r.utilization, closing: r.closing }));
-    const ent = st.entries.map((e) => ({ date: dates.toDisplay(e.date), kind: e.kind === "OPENING" ? "Opening balance" : e.kind === "TRANSFER" ? "Transfer in" : "Used", amount: e.amount, authorisedBy: e.authorisedBy || "", evidence: e.evidence, reason: e.reason + (e.purpose ? " - " + e.purpose : "") }));
-    const rep = R("SOB General Reserve Fund (belongs to SOB collectively, not to members)", ["year", "opening", "openingRecorded", "transfers", "utilization", "closing"], rows, { balance: st.balance, movements: ent.length }, { year: "Financial year", opening: "Opening", openingRecorded: "Opening balance recorded", transfers: "Approved transfers in", utilization: "Used", closing: "Closing" });
+    const st = RS.statement(db), rows = st.rows.map((r) => ({ year: r.label, opening: r.opening, openingRecorded: r.openingBalanceIntroduced, transfers: r.transfers, losses: r.losses, utilization: r.utilization, closing: r.closing }));
+    const ent = st.entries.map((e) => ({ date: dates.toDisplay(e.date), kind: e.kind === "OPENING" ? "Opening balance" : e.kind === "TRANSFER" ? "Transfer in" : e.kind === "LOSS" ? "Loss reflected" : "Used", amount: e.amount, authorisedBy: e.authorisedBy || "", evidence: e.evidence, reason: e.reason + (e.purpose ? " - " + e.purpose : "") }));
+    const rep = R("SOB General Reserve Fund (belongs to SOB collectively, not to members)", ["year", "opening", "openingRecorded", "transfers", "losses", "utilization", "closing"], rows, { balance: st.balance, movements: ent.length }, { year: "Financial year", opening: "Opening", openingRecorded: "Opening balance recorded", transfers: "Verified profit in", losses: "Verified losses", utilization: "Used", closing: "Closing" });
     rep.entries = ent; return rep;
   }
   function reserveMovements(db) {
     const st = RS.statement(db);
-    return R("General Reserve Fund: every movement with its evidence", ["date", "kind", "amount", "authorisedBy", "evidence", "reason"], st.entries.map((e) => ({ date: dates.toDisplay(e.date), kind: e.kind === "OPENING" ? "Opening balance" : e.kind === "TRANSFER" ? "Transfer in (FY" + e.fyYear + ")" : "Used", amount: e.amount, authorisedBy: e.authorisedBy || "", evidence: e.evidence, reason: e.reason + (e.purpose ? " - " + e.purpose : "") })), { balance: st.balance },
+    return R("General Reserve Fund: every movement with its evidence", ["date", "kind", "amount", "authorisedBy", "evidence", "reason"], st.entries.map((e) => ({ date: dates.toDisplay(e.date), kind: e.kind === "OPENING" ? "Opening balance" : e.kind === "TRANSFER" ? "Transfer in (FY" + e.fyYear + ")" : e.kind === "LOSS" ? "Loss reflected (FY" + e.fyYear + ")" : "Used", amount: e.amount, authorisedBy: e.authorisedBy || "", evidence: e.evidence, reason: e.reason + (e.purpose ? " - " + e.purpose : "") })), { balance: st.balance },
       { date: "Date", kind: "Movement", amount: "Amount", authorisedBy: "Approved by", evidence: "Supporting evidence", reason: "Reason" });
   }
   return { financialYears, financialYear, profitReconciliation, historicalLoans, historicalLoanStatement, generalReserve, reserveMovements };

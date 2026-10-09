@@ -8,9 +8,9 @@
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./fy.js") : root.SOB.fy);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reserve = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, L, G, FY) {
-  const KINDS = ["OPENING", "TRANSFER", "UTILIZATION"];
+  const KINDS = ["OPENING", "TRANSFER", "LOSS", "UTILIZATION"];
   const live = (db) => (db.reserveFund || []).filter((e) => e && !e.voided).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
-  const sign = (e) => (e.kind === "UTILIZATION" ? -1 : 1) * Number(e.amount);
+  const sign = (e) => (e.kind === "UTILIZATION" || e.kind === "LOSS" ? -1 : 1) * Number(e.amount);   // the balance may be negative: a verified loss is carried forward like a gain
   const balance = (db, asOf) => live(db).filter((e) => !asOf || e.date <= asOf).reduce((a, e) => a + sign(e), 0);
   const yearOf = (db, d) => FY.yearOfDate(db, d);
 
@@ -20,9 +20,10 @@
     const c = FY.byYear(db, year); if (!c) throw new Error("NOT_FOUND: financial year " + year);
     const verified = c.verifiedProfit === undefined || c.verifiedProfit === null ? null : Number(c.verifiedProfit);
     const credited = L.activeTransactions(db).filter((t) => t.type === "Profit" && FY.yearOfEntry(db, t) === c.year).reduce((a, t) => a + Number(t.amount), 0);
-    const moved = live(db).filter((e) => e.kind === "TRANSFER" && Number(e.fyYear) === c.year).reduce((a, e) => a + Number(e.amount), 0);
+    const moved = live(db).filter((e) => (e.kind === "TRANSFER" || e.kind === "LOSS") && Number(e.fyYear) === c.year).reduce((a, e) => a + (e.kind === "LOSS" ? -1 : 1) * Number(e.amount), 0);   // net already moved: gains in, losses out
     const pending = (db.approvalRequests || []).filter((r) => r.status === "Pending" && r.command === "distributeProfit" && r.schedule).reduce((a, r) => a + Number(r.schedule.distributed || 0), 0);
-    return { year: c.year, verified, credited, transferred: moved, pendingDistributions: pending, available: verified === null ? 0 : Math.max(0, verified - credited - moved - pending) };
+    const remaining = verified === null ? 0 : verified - credited - moved - pending;   // positive = unallocated profit, negative = distributions exceeded the verified result
+    return { year: c.year, verified, credited, transferred: moved, pendingDistributions: pending, remaining, available: Math.max(0, remaining), shortfall: Math.max(0, -remaining) };
   }
   const base = (db, ctx, kind, a) => {
     G.require(ctx, "reserve.manage"); a = a || {}; const amount = Number(a.amount);
@@ -51,7 +52,7 @@
   /* The Chairperson's confirmation of the GROUP profit earned in a year (the figure the reserve rules rely on). It is never computed on its own authority. */
   function confirmProfit(db, ctx, a) {
     G.require(ctx, "reserve.manage"); a = a || {}; const c = FY.byYear(db, a.year); if (!c) throw new Error("NOT_FOUND: financial year " + a.year);
-    const amount = Number(a.amount); if (!(amount >= 0)) throw new Error("INVALID: amount must be zero or more"); const evidence = G.need(a.evidence, "evidence"), reason = G.need(a.reason, "reason");
+    const amount = Number(a.amount); if (!Number.isFinite(amount)) throw new Error("INVALID: amount must be a number (a negative group result is a loss)"); const evidence = G.need(a.evidence, "evidence"), reason = G.need(a.reason, "reason");
     const rec = (db.yearCycles || []).find((x) => x.year === c.year), prev = rec.verifiedProfit === undefined ? null : rec.verifiedProfit;
     rec.verifiedProfit = amount; rec.verifiedProfitEvidence = evidence; rec.verifiedBy = ctx.approvedBy || ctx.by; rec.verifiedAt = ctx.now;
     (rec.verifiedProfitHistory = rec.verifiedProfitHistory || []).push({ at: ctx.now, by: ctx.approvedBy || ctx.by, previous: prev, amount, evidence, reason });
@@ -61,9 +62,14 @@
   function statement(db) {
     const tb = FY.table(db), es = live(db); let carry = 0; const rows = [];
     const yr = (e) => (e.postedYear === undefined ? e.fyYear : e.postedYear), years = tb.length ? tb.map((c) => c.year) : [...new Set(es.map(yr))].sort();
-    years.forEach((y) => { const of = es.filter((e) => Number(yr(e)) === y), op = of.filter((e) => e.kind === "OPENING").reduce((a, e) => a + Number(e.amount), 0), tr = of.filter((e) => e.kind === "TRANSFER").reduce((a, e) => a + Number(e.amount), 0), ut = of.filter((e) => e.kind === "UTILIZATION").reduce((a, e) => a + Number(e.amount), 0);
-      rows.push({ year: y, label: "FY" + y, opening: carry, openingBalanceIntroduced: op, transfers: tr, utilization: ut, closing: carry + op + tr - ut }); carry += op + tr - ut; });
+    years.forEach((y) => { const of = es.filter((e) => Number(yr(e)) === y), sm = (k) => of.filter((e) => e.kind === k).reduce((a, e) => a + Number(e.amount), 0), op = sm("OPENING"), tr = sm("TRANSFER"), lo = sm("LOSS"), ut = sm("UTILIZATION");
+      rows.push({ year: y, label: "FY" + y, opening: carry, openingBalanceIntroduced: op, transfers: tr, losses: lo, utilization: ut, closing: carry + op + tr - lo - ut }); carry += op + tr - lo - ut; });
     return { rows, balance: carry, entries: es };
   }
-  return { KINDS, live, balance, available, openReserve, transferToReserve, utilizeReserve, confirmProfit, statement };
+  /* Posts the year-end result (used by profitrec.settle): a gain is a TRANSFER, a loss is a LOSS. Dated on the share-out day that closed the year and attributed to that year. */
+  function postYearResult(db, ctx, c, amount, text) {
+    const kind = amount > 0 ? "TRANSFER" : "LOSS", e = { id: G.uid("RSV"), kind, date: c.closedDate, amount: Math.abs(amount), evidence: text.evidence, reason: text.reason, fyYear: c.year, postedYear: c.year, source: (kind === "TRANSFER" ? "Verified unallocated group profit of FY" : "Verified group shortfall of FY") + c.year, requestedBy: ctx.by, authorisedBy: ctx.approvedBy || null, createdAt: ctx.now };
+    (db.reserveFund = db.reserveFund || []).push(e); G.audit(db, ctx, "ReserveFund", e.id, kind === "TRANSFER" ? "Transfer to reserve" : "Loss reflected in reserve", { balance: balance(db) - (kind === "TRANSFER" ? e.amount : -e.amount) }, { amount: e.amount, fy: "FY" + c.year }, e.reason + " | evidence: " + e.evidence); return e;
+  }
+  return { KINDS, live, balance, available, postYearResult, openReserve, transferToReserve, utilizeReserve, confirmProfit, statement };
 });

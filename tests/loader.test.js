@@ -49,6 +49,11 @@ const o = { approvedBy: "Test Approver, Admin, 8 Oct 2026", asOf: "2026-10-08" }
     const ok = await LD.load(a2, pack, o); assert.ok(ok.ok, JSON.stringify(ok.checks.filter((c) => !c.pass)));
     assert.ok(!(await a2({ action: "purgeDemoLedger", confirm: "REMOVE DEMO DATA", demoNames, realNames: LD.realNames(pack) })).ok, "a loaded real ledger can never be purged");
   });
+  await t("source-row coverage: every listed source row must exist in the Sheet, otherwise the load reports a failure", async () => {
+    const b = await boot(); const bad = JSON.parse(JSON.stringify(pack)); bad.coverage.rows.push("SOBHIST|nowhere|r999");
+    const r1 = await LD.load(b.api, bad, o); assert.ok(r1.checks.some((c) => /accounted for/.test(c.name) && !c.pass), "a missing source row is caught");
+    const b2 = await boot(); const r2 = await LD.load(b2.api, pack, o); assert.ok(r2.checks.some((c) => /accounted for/.test(c.name) && c.pass), "the complete list passes");
+  });
   await t("a member cannot purge or load", async () => {
     const mt = (await s.call({ action: "login", id: "ADMIN", pin: "Adm1n-Setup-77" })).token; assert.ok(mt); const ids = (await api({ action: "getLedger" })).db.members[0].id;
     await api({ action: "createUser", user: { id: ids, name: "m", role: "Member", memberId: ids, pin: "123456" } }); const mm = s.session((await s.call({ action: "login", id: ids, pin: "123456" })).token);
