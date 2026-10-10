@@ -117,4 +117,17 @@ t("VERIFIED SAVINGS: the first date the register savings cover principal plus in
   G.createEntry(db2, at("2026-08-09"), { date: "2026-08-09", memberId: "SOB-001", amount: 220000, type: "Loan Repayment", purpose: "Loan Repayment", loanId: db2.loans[0].id });
   const r2 = LN.settlementReview(db2, "2026-10-10")[0]; assert.equal(r2.firstCovered, null, "SOB-032 case: 150,000 savings against 250,000 owed does not qualify"); assert.equal(r2.owedToday, 250000);
 });
+t("CLOSING the brought-forward balances: one Chairperson-approved entry per member, exactly what the ledger holds from before the savings year, applied once, savings then equal the register's and cash falls by the same total", () => {
+  const db = fresh(); dep(db, "SOB-001", "2025-06-01", 300000); dep(db, "SOB-002", "2025-06-01", 100000);
+  dep(db, "SOB-002", "2025-12-21", 90000, "Share-Out"); dep(db, "SOB-001", "2025-12-21", 50000); dep(db, "SOB-002", "2025-12-21", 7000);
+  assert.equal(L.memberSavingsAsOf(db, "SOB-001", "2026-01-05"), 350000); assert.equal(L.memberVerifiedSavingsAsOf(db, "SOB-001", "2026-01-05"), 50000);
+  const lines = [{ memberId: "SOB-001", amount: 300000 }, { memberId: "SOB-002", amount: 10000 }], cash0 = db.transactions.reduce((a, x) => a + (L.classifyTransaction(x).cashflow || 0), 0);
+  assert.throws(() => CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines: [{ memberId: "SOB-001", amount: 299999 }], reason: "r", evidence: "e" }), /STALE/, "an amount that is not exactly what is held is refused");
+  const r = CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines, reason: "register opens at zero", evidence: "register" }); assert.equal(r.pendingApproval, true); assert.equal(L.memberSavingsAsOf(db, "SOB-001", "2026-10-10"), 350000, "nothing changes before approval");
+  CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: r.requestId });
+  assert.equal(L.memberSavingsAsOf(db, "SOB-001", "2026-10-10"), 50000); assert.equal(L.memberSavingsAsOf(db, "SOB-002", "2026-10-10"), 7000);
+  assert.equal(db.transactions.reduce((a, x) => a + (L.classifyTransaction(x).cashflow || 0), 0), cash0 - 310000, "cash falls by the closed total");
+  const again = CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines, reason: "r", evidence: "e" }); assert.ok(again.pendingApproval);
+  CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: again.requestId }); assert.equal(db.transactions.filter((x) => x.type === "Share-Out" && /^CLOSE/.test(x.sourceRef || "")).length, 2, "applying it twice adds nothing");
+});
 console.log(pass + " passed");

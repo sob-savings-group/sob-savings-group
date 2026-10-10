@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./ledger.js") : root.SOB.ledger);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, L) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     splitRepayment: (db, ctx, a) => {
@@ -68,6 +68,25 @@
     cancelAirtime: (db, ctx, a) => AT.cancel(db, ctx, a.id),
     sendMessage: (db, ctx, a) => N.send(db, ctx, { memberId: a.memberId, text: a.text, channel: a.channel }),
     cancelMessage: (db, ctx, a) => N.cancel(db, ctx, a.id, a.reason),
+    /* Close the balances still held in the ledger after the last share-out. SOB pays out ALL savings in December and the register opens every member at zero on that day, so any amount the
+       old workbook left behind (rounding of profit shares, loans netted off, rows the workbook never recorded) is posted as a dated Share-Out. Each line must equal exactly what the ledger holds
+       for that member from before the savings year, so the request cannot be misapplied or applied twice. Nothing is deducted from a loan and no cash is invented: the cash
+       falls by the same amount, which is what ties the platform's cash to the register's cash. */
+    closeYearBalances: (db, ctx, a) => {
+      G.require(ctx, "reconcile.manage"); G.need(a.reason, "reason"); G.need(a.evidence, "evidence");
+      const date = a.date; if (!isRealDate(String(date))) throw new Error("INVALID: date"); if (!Array.isArray(a.lines) || !a.lines.length) throw new Error("REQUIRED: lines");
+      const have = new Set((db.transactions || []).filter((t) => t.sourceRef).map((t) => t.sourceRef)), entries = [];
+      a.lines.forEach((l) => {
+        const ref = "CLOSE|" + date + "|" + l.memberId; if (have.has(ref)) return;
+        const carry = L.memberSavingsAsOf(db, l.memberId, date) - L.memberVerifiedSavingsAsOf(db, l.memberId, date);
+        if (!(Number(l.amount) > 0) || Number(l.amount) !== carry) throw new Error("STALE: " + l.memberId + " holds " + carry + " from before the savings year, not " + l.amount);
+        entries.push({ memberId: l.memberId, date, type: "Share-Out", amount: carry, purpose: "Balance paid out at the " + date + " share-out (closing entry)", sourceRef: ref });
+      });
+      if (!entries.length) return { added: 0, alreadyClosed: a.lines.length };
+      const r = H.importHistoricalEntries(db, ctx, { batchId: "CLOSE-" + date, source: "Closing of brought-forward balances at the " + date + " share-out | " + a.evidence, entries });
+      G.audit(db, ctx, "YearClose", "CLOSE-" + date, "Brought-forward balances closed", null, { members: entries.length, total: entries.reduce((x, e) => x + e.amount, 0) }, a.reason);
+      return r;
+    },
     importHistoricalEntries: (db, ctx, a) => H.importHistoricalEntries(db, ctx, { batchId: a.batchId, source: a.source, entries: a.entries || [], annotations: a.annotations, dryRun: a.dryRun }),
     importHistoricalLoans: (db, ctx, a) => HL.importHistoricalLoans(db, ctx, { batchId: a.batchId, source: a.source, accounts: a.accounts || [], events: a.events || [], dryRun: a.dryRun }),
     defineFinancialYears: (db, ctx, a) => FYR.defineFinancialYears(db, ctx, { years: a.years }),
@@ -90,6 +109,7 @@
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
+    closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
     settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
@@ -105,6 +125,7 @@
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
     if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
+    if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
