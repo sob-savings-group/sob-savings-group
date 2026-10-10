@@ -39,7 +39,8 @@
         if (working) return; working = true; problem.replaceChildren();
         try {
           /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
-          const typed = mid.value.trim(), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
+          /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
+          const typed = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
           let id = typed, secret = pin.value.trim();
           if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = typed;
           if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });

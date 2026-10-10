@@ -60,7 +60,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
     await pg.click('[data-nav="ledger"]').catch(async () => { await pg.click('[data-nav="more"]'); await pg.click('[data-nav="ledger"]'); }); await pg.waitForSelector("#add-entry");
     await pg.goBack(); await pg.waitForTimeout(400); ok((await pg.locator("#add-entry").count()) === 0 && (await pg.locator("#logout").count()) === 1, T("Back returns to the previous screen"));
     /* 5. member portal: custom dates, WhatsApp, Print + Download PDF */
-    await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, mem.id, "1234"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
+    await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, mem.id.replace("-", "").toLowerCase(), "1234");  /* e.g. "sob001": no hyphen, lower case */ await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
     await pg.click('[data-nav="savings"]'); await pg.waitForSelector("#stmt-period");
     await pg.click('#stmt-period [data-chip="custom"]'); await pg.fill("#sp-from", "2026-02-01"); await pg.fill("#sp-to", "2026-06-30"); await pg.click("#sp-apply"); await pg.waitForTimeout(300);
     ok(/1 Feb(ruary)? 2026/.test(await pg.innerText("#stmt-note")) && /30 Jun(e)? 2026/.test(await pg.innerText("#stmt-note")), T("member custom date range applies"));
