@@ -60,4 +60,14 @@ t("3. a member without a loan: the savings balance stands alone, and a member wi
   assert.equal(L.memberSavings(db, "SOB-002"), 50000);
   const a = ST.memberAccount(db, "SOB-001", {}, { today: "2026-10-10" }); assert.equal(a.savings.closing, 1000000); assert.equal(a.loanTotals.owed, 500000 + 150000);
 });
+t("a consolidated repayment is replaced by its dated parts in ONE approved step: same total, original voided, nothing double counted, interest-first by the real dates", () => {
+  const { db, id } = withLoan(); LN.repayLoan(db, at("2026-06-01"), id, 300000, "2026-06-01"); const orig = db.transactions.find((x) => x.type === "Loan Repayment");
+  const parts = [{ date: "2026-05-01", amount: 100000, ref: "r1" }, { date: "2026-06-01", amount: 200000, ref: "r2" }];
+  assert.throws(() => CMD.run(db, at("2026-10-01"), "splitRepayment", { id: orig.id, parts: [{ date: "2026-05-01", amount: 100000 }, { date: "2026-06-01", amount: 100000 }], reason: "r", evidence: "e" }), /add up/);
+  const r = CMD.run(db, at("2026-10-01"), "splitRepayment", { id: orig.id, parts, reason: "dated in the register", evidence: "rows 1, 2" }); assert.equal(r.pendingApproval, true); assert.equal(orig.voided, undefined, "nothing changes before approval");
+  CMD.run(db, at("2026-10-01", "chair"), "approveRequest", { id: r.requestId });
+  const reps = db.transactions.filter((x) => x.type === "Loan Repayment" && !x.voided); assert.deepEqual(reps.map((x) => x.amount).sort(), [100000, 200000]); assert.equal(db.transactions.find((x) => x.id === orig.id).voided, true);
+  assert.equal(L.loanInterestPosition(db.loans[0], db, "2026-10-10").totalRepaid, 300000, "same total as before");
+  assert.throws(() => CMD.run(db, at("2026-10-02"), "splitRepayment", { id: orig.id, parts, reason: "again", evidence: "e" }), /voided/, "cannot be split twice");
+});
 console.log(pass + " passed");

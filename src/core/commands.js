@@ -7,6 +7,20 @@
 })(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
+    splitRepayment: (db, ctx, a) => {
+      G.require(ctx, "reconcile.manage"); G.need(a.reason, "reason"); G.need(a.evidence, "evidence");
+      const t = db.transactions.find((x) => x.id === a.id); if (!t) throw new Error("NOT_FOUND: entry " + a.id);
+      if (t.voided) throw new Error("BAD_STATE: entry is voided"); if (t.type !== "Loan Repayment" || !t.loanId) throw new Error("INVALID: only a loan repayment can be split");
+      const parts = Array.isArray(a.parts) ? a.parts : []; if (parts.length < 2) throw new Error("INVALID: a split has at least two parts");
+      const sum = parts.reduce((x, p) => x + (Number(p.amount) || 0), 0); if (sum !== Number(t.amount)) throw new Error("INVALID: the parts add up to " + sum + " but the repayment is " + t.amount);
+      parts.forEach((p) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date || "") || !(Number(p.amount) > 0)) throw new Error("INVALID: every part needs a real date and an amount"); });
+      const loan = db.loans.find((l) => l.id === t.loanId); if (loan && loan.date && !loan.dateUnknown && parts.some((p) => p.date < loan.date)) throw new Error("INVALID: a part is dated before the loan began (" + loan.date + ")");
+      Object.assign(t, { voided: true, voidReason: "Split into the dated repayments recorded in the source register: " + a.reason, voidDate: ctx.today, voidTimestamp: ctx.now, voidedByRole: ctx.role, voidedBy: ctx.by, splitInto: [] });
+      LN.onRepaymentRemoved(db, ctx, t, "split into dated parts");
+      parts.slice().sort((x, y) => (x.date < y.date ? -1 : 1)).forEach((p) => { const e = G.createEntry(db, ctx, { date: p.date, memberId: t.memberId, amount: Number(p.amount), type: "Loan Repayment", purpose: "Loan Repayment (dated part of " + t.id + ")", loanId: t.loanId, sourceRef: p.ref || "", splitFrom: t.id }); t.splitInto.push(e.id); if (e.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, e); });
+      G.audit(db, ctx, "Transaction", t.id, "Split into dated repayments", { amount: t.amount, date: t.date }, { parts: parts.map((p) => p.date + ":" + p.amount), entries: t.splitInto }, a.reason + " | evidence: " + a.evidence);
+      return t;
+    },
     voidEntry: (db, ctx, a) => { const t = G.voidEntry(db, ctx, a.id, a.reason); LN.onRepaymentRemoved(db, ctx, t, a.reason); return t; },          // a voided repayment re-commits what it released
     restoreEntry: (db, ctx, a) => { const t = G.restoreEntry(db, ctx, a.id, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     approveEntry: (db, ctx, a) => { const t = G.approveEntry(db, ctx, a.id, a.decision, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
@@ -76,6 +90,7 @@
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
+    splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
@@ -85,7 +100,7 @@
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
-    if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
+    if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
     if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "distributeProfit") return "Profit distribution " + a.period;

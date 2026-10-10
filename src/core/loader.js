@@ -159,6 +159,18 @@
           const r = await api({ action: "command", name: "createEntry", args }); if (r.ok) { created++; db = r.db; } else c.add("repayment " + args.date + " " + args.amount, false, r.error);
           continue;
         }
+        if (s.name === "repayLoan") {   /* a repayment from the register: recorded once; a second run finds it and adds nothing */
+          if (db.transactions.some((t) => !t.voided && t.type === "Loan Repayment" && t.loanId === args.loanId && t.date === args.date && t.amount === args.amount)) { already++; continue; }
+          const r = await api({ action: "command", name: "repayLoan", args: { loanId: args.loanId, amount: args.amount, date: args.date } }); if (r.ok) { created++; db = r.db || await read(); } else c.add("repayment " + args.date + " " + args.amount, false, r.error);
+          continue;
+        }
+        if (s.name === "supersedeRequest") {   /* withdraw a still-pending request that a newer, safer one replaces (only the requester can) */
+          const q = reqs.find((x) => x.status === "Pending" && x.command === args.command && targetOf({ args: x.args }) === args.target);
+          if (!q) { already++; continue; }
+          const r = await api({ action: "command", name: "cancelRequest", args: { id: q.id, reason: args.reason } }); if (r.ok) { created++; db = r.db || await read(); } else c.add("withdraw request " + q.id, false, r.error);
+          continue;
+        }
+        if (s.name === "splitRepayment" && (db.transactions.find((t) => t.id === args.id) || {}).voided) { already++; continue; }
         if (reqs.some((q) => q.command === s.name && targetOf({ args: q.args }) === targetOf(s) && ["Pending", "Approved"].includes(q.status))) { already++; continue; }
         const r = await api({ action: "command", name: s.name, args });
         if (r.ok && r.result && r.result.pendingApproval) { submitted++; pending.push(r.result.label + ": " + r.result.summary); } else c.add("request " + s.name + " " + targetOf(s), false, r.error);

@@ -87,3 +87,7 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 - Interest accrues until settlement; repayments clear interest first (already implemented, now proved in tests/loan_rules.test.js).
 - Loans paid out in instalments: ONE loan, first payout date is the start, every instalment kept (new Chairperson-approved command addDisbursement; statements list each part).
 - Savings position = savings + profit - withdrawals - share-outs; loans/interest shown separately on statements.
+
+### Candidate 11 - register of 6 Oct 2026
+- Records file v11 adds the 43 new register rows (loaded in-app, idempotent), supersedes the SOB-035 void with one atomic splitRepayment request, and records two register items. Private pack kept outside the repository.
+- New gated command splitRepayment; loader plan steps repayLoan / supersedeRequest.
