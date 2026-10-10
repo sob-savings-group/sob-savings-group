@@ -37,6 +37,9 @@ let fails = 0; const ok = (c, m) => { if (c) console.log("  ok  " + m); else { f
   const yp = D.presetPeriod("year", today, YRS), yv = K.detail(live, "savingsReceived", yp);
   ok(html.includes("Reporting period: " + yp.text) && /BWOMI/.test(html), "the PDF header carries the same period (" + yp.text + ") and the SOB letterhead");
   ok(yv.value === 0 || html.includes(Math.round(yv.value).toLocaleString("en-US")), "the PDF total equals the dashboard figure (" + Math.round(yv.value).toLocaleString("en-US") + ")"); await pop.close();
+  /* Download PDF: a real PDF file is saved straight to the device, with no print dialog */
+  { const [dl] = await Promise.all([pg.waitForEvent("download", { timeout: 15000 }), pg.click('.modal [data-dlpdf]')]); const dp = await dl.path(), buf = require("fs").readFileSync(dp);
+    ok(/\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === "%PDF-" && buf.length > 2000, "Download PDF saves a real PDF file (" + dl.suggestedFilename() + ")"); }
   /* the selection survives navigation */
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await pg.click('[data-chip="lastYear"]'); await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#kpi-reports");
   ok(/Last financial year|FY\d{4}|31 Dec/.test(await pg.innerText("#period-note")), "the Reports page uses the same period"); ok((await pg.locator("#kpi-reports .card").count()) === K.KEYS.length, "every dashboard figure is also a report");

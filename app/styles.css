@@ -193,3 +193,4 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 #stmt-view .grid.two .card .val{font-size:clamp(15px,2vw,19px)}
 @media(min-width:700px){#stmt-view .grid.two{grid-template-columns:repeat(3,1fr)}}
 @media(min-width:1000px){.modal:has(#stmt-view){max-width:1000px}}
+.pdfpair{display:inline-flex;gap:10px;flex-wrap:wrap}

@@ -189,7 +189,7 @@
   /* ---------- the full member statement: one account object feeds this screen, the PDF and the WhatsApp text ---------- */
   const SX = S.statements;
   const accountRep = (a) => ({ title: (a.mode === "loan" ? "Loan statement " + a.loanId : "Member account statement") + " — " + a.member.name + " (" + a.member.id + ")", period: a.period.text, printHTML: (meta) => SX.toPrintHTML(a, meta) });
-  const printAccount = (memberId, period, internal, loanId) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return printReport(accountRep(a), a.period.text); };
+  const printAccount = (memberId, period, internal, loanId, download) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return (download ? downloadReport : printReport)(accountRep(a), a.period.text); };
   const statementText = (a) => ["*Sons of Bethel (SOB) Savings Group*", "Statement " + a.ref, a.member.name + " (" + a.member.id + ")", a.period.text, "", "Opening savings: " + ugx(a.savings.opening), "Deposits: " + ugx(a.savings.deposits), "Profit credited: " + ugx(a.savings.profit), "Withdrawals: " + ugx(a.savings.withdrawals), "Share-outs: " + ugx(a.savings.shareOuts), "*Closing savings: " + ugx(a.savings.closing) + "*"]
     .concat(a.loans.length ? ["", "Loans owed: " + ugx(a.loanTotals.owed) + " (loan " + ugx(a.loanTotals.principalLeft) + " + interest " + ugx(a.loanTotals.interestDue) + ")"] : []).concat(["", "CONFIDENTIAL: for the named member only. Full PDF statement available from the Treasurer."]).join("\n");
   const waSend = (text) => { if (navigator.share) { navigator.share({ title: "SOB statement", text }).catch(() => {}); } else { const a = h("a", { href: "https://wa.me/?text=" + encodeURIComponent(text), target: "_blank", rel: "noopener" }); document.body.append(a); a.click(); a.remove(); } };
@@ -208,7 +208,7 @@
         h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
         h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
         s.checks.movementsAddUp ? Banner("ok", "Opening " + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + ". Agrees with the ledger.") : Banner("bad", "These figures do not add up to the ledger. Please tell the Treasurer before relying on this statement."),
-        h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
+        h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "stm-dl", "data-dlpdf": 1, onclick: () => downloadReport(accountRep(a), a.period.text) }, Icon("download", 18), " Download PDF"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
           h("button", { id: "stm-csv", "data-csv": 1, onclick: () => download("statement_" + a.member.id + ".csv", "text/csv", R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref })) }, "Download CSV")),
         h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
         h("p", { class: "mute rg-blurb" }, a.reserve.text),
@@ -242,7 +242,20 @@
       setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast("Could not open the print dialog", true); } setTimeout(() => f.remove(), 60000); res(); }, 400);
     }));
   }
-  const printButton = (rep, period) => h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF");
+  /* Download PDF: builds the same branded document as a real PDF file and saves it straight to the device (no print dialog). */
+  function downloadReport(rep, period) {
+    return Busy.run("Building your PDF…", () => new Promise((res) => setTimeout(() => {
+      try {
+        const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
+        const html = rep.printHTML ? rep.printHTML(meta) : R.toPrintHTML(rep, meta);
+        const bytes = window.SOB.pdf.fromHTML(html);
+        window.SOB.pdf.save(bytes, window.SOB.pdf.fileName(rep.title || "SOB_report", today()));
+        toast("PDF saved to your device.");
+      } catch (e) { toast("Could not build the PDF: " + (e && e.message || e), true); }
+      res();
+    }, 30)));
+  }
+  const printButton = (rep, period) => h("span", { class: "pdfpair" }, h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF"), h("button", { "data-dlpdf": 1, onclick: () => downloadReport(rep, period) }, Icon("download", 18), " Download PDF"));
 
   /* ---------- members ---------- */
   function openMember(id, asAt0) {
@@ -441,7 +454,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
-  const MV = window.SOBMember({ st, act, commit, render, today, printReport, go, printAccount, openStatement, statementView });
+  const MV = window.SOBMember({ st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, statementView });
 
   /* ---------- airtime (members request; Admin fulfils) ---------- */
   const airtimeCols = (staff) => [{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(staff ? [{ label: "Member", render: (r) => r.memberName + " (" + r.memberId + ")" }] : [], [{ label: "Phone", key: "phone" }, { label: "Airtime", num: 1, render: (r) => num(r.airtimeAmount) }, { label: "Fee", num: 1, render: (r) => num(r.fee) }, { label: "Total", num: 1, render: (r) => num(r.total) },
