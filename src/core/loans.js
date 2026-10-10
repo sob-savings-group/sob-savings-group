@@ -258,6 +258,21 @@
     G.audit(db, ctx, "Loan", loan.id, "Recorded existing loan", null, { memberId: m.id, amount }, "Legacy loan: guarantor workflow not applied");
     return disburse(db, ctx, loan, o, "Loan Disbursement (existing loan)");
   }
+  /* A further payout on a loan that is already running (the member received the approved amount in instalments). It stays ONE loan: the amount grows,
+     the first payout date remains the commencement date, and every instalment is kept as its own dated ledger entry and component. */
+  function addDisbursement(db, ctx, loanId, o) {
+    G.require(ctx, "loan.disburse"); o = o || {};
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const amount = Number(o.amount); if (!(amount > 0)) throw new Error("INVALID: amount");
+    const date = o.date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date");
+    if (loan.date && !loan.dateUnknown && date < loan.date) throw new Error("INVALID: a further payout cannot be dated before the first payout (" + loan.date + ")");
+    const prior = Number(loan.loanAmount), comps = (loan.components && loan.components.length) ? loan.components.slice() : [{ date: loan.date, amount: prior, ref: "first payout" }];
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Disbursement", purpose: "Further payout on " + loan.id + " (same loan)", loanId: loan.id, instalment: true });
+    comps.push({ date, amount, ref: entry.id }); comps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    loan.loanAmount = prior + amount; loan.components = comps;
+    G.audit(db, ctx, "Loan", loan.id, "Further payout added", { loanAmount: prior }, { loanAmount: loan.loanAmount, date, entry: entry.id }, o.reason || "Instalment of the approved loan");
+    return loan;
+  }
   function repayLoan(db, ctx, loanId, amount, date) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
@@ -330,5 +345,5 @@
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });

@@ -82,3 +82,8 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 - Period selection: lifetime, this/last financial year (share-out to share-out), this month, custom dates; tap a card or a transaction to review it.
 - Loan statements print from the same data (member portal and staff loan screen). A year-end reconciliation report per financial year shows member savings carried forward beside the General Reserve Fund.
 - Tests: tests/statements.test.js (hand-built interest and allocation cases, plus every member of the synthetic load across four period types).
+
+### Candidate 10 - the three loan/balance rules (verified against the register and the engine)
+- Interest accrues until settlement; repayments clear interest first (already implemented, now proved in tests/loan_rules.test.js).
+- Loans paid out in instalments: ONE loan, first payout date is the start, every instalment kept (new Chairperson-approved command addDisbursement; statements list each part).
+- Savings position = savings + profit - withdrawals - share-outs; loans/interest shown separately on statements.

@@ -688,6 +688,21 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     G.audit(db, ctx, "Loan", loan.id, "Recorded existing loan", null, { memberId: m.id, amount }, "Legacy loan: guarantor workflow not applied");
     return disburse(db, ctx, loan, o, "Loan Disbursement (existing loan)");
   }
+  /* A further payout on a loan that is already running (the member received the approved amount in instalments). It stays ONE loan: the amount grows,
+     the first payout date remains the commencement date, and every instalment is kept as its own dated ledger entry and component. */
+  function addDisbursement(db, ctx, loanId, o) {
+    G.require(ctx, "loan.disburse"); o = o || {};
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const amount = Number(o.amount); if (!(amount > 0)) throw new Error("INVALID: amount");
+    const date = o.date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date");
+    if (loan.date && !loan.dateUnknown && date < loan.date) throw new Error("INVALID: a further payout cannot be dated before the first payout (" + loan.date + ")");
+    const prior = Number(loan.loanAmount), comps = (loan.components && loan.components.length) ? loan.components.slice() : [{ date: loan.date, amount: prior, ref: "first payout" }];
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount, type: "Loan Disbursement", purpose: "Further payout on " + loan.id + " (same loan)", loanId: loan.id, instalment: true });
+    comps.push({ date, amount, ref: entry.id }); comps.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    loan.loanAmount = prior + amount; loan.components = comps;
+    G.audit(db, ctx, "Loan", loan.id, "Further payout added", { loanAmount: prior }, { loanAmount: loan.loanAmount, date, entry: entry.id }, o.reason || "Instalment of the approved loan");
+    return loan;
+  }
   function repayLoan(db, ctx, loanId, amount, date) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
@@ -760,7 +775,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });
 
 return module.exports; })();
@@ -1055,7 +1070,7 @@ __M['core/reconcile'] = (function(){ const module = {exports:{}}; const require 
     const prev = loan.date;
     (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: prev, newDate, reason, evidence, by: ctx.by, role: ctx.role });
     loan.date = newDate; delete loan.dateUnknown; delete loan.placeholderDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
-    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; delete t.dateUnknown; delete t.placeholderDate; });
+    db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided && !t.instalment).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; delete t.dateUnknown; delete t.placeholderDate; });
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
     return loan;
   }
@@ -1821,6 +1836,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, date: a.date }),
+    addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
     editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
@@ -1868,6 +1884,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
+    addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
@@ -1878,7 +1895,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
@@ -2756,7 +2773,8 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     const gs = (db.guarantees || []).filter((g) => g.loanId === l.id && g.status !== "Declined" && g.status !== "Requested").map((g) => ({ name: (db.members.find((m) => m.id === g.guarantorId) || {}).name || g.guarantorId, id: g.guarantorId, amount: Number(g.amount), status: g.status }));
     const dateText = l.dateUnknown ? "Not established (shown at " + dates.toDisplay(l.date) + " as a placeholder until the source record is found)" : dates.toDisplay(l.date);
     const working = known ? "Calendar months from " + monthName(l.date) + " to " + monthName(end) + " = " + elapsed + "; less " + grace + " grace month" + (grace === 1 ? "" : "s") + " = " + chargeable + " interest-bearing month" + (chargeable === 1 ? "" : "s") + "; " + chargeable + " × " + ugx(monthly) + " = " + ugx(chargeable * monthly) + "." : "Start date not established, so interest months cannot be counted.";
-    return { kind: "Current", ref: l.id, status: l.status, principal: w.principal, dateText, dateKnown: !l.dateUnknown, date: l.date, disbursementRef: disb ? disb.id : "", disbursementDate: disb ? disb.date : l.date, monthlyInterest: monthly, graceMonths: grace, dueDate: l.dueDate || "", elapsedMonths: elapsed, chargeableMonths: chargeable, working,
+    const payouts = (l.components || []).map((c, i) => ({ n: i + 1, date: c.date, amount: Number(c.amount), ref: c.ref || "" }));
+    return { kind: "Current", ref: l.id, payouts, status: l.status, principal: w.principal, dateText, dateKnown: !l.dateUnknown, date: l.date, disbursementRef: disb ? disb.id : "", disbursementDate: disb ? disb.date : l.date, monthlyInterest: monthly, graceMonths: grace, dueDate: l.dueDate || "", elapsedMonths: elapsed, chargeableMonths: chargeable, working,
       accruedInterest: w.accruedInterest, interestPaid: w.interestPaid, interestDue: w.unpaidInterest, penalties: w.penalties, penaltiesDue: w.unpaidPenalties, principalPaid: w.principalPaid, principalLeft: w.principalOutstanding, totalRepaid: w.totalRepaid, totalOwed: owed,
       repayments: reps, guarantors: gs, interestHistory: l.interestHistory || [], rule: "Each repayment clears unpaid interest first, then penalties, then the loan itself.",
       checks: { interestMatchesRule: !known || chargeable * monthly === w.accruedInterest, partsAddUp: parts === owed } };
@@ -2785,7 +2803,8 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     const loans = (dd.loans || []).filter((l) => l.memberId === memberId && !l.voided && (!dates.isISO(l.date) || l.date <= to) && (!only || l.id === only)).sort((a, b) => (a.date < b.date ? -1 : 1)).map((l) => loanBlock(dd, l, to, db));
     const earlier = (dd.historicalLoans || []).filter((l) => l.memberId === memberId && !l.voided && (!dates.isISO(l.date) || l.date <= to) && (!only || l.id === only || l.registerRef === only)).map((l) => histBlock(dd, l, to));
     const loanTotals = { principalLeft: loans.reduce((a, x) => a + x.principalLeft, 0), interestDue: loans.reduce((a, x) => a + x.interestDue, 0), penaltiesDue: loans.reduce((a, x) => a + x.penaltiesDue, 0), owed: loans.reduce((a, x) => a + x.totalOwed, 0), earlierOwed: earlier.reduce((a, x) => a + x.totalOwed, 0) };
-    const transactions = inP.filter((t) => !only || t.loanId === only).map((t) => ({ loanId: t.loanId || "", date: t.date, ref: t.id, source: t.sourceRef || "", type: TYPE_LABEL[t.type] || t.type, details: [t.purpose && t.purpose !== t.type ? t.purpose : "", t.correctionNote ? "Correction: " + t.correctionNote : "", t.dateUnknown ? "Date not established" : ""].filter(Boolean).join(" · "), amount: Number(t.amount), effect: L.classifyTransaction(t).savings, balance: t.runningSavings, open: { kind: "entry", id: t.id } }));
+    const compsOf = (t) => { const ln = t.type === "Loan Disbursement" && !t.instalment ? (dd.loans || []).find((x) => x.id === t.loanId) : null; return ln && ln.components && ln.components.length > 1 && ln.components.reduce((a, c) => a + Number(c.amount), 0) === Number(t.amount) ? ln.components : null; };
+    const transactions = [].concat(...inP.filter((t) => !only || t.loanId === only).map((t) => { const cs = compsOf(t); return cs ? cs.map((c, i) => Object.assign({}, t, { id: t.id + "-P" + (i + 1), baseId: t.id, date: c.date, amount: Number(c.amount), sourceRef: c.ref || t.sourceRef, purpose: "Part " + (i + 1) + " of " + cs.length + " of one loan paid out in instalments" })) : [t]; })).map((t) => ({ loanId: t.loanId || "", date: t.date, ref: t.id, source: t.sourceRef || "", type: TYPE_LABEL[t.type] || t.type, details: [t.purpose && t.purpose !== t.type ? t.purpose : "", t.correctionNote ? "Correction: " + t.correctionNote : "", t.dateUnknown ? "Date not established" : ""].filter(Boolean).join(" · "), amount: Number(t.amount), effect: L.classifyTransaction(t).savings, balance: t.runningSavings, open: { kind: "entry", id: t.baseId || t.id } }));
     /* corrections and audit notes: nothing is overwritten; each correction sits beside the original */
     const mine = (db.transactions || []).filter((t) => t.memberId === memberId && (!only || t.loanId === only)), ids = {}; mine.forEach((t) => { ids[t.id] = 1; }); [].concat(loans, earlier).forEach((x) => { ids[x.id || x.ref] = 1; }); if (!only) ids[memberId] = 1;
     const notes = [];
@@ -2817,7 +2836,7 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     let h = ST_CSS + '<div class="idb"><div><b>Member</b><span>' + esc(M.name) + "</span></div><div><b>Member ID</b><span>" + esc(M.id) + "</span></div><div><b>Phone</b><span>" + esc(M.phone || "—") + "</span></div><div><b>Status</b><span>" + esc(M.status || "—") + "</span></div><div><b>Member since</b><span>" + esc(M.regDate ? dates.toDisplay(M.regDate) : "—") + "</span></div><div><b>Statement no.</b><span>" + esc(a.ref) + "</span></div><div><b>Period</b><span>" + esc(p.text) + "</span></div><div><b>Issued</b><span>" + esc(a.generated) + "</span></div></div>";
     h += '<div class="conf">CONFIDENTIAL — prepared for the named member only. Please do not forward. Figures are in Uganda Shillings (UGX).</div>';
     const full = a.mode !== "loan"; let k = 0; const sec = (t) => '<h3 class="sec">' + (++k) + ". " + t + "</h3>";
-    if (full) h += sec("Savings summary") + kv([["Savings brought forward" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening], ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]].concat(s.offsets ? [["Offset against a loan (approved)", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Closing savings as at " + dates.longDate(p.to), s.closing, "tot"]]));
+    if (full) h += sec("Savings summary") + kv([["Savings brought forward" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening], ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]].concat(s.offsets ? [["Offset against a loan (approved)", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Savings position as at " + dates.longDate(p.to) + " (closing savings)", s.closing, "tot"]])) + '<div class="cf">Savings position = savings + profit − withdrawals − share-outs. Loans are NOT deducted from it.</div>' + (a.loans.length ? sec("Owed to SOB (shown separately — not deducted from savings)") + kv([["Loan still owed", a.loans.reduce((x, l) => x + l.principalLeft, 0)], ["Interest and penalties still due", a.loans.reduce((x, l) => x + l.interestDue + l.penaltiesDue, 0)], ["Total owed on current loans", a.loanTotals.owed, "tot"]]) : "");
     if (full) h += '<div class="cf">Check: opening ' + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + (s.checks.movementsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE — report to the Treasurer</span>') + "</div>";
     if (full && a.years.length) h += sec("By financial year (share-out to share-out)") + tbl([{ h: "Year", f: (y) => y.label + " (" + dates.toDisplay(y.opened) + " – " + (y.closed ? dates.toDisplay(y.closed) : "open") + ")" }, { h: "Opening", n: 1, f: (y) => num(y.opening) }, { h: "Deposits", n: 1, f: (y) => num(y.deposits) }, { h: "Profit", n: 1, f: (y) => num(y.profit) }, { h: "Withdrawn", n: 1, f: (y) => num(y.withdrawals) }, { h: "Share-out", n: 1, f: (y) => num(y.shareOuts) }, { h: "Closing", n: 1, f: (y) => num(y.closing) + (y.open ? "*" : "") }], a.years) + '<div class="cf">*Open year, to date. A closed year\'s closing balance is carried forward as the opening of the next year.</div>';
     if (full) h += '<div class="box">' + sec("Year-end savings and the General Reserve Fund") + '<div class="cf">' + esc(a.reserve.text) + "</div></div>";
@@ -2825,6 +2844,7 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     if (!a.loans.length && !a.earlier.length) h += '<div class="cf">No loans on record for this member in the period.</div>';
     a.loans.forEach((l) => {
       h += '<div class="box"><div class="lh"><b>Loan ' + esc(l.ref) + '</b><span class="pill ' + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—"], ["Agreed interest per month", l.monthlyInterest], ["Grace period", l.graceMonths + " month" + (l.graceMonths === 1 ? "" : "s") + (l.dueDate ? " (interest-free period ends " + dates.toDisplay(l.dueDate) + ")" : "")]]) +
+        (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts as ONE loan; interest counts from the first payout (" + dates.toDisplay(l.payouts[0].date) + "):</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref" }], l.payouts) : "") +
         '<div class="cf">Interest working: ' + esc(l.working) + "</div>" +
         kv([["Loan paid out", l.principal], ["Interest charged to date", l.accruedInterest, "sub"], ["Interest paid", -l.interestPaid, "sub"], ["Interest still due", l.interestDue, "sub"], ["Loan repaid so far", -l.principalPaid], ["Loan still owed", l.principalLeft]].concat(l.penalties ? [["Penalties still due", l.penaltiesDue]] : []).concat([["TOTAL OWED as at " + dates.longDate(p.to), l.totalOwed, "tot"]])) +
         '<div class="cf">Working: loan still owed ' + num(l.principalLeft) + " + interest still due " + num(l.interestDue) + (l.penaltiesDue ? " + penalties " + num(l.penaltiesDue) : "") + " = " + num(l.totalOwed) + (l.checks.partsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE</span>') + "</div>" +
@@ -3387,7 +3407,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "1320611859";
+var SOB_BUILD = "0530c48eaf";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
