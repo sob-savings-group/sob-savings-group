@@ -57,7 +57,7 @@
       const all = f.loans.map((l) => ({ l, bal: f.owed(l) })), rows = all.filter((x) => x.bal > 0).map(({ l, bal }) => ({ loanId: l.id, member: f.name(l.memberId), disbursed: kd(l.date), principal: Number(l.loanAmount), interestCharged: L.loanAccumulatedInterest(l, f.to), penalties: L.loanTotalPenalties(l, f.d), repaid: L.loanTotalRepaid(l, f.d), balance: bal, _open: { kind: "loan", id: l.id } }));
       const value = all.reduce((a, x) => a + Math.max(0, x.bal), 0);
       return mk(f, "outstandingLoans", { basis: "asAt", title: "Outstanding Loans", value, count: rows.length, columns: ["loanId", "member", "disbursed", "principal", "interestCharged", "penalties", "repaid", "balance"], labels: { loanId: "Loan", member: "Member", disbursed: "Paid out", principal: "Loan amount", interestCharged: "Interest charged", penalties: "Penalties", repaid: "Repaid", balance: "Still owed" }, rows,
-        totals: { stillOwed: value, loans: rows.length }, definition: "For each loan paid out on or before the date: loan amount plus interest charged to the date (after its grace period) plus penalties, less every repayment up to the date." });
+        totals: { stillOwed: value, loans: rows.length }, definition: "For each loan paid out on or before the date: loan amount plus interest charged to the date plus penalties, less every repayment up to the date." });
     },
     interestReceivable(f) {
       const ir = interestReceivable(f.db, f.to), rows = ir.rows.map((r) => ({ member: r.member, loanId: r.loanId, principal: r.principal, monthlyInterest: r.assignedMonthlyInterest, disbursed: kd(r.disbursed), interestFrom: kd(r.interestStartsAfter), monthsElapsed: r.monthsElapsed, monthsCharged: r.monthsCharged, accumulatedInterest: r.accumulatedInterest, paymentsMade: r.paymentsMade, unpaidInterest: r.unpaidInterest, outstanding: r.outstanding, _open: { kind: "loan", id: r.loanId } }));
@@ -84,7 +84,7 @@
     profit: (f) => flow(f, "profit", "Profit Recorded", ["Profit"], "Profit entries recorded in the period.", true),
     expenses: (f) => flow(f, "expenses", "Expenses", ["Expense"], "Expense entries recorded in the period.", false),
     loansDisbursed(f) {
-      const rows = f.loans.filter((l) => dates.isISO(l.date) && (!f.from || l.date >= f.from) && l.date <= f.to).sort(byDate).map((l) => ({ date: kd(l.date), loanId: l.id, member: f.name(l.memberId), amount: Number(l.loanAmount), monthlyInterest: Number(l.assignedMonthlyInterest) || 0, graceMonths: Number(l.graceMonths) || 0, _open: { kind: "loan", id: l.id } })), value = sum(rows, "amount");
+      const rows = f.loans.filter((l) => dates.isISO(l.date) && (!f.from || l.date >= f.from) && l.date <= f.to).sort(byDate).map((l) => ({ date: kd(l.date), loanId: l.id, member: f.name(l.memberId), amount: Number(l.loanAmount), monthlyInterest: Number(l.assignedMonthlyInterest) || 0, graceMonths: L.loanGraceMonths(l), _open: { kind: "loan", id: l.id } })), value = sum(rows, "amount");
       return mk(f, "loansDisbursed", { basis: "period", title: "Loans Paid Out", value, count: rows.length, columns: ["date", "loanId", "member", "amount", "monthlyInterest", "graceMonths"], labels: { date: "Date", loanId: "Loan", member: "Member", amount: "Loan amount", monthlyInterest: "Monthly interest", graceMonths: "Grace months" }, rows, totals: { loansPaidOut: value, loans: rows.length }, definition: "Loans paid out to members in the period." });
     },
     repaymentsReceived: (f) => repay(f, "repaymentsReceived", "Loan Repayments Received", false),
@@ -139,7 +139,7 @@
     asOf = asOf || dates.todayISO(); const d = upTo(db, asOf);
     const rows = L.activeLoansAsAt(d, asOf).filter((l) => L.loanOutstanding(l, d, asOf) > 0).map((l) => {
       const p = L.loanInterestPosition(l, d, asOf), m = db.members.find((x) => x.id === l.memberId) || {};
-      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, dateUnknown: !!l.dateUnknown, graceMonths: Number(l.graceMonths) || 0, interestStartsAfter: dates.addMonths(l.date, Number(l.graceMonths) || 0),
+      return { memberId: l.memberId, member: m.name || l.memberId, loanId: l.id, status: l.status, principal: p.principal, assignedMonthlyInterest: Number(l.assignedMonthlyInterest) || 0, disbursed: l.date, dateUnknown: !!l.dateUnknown, graceMonths: L.loanGraceMonths(l), interestStartsAfter: dates.addMonths(l.date, L.loanGraceMonths(l)),
         monthsElapsed: dates.monthsBetween(l.date, asOf), monthsCharged: L.loanMonthsAfterGrace(l, asOf), accumulatedInterest: p.accruedInterest, paymentsMade: p.totalRepaid, paidToInterest: p.interestPaid, paidToPrincipal: p.principalPaid === null ? null : p.principalPaid + p.penaltiesPaid,
         unpaidInterest: p.unpaidInterest, principalOutstanding: p.principalOutstanding, outstanding: L.loanOutstanding(l, d, asOf), interestHistory: l.interestHistory || [], payments: L.activeTransactions(d).filter((t) => t.loanId === l.id && t.type === "Loan Repayment").map((t) => ({ date: t.date, amount: Number(t.amount), id: t.id })) };
     });

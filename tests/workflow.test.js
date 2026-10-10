@@ -83,7 +83,7 @@ t("full lifecycle: apply > guarantee (request, accept) > approve > disburse > re
   LN.approveLoan(db, ctxAt("2026-02-02"), l.id); assert.equal(l.status, "AwaitingApproval", "the Super Admin only reviews; the Chairperson approves"); LN.approveLoan(db, ctxAt("2026-02-02", chair), l.id);
   throwsMsg(() => LN.repayLoan(db, ctxAt("2026-02-03"), l.id, 1000), /BAD_STATE/);
   throwsMsg(() => LN.disburseLoan(db, ctxAt("2026-02-03"), l.id, {}), /assignedMonthlyInterest/);
-  LN.disburseLoan(db, ctxAt("2026-02-03"), l.id, { date: "2026-02-03", assignedMonthlyInterest: 10000, graceMonths: 3 });
+  LN.disburseLoan(db, ctxAt("2026-02-03"), l.id, { date: "2026-02-03", assignedMonthlyInterest: 10000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   assert.equal(L.loanOutstanding(l, db, "2026-04-30"), 200000);   // within grace
   assert.equal(L.loanOutstanding(l, db, "2026-07-10"), 200000 + 2 * 10000); // Feb->Jul = 5 months - 3 grace
   LN.repayLoan(db, ctxAt("2026-07-10"), l.id, 20000, "2026-07-10");
@@ -120,7 +120,7 @@ t("decline releases guarantees and needs a reason", () => withRules(() => {
 }));
 t("existing loans can be recorded (audited, flagged legacy) without the guarantor workflow", () => {
   const db = fresh(); seed(db, "SOB-001", 1000);
-  const l = LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-001", amount: 200000, date: "2026-01-01", assignedMonthlyInterest: 30000, graceMonths: 3 });
+  const l = LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-001", amount: 200000, date: "2026-01-01", assignedMonthlyInterest: 30000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   assert.equal(l.status, "Active"); assert.equal(l.legacy, true);
   assert.equal(L.loanOutstanding(l, db, "2026-06-01"), 200000 + 2 * 30000);
   assert(db.auditLog.some((a) => a.action === "Recorded existing loan"));
@@ -156,7 +156,7 @@ t("annual subscription is UGX 5,000, once per member per year, with compliance v
 });
 t("share-out preview: loan holders may withdraw savings but are not profit-eligible (confirmed)", () => {
   const db = fresh(); seed(db, "SOB-001", 100000); seed(db, "SOB-002", 200000);
-  LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3 });
+  LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   const p = C.previewShareOut(db, 2026, "2026-12-10");
   assert.equal(p.rows.find((r) => r.memberId === "SOB-001").savingsAction, "WITHDRAW_FULL");
   const b = p.rows.find((r) => r.memberId === "SOB-002"); assert.equal(b.eligibleForProfit, false); assert.equal(b.savingsAction, "WITHDRAW_FULL"); assert.equal(b.outstandingLoan > 0, true);
@@ -164,7 +164,7 @@ t("share-out preview: loan holders may withdraw savings but are not profit-eligi
 });
 t("share-out execution: loan holders withdraw too (loan stays payable), closes the year and opens the next WITHOUT deleting history", () => {
   const db = fresh(); seed(db, "SOB-001", 100000, "2026-03-01"); seed(db, "SOB-002", 200000, "2026-03-01"); seed(db, "SOB-003", 7000, "2026-03-01");
-  LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3 });
+  LN.recordExistingLoan(db, ctxAt("2026-01-01"), { memberId: "SOB-002", amount: 50000, date: "2026-01-01", assignedMonthlyInterest: 5000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   throwsMsg(() => C.executeShareOut(db, ctxAt("2026-06-10"), 2026, { date: "2026-06-10" }), /OUTSIDE_DECEMBER/);
   throwsMsg(() => C.executeShareOut(db, ctxAt("2026-12-10", committee), 2026, { date: "2026-12-10" }), /FORBIDDEN/);
   const before = db.transactions.length, hist = L.memberLifetimeHistory(db, "SOB-001").length;

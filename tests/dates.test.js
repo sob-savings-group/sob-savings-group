@@ -27,7 +27,7 @@ t("the chosen repayment date drives the interest/principal split and the guarant
   const l = LN.applyForLoan(db, ctx("2026-02-01"), "SOB-001", 100000);
   [["SOB-002", 40000], ["SOB-003", 30000]].forEach(([g, a]) => { const x = LN.addGuarantee(db, ctx("2026-02-02"), l.id, g, a); LN.acceptGuarantee(db, G.makeCtx({ name: g, id: g, role: "Member", memberId: g }, { today: "2026-02-02", now: "2026-02-02T09:00:00.000Z" }), x.id); });
   LN.approveLoan(db, ctx("2026-02-03"), l.id); LN.approveLoan(db, ctx("2026-02-03", "Chairperson"), l.id);
-  CMD.run(db, ctx("2026-02-03"), "disburseLoan", { loanId: l.id, assignedMonthlyInterest: 10000, graceMonths: 3, date: "2026-02-03" });
+  CMD.run(db, ctx("2026-02-03"), "disburseLoan", { loanId: l.id, assignedMonthlyInterest: 10000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", date: "2026-02-03" });
   const early = JSON.parse(JSON.stringify(db)), late = JSON.parse(JSON.stringify(db));
   CMD.run(early, ctx(T), "repayLoan", { loanId: l.id, amount: 30000, date: "2026-07-10" });
   CMD.run(late, ctx(T), "repayLoan", { loanId: l.id, amount: 30000 });                          // no date -> today

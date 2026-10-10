@@ -46,7 +46,7 @@
     if (loan.date === newDate && !loan.dateUnknown) throw new Error("INVALID: date unchanged");
     const prev = loan.date;
     (loan.dateHistory = loan.dateHistory || []).push({ date: ctx.today, timestamp: ctx.now, previousDate: prev, newDate, reason, evidence, by: ctx.by, role: ctx.role });
-    loan.date = newDate; delete loan.dateUnknown; delete loan.placeholderDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, Number(loan.graceMonths));
+    loan.date = newDate; delete loan.dateUnknown; delete loan.placeholderDate; if (loan.graceMonths !== undefined) loan.dueDate = dates.addMonths(newDate, L.loanGraceMonths(loan));
     db.transactions.filter((t) => t.loanId === loanId && t.type === "Loan Disbursement" && !t.voided && !t.instalment).forEach((t) => { t.originalDate = t.originalDate || t.date; t.date = newDate; delete t.dateUnknown; delete t.placeholderDate; });
     G.audit(db, ctx, "Loan", loanId, "Start date corrected", { date: prev }, { date: newDate }, reason + " | evidence: " + evidence);
     return loan;

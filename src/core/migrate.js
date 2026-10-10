@@ -42,7 +42,7 @@
     let s = 0; raw.transactions.filter((t) => !t.voided).forEach((t) => (s += L.classifyTransaction(t).savings));
     ok("group savings", s, L.computeGroupTotals(db, asOf).groupSavings);
     raw.loans.forEach((o, i) => {
-      const months = Math.max(0, dates.monthsBetween(o.date, asOf) - (o.graceMonths || 0));
+      const months = Math.max(0, dates.monthsBetween(o.date, asOf));
       const paid = raw.transactions.filter((t) => !t.voided && t.loanId === o.id && t.type === "Loan Repayment").reduce((a, t) => a + t.amount, 0);
       ok("loan balance " + o.memberId, o.loanAmount + months * o.monthlyStandardInterest - paid, L.loanOutstanding(db.loans[i], db, asOf));
     });

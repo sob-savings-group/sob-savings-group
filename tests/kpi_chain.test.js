@@ -15,10 +15,10 @@ function scenario() {
   add("2026-05-20", "SOB-004", 10000, "Withdraw"); add("2026-02-10", "", 5000, "Subscription", "Annual subscription"); add("2026-03-01", "", 3000, "Expense", "stationery"); add("2026-04-15", "", 7000, "Income", "bank interest"); add("2026-06-30", "SOB-005", 9000, "Profit", "Profit distribution");
   // loan 1: guaranteed by SOB-002, repaid partly (interest first), then cleared
   const l1 = LN.applyForLoan(db, at("2026-02-01"), "SOB-001", 100000); LN.addGuarantee(db, at("2026-02-02"), l1.id, "SOB-002", 40000); LN.acceptGuarantee(db, mem("SOB-002", "2026-02-02"), db.guarantees[0].id);
-  LN.approveLoan(db, at("2026-02-03"), l1.id); LN.approveLoan(db, at("2026-02-03", "chair"), l1.id); LN.disburseLoan(db, at("2026-02-03"), l1.id, { date: "2026-02-03", assignedMonthlyInterest: 10000, graceMonths: 3 });
+  LN.approveLoan(db, at("2026-02-03"), l1.id); LN.approveLoan(db, at("2026-02-03", "chair"), l1.id); LN.disburseLoan(db, at("2026-02-03"), l1.id, { date: "2026-02-03", assignedMonthlyInterest: 10000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   LN.repayLoan(db, at("2026-04-10"), l1.id, 20000, "2026-04-10"); LN.repayLoan(db, at("2026-07-15"), l1.id, 50000, "2026-07-15");
   // loan 2: SOB-003, interest-bearing, still running
-  const l2 = LN.applyForLoan(db, at("2026-05-01"), "SOB-003", 60000); LN.approveLoan(db, at("2026-05-03"), l2.id); LN.approveLoan(db, at("2026-05-03", "chair"), l2.id); LN.disburseLoan(db, at("2026-05-05"), l2.id, { date: "2026-05-05", assignedMonthlyInterest: 6000, graceMonths: 1 });
+  const l2 = LN.applyForLoan(db, at("2026-05-01"), "SOB-003", 60000); LN.approveLoan(db, at("2026-05-03"), l2.id); LN.approveLoan(db, at("2026-05-03", "chair"), l2.id); LN.disburseLoan(db, at("2026-05-05"), l2.id, { date: "2026-05-05", assignedMonthlyInterest: 6000, graceMonths: 1, graceAuthorisedBy: "Chairperson (test)" });
   LN.repayLoan(db, at("2026-08-01"), l2.id, 4000, "2026-08-01");
   return { db, l1, l2 };
 }

@@ -15,17 +15,17 @@ const tx = (db, id, date, type, amount, extra) => db.transactions.push(Object.as
     const p = S.memberAccount(db, "SOB-900", { from: "2025-03-01", to: "2025-12-31" }, { today: "2026-10-10" }).savings; assert.equal(p.opening, 105000); assert.equal(p.closing, 35000); assert.ok(p.checks.movementsAddUp);
     const past = S.memberAccount(db, "SOB-900", { to: "2025-02-28" }, { today: "2026-10-10" }); assert.equal(past.savings.closing, 105000); assert.equal(past.transactions.length, 2);
   });
-  await t("a loan: the working is calendar months less grace, and the parts add up to what is owed", () => {
+  await t("a loan: the working is calendar months (less any grace the Chairperson authorised), and the parts add up to what is owed", () => {
     const db = mk(); tx(db, "TXN-L1", "2025-12-21", "Loan Disbursement", 2000000, { loanId: "LOAN-X" });
-    db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-900", loanAmount: 2000000, assignedMonthlyInterest: 60000, graceMonths: 3, status: "Active", dueDate: "2026-03-21", interestHistory: [], dateUnknown: true, placeholderDate: "2025-12-21" });
+    db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-900", loanAmount: 2000000, assignedMonthlyInterest: 60000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", dueDate: "2026-03-21", interestHistory: [], dateUnknown: true, placeholderDate: "2025-12-21" });
     const l = S.memberAccount(db, "SOB-900", {}, { today: "2026-10-10" }).loans[0];
-    assert.equal(l.totalOwed, 2420000); assert.equal(l.accruedInterest, 420000); assert.equal(l.chargeableMonths, 7); assert.equal(l.elapsedMonths, 10); assert.ok(/10; less 3 grace months = 7 interest-bearing months; 7 × UGX 60,000 = UGX 420,000/.test(l.working));
+    assert.equal(l.totalOwed, 2420000); assert.equal(l.accruedInterest, 420000); assert.equal(l.chargeableMonths, 7); assert.equal(l.elapsedMonths, 10); assert.ok(/10; less 3 authorised grace months = 7 interest-bearing months; 7 × UGX 60,000 = UGX 420,000/.test(l.working));
     assert.ok(/Not established \(shown at 21\/12\/2025/.test(l.dateText)); assert.equal(l.disbursementDate, "2025-12-21"); assert.equal(l.disbursementRef, "TXN-L1"); assert.ok(l.checks.partsAddUp && l.checks.interestMatchesRule);
     const html = S.toPrintHTML(S.memberAccount(db, "SOB-900", {}, { today: "2026-10-10" })); assert.ok(/UGX 2,420,000/.test(html) && /UGX 2,000,000/.test(html) && /21\/12\/2025/.test(html));
   });
   await t("repayments clear interest first, then the loan, each shown with its reference", () => {
     const db = mk(); tx(db, "TXN-L1", "2025-12-21", "Loan Disbursement", 1000000, { loanId: "LOAN-X" });
-    db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-900", loanAmount: 1000000, assignedMonthlyInterest: 30000, graceMonths: 3, status: "Active", interestHistory: [] });
+    db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-900", loanAmount: 1000000, assignedMonthlyInterest: 30000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", interestHistory: [] });
     tx(db, "TXN-R1", "2026-08-01", "Loan Repayment", 100000, { loanId: "LOAN-X" });   // 8 months - 3 grace = 5 x 30,000 = 150,000 interest due: all of it goes to interest
     tx(db, "TXN-R2", "2026-09-01", "Loan Repayment", 100000, { loanId: "LOAN-X" });   // 9-3 = 6 months = 180,000 -> 30,000 still due on top of the 100,000 paid -> 80,000 more... interest first
     const l = S.memberAccount(db, "SOB-900", {}, { today: "2026-10-10" }).loans[0];
@@ -42,7 +42,7 @@ const tx = (db, id, date, type, amount, extra) => db.transactions.push(Object.as
   });
   await t("a single-loan statement shows only that loan, its references and its working", () => {
     const db = mk(); tx(db, "T1", "2025-06-01", "Savings", 50000); tx(db, "TXN-L1", "2025-12-21", "Loan Disbursement", 500000, { loanId: "LOAN-A" }); tx(db, "TXN-L2", "2026-02-01", "Loan Disbursement", 300000, { loanId: "LOAN-B" });
-    db.loans.push({ id: "LOAN-A", date: "2025-12-21", memberId: "SOB-900", loanAmount: 500000, assignedMonthlyInterest: 10000, graceMonths: 3, status: "Active", interestHistory: [] }, { id: "LOAN-B", date: "2026-02-01", memberId: "SOB-900", loanAmount: 300000, assignedMonthlyInterest: 5000, graceMonths: 3, status: "Active", interestHistory: [] });
+    db.loans.push({ id: "LOAN-A", date: "2025-12-21", memberId: "SOB-900", loanAmount: 500000, assignedMonthlyInterest: 10000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", interestHistory: [] }, { id: "LOAN-B", date: "2026-02-01", memberId: "SOB-900", loanAmount: 300000, assignedMonthlyInterest: 5000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", interestHistory: [] });
     const a = S.memberAccount(db, "SOB-900", {}, { today: "2026-10-10", loanId: "LOAN-B" }); assert.equal(a.loans.length, 1); assert.equal(a.loans[0].ref, "LOAN-B"); assert.equal(a.mode, "loan");
     const h = S.toPrintHTML(a); assert.ok(/Loan statement LOAN-B/.test(h) && !/Savings summary/.test(h) && !/LOAN-A/.test(h) && /TXN-L2/.test(h));
   });

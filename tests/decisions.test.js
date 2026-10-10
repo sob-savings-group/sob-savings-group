@@ -29,7 +29,7 @@ t("actual savings = deposits + profit - withdrawals - share-outs", () => {
   assert.equal(L.memberSavings(db, "SOB-001"), 1000000 + 20000 - 300000 - 200000);
 });
 t("a consolidated loan is ONE account with its dated components; the sum must match; the Chairperson approves; the statement shows them", () => {
-  const db = fresh(); db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-002", memberName: "Member B", loanAmount: 861000, monthlyStandardInterest: 30000, graceMonths: 3, status: "Active" });
+  const db = fresh(); db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-002", memberName: "Member B", loanAmount: 861000, monthlyStandardInterest: 30000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active" });
   const comps = [{ date: "2026-03-09", amount: 811000, ref: "row 209" }, { date: "2026-04-30", amount: 50000, ref: "row 263" }];
   assert.throws(() => CMD.run(db, at("2026-10-08"), "recordLoanComponents", { loanId: "LOAN-X", components: [{ date: "2026-03-09", amount: 800000 }, { date: "2026-04-30", amount: 50000 }], reason: "r", evidence: "e" }), /add up/);
   const r = CMD.run(db, at("2026-10-08"), "recordLoanComponents", { loanId: "LOAN-X", components: comps, reason: "one loan", evidence: "rows 209, 263" }); assert.equal(r.pendingApproval, true); assert.equal(db.loans[0].components, undefined, "nothing changes before approval");

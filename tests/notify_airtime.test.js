@@ -70,7 +70,7 @@ t("a Member may change only their own consent; cancel needs a reason and refuses
 });
 t("loan decisions and share-out queue notices (deduped); template text is bounded", () => {
   const db = fresh(); const a = ctxAt("2026-12-21"); seed(db, "SOB-001", 100000); seed(db, "SOB-002", 50000);
-  const l = LN.recordExistingLoan(db, a, { memberId: "SOB-002", amount: 10000, date: "2026-02-01", assignedMonthlyInterest: 100, graceMonths: 3 });
+  const l = LN.recordExistingLoan(db, a, { memberId: "SOB-002", amount: 10000, date: "2026-02-01", assignedMonthlyInterest: 100, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   const rq = CMD.run(db, a, "executeShareOut", { year: 2026, date: "2026-12-21" }); assert.equal(rq.pendingApproval, true); CMD.run(db, ctxAt("2026-12-21", { name: "Chair", id: "U9", role: "Chairperson" }), "approveRequest", { id: rq.requestId });
   assert.equal(db.outbox.filter((m) => m.template === "shareOut").length, 2);
   assert.equal(N.render("custom", { text: "x".repeat(900) }).length, 320);
@@ -109,7 +109,7 @@ t("amount must be a positive whole number; phone must be valid", () => {
   CMD.run(db, m, "requestAirtime", { amount: 1000, phone: "0701000000" });
 });
 t("blocked while any loan is unpaid (legacy rule), allowed again once cleared", () => {
-  const db = withSavings(); LN.recordExistingLoan(db, ctxAt("2026-03-10"), { memberId: "SOB-001", amount: 1000, date: "2026-03-01", assignedMonthlyInterest: 0, graceMonths: 3 });
+  const db = withSavings(); LN.recordExistingLoan(db, ctxAt("2026-03-10"), { memberId: "SOB-001", amount: 1000, date: "2026-03-01", assignedMonthlyInterest: 0, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)" });
   throwsMsg(() => CMD.run(db, mctx("SOB-001"), "requestAirtime", { amount: 1000 }), /BLOCKED_BY_LOAN/);
   const loan = db.loans[0]; CMD.run(db, ctxAt("2026-03-10"), "repayLoan", { loanId: loan.id, amount: 1000, date: "2026-03-10" });
   CMD.run(db, mctx("SOB-001"), "requestAirtime", { amount: 1000 });

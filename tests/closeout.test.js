@@ -56,7 +56,7 @@ t("an interest-only write-off is not a group loss and the reserve does not move"
   assert.equal(HL.position(db, id).interestOutstanding, 0); assert.equal(RS.balance(db), b0);
 });
 t("a loan date can be marked NOT ESTABLISHED (audited, approved) and later corrected from a document; no false date is kept as fact", () => {
-  const db = world(); db.loans.push({ id: "LOAN-T", memberId: "SOB-001", date: "2025-12-21", loanAmount: 100000, graceMonths: 3, status: "Active", assignedMonthlyInterest: 3000 });
+  const db = world(); db.loans.push({ id: "LOAN-T", memberId: "SOB-001", date: "2025-12-21", loanAmount: 100000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", assignedMonthlyInterest: 3000 });
   db.transactions.push({ id: "TXN-T", type: "Loan Disbursement", memberId: "SOB-001", amount: 100000, date: "2025-12-21", loanId: "LOAN-T", approvalStatus: "Approved" });
   assert.throws(() => run(db, "markLoanDateUnknown", { loanId: "LOAN-T", reason: "r" }), /evidence/);
   const q = run(db, "markLoanDateUnknown", { loanId: "LOAN-T", reason: "no document states it", evidence: "searched member sheet, register, bank ledger" }); assert.equal(q.pendingApproval, true); approve(db, q);

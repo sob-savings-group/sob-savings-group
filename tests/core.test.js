@@ -15,7 +15,7 @@ const t = (name, fn) => { fn(); pass++; console.log("  ok  " + name); };
 
 // Independent reference implementation of the OLD (golden) logic, old field name, no shared code.
 function oldOutstanding(loan) {
-  const months = Math.max(0, dates.monthsBetween(loan.date, ASOF) - (loan.graceMonths || 0));
+  const months = Math.max(0, dates.monthsBetween(loan.date, ASOF));
   const interest = months * loan.monthlyStandardInterest;
   const pen = raw.transactions.filter((x) => !x.voided && x.loanId === loan.id && x.type === "Penalty").reduce((a, x) => a + x.amount, 0);
   const paid = raw.transactions.filter((x) => !x.voided && x.loanId === loan.id && x.type === "Loan Repayment").reduce((a, x) => a + x.amount, 0);
@@ -42,7 +42,7 @@ t("stateless: 50 evaluations create no transactions and never change the answer"
   assert.equal(db.transactions.length, before);
 });
 t("interest respects grace period and fixed monthly amount", () => {
-  const loan = { id: "X", date: "2026-01-01", loanAmount: 100000, graceMonths: 3, assignedMonthlyInterest: 10000 };
+  const loan = { id: "X", date: "2026-01-01", loanAmount: 100000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", assignedMonthlyInterest: 10000 };
   assert.equal(L.loanAccumulatedInterest(loan, "2026-03-31"), 0);
   assert.equal(L.loanAccumulatedInterest(loan, "2026-04-01"), 0);        // 3 calendar months elapsed - 3 grace
   assert.equal(L.loanAccumulatedInterest(loan, "2026-05-01"), 10000 * 1);

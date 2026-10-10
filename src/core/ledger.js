@@ -70,10 +70,13 @@
     const a = asOf || dates.todayISO();
     return (loan.status === "Cleared" && dates.isISO(loan.datePaidFull) && loan.datePaidFull < a) ? loan.datePaidFull : a;
   };
+  /* SOB has NO grace period by default: interest runs from the first payout, month by month, until the loan is settled. A grace period counts ONLY when
+     the Chairperson has authorised it on that loan (graceAuthorisedBy). Any stored graceMonths without that authorisation is ignored. */
+  const loanGraceMonths = (loan) => (loan && loan.graceAuthorisedBy ? Number(loan.graceMonths) || 0 : 0);
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
-    return Math.max(0, elapsed - (Number(loan.graceMonths) || 0));
+    return Math.max(0, elapsed - loanGraceMonths(loan));
   }
   const loanAccumulatedInterest = (loan, asOf) =>
     loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
@@ -184,7 +187,7 @@
 
   return {
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
-    loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution

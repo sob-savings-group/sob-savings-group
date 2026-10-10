@@ -197,7 +197,7 @@
     if (L.memberHasOutstandingLoan(db, memberId)) throw new Error("HAS_OUTSTANDING_LOAN: clear the existing loan first");
     if ((db.loans || []).some((l) => l.memberId === memberId && !l.voided && PRE_DISBURSE.includes(l.status))) throw new Error("ALREADY_APPLIED");
     const loan = { id: G.uid("LOAN"), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
-      applicationDate: ctx.today, appliedBy: ctx.by, graceMonths: 3 };
+      applicationDate: ctx.today, appliedBy: ctx.by, graceMonths: 0 };
     db.loans.push(loan);
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });
     return loan;
@@ -234,8 +234,10 @@
     const rate = Number(o.assignedMonthlyInterest);
     if (o.assignedMonthlyInterest === undefined || o.assignedMonthlyInterest === "" || !(rate >= 0)) throw new Error("REQUIRED: assignedMonthlyInterest (Admin must assign interest for this loan)");
     const date = o.date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date");
-    const grace = o.graceMonths === undefined ? (loan.graceMonths ?? 3) : Number(o.graceMonths);
-    Object.assign(loan, { status: "Active", date, assignedMonthlyInterest: rate, graceMonths: grace, dueDate: dates.addMonths(date, grace),
+    const grace = (o.graceMonths === undefined || o.graceMonths === "") ? 0 : Number(o.graceMonths);
+    if (!(grace >= 0)) throw new Error("INVALID: graceMonths");
+    if (grace > 0 && !o.graceAuthorisedBy) throw new Error("INVALID: SOB has no grace period unless the Chairperson authorises one for this loan (graceAuthorisedBy); interest runs from the first payout");
+    Object.assign(loan, { status: "Active", date, assignedMonthlyInterest: rate, graceMonths: grace, graceAuthorisedBy: grace > 0 ? o.graceAuthorisedBy : undefined, dueDate: dates.addMonths(date, grace),
       disbursedBy: ctx.by, interestHistory: [{ date: ctx.today, timestamp: ctx.now, previousAmount: null, newAmount: rate, reason: "Initial assignment at disbursement", changedByRole: ctx.role, changedBy: ctx.by }] });
     G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: loan.loanAmount, type: "Loan Disbursement", purpose: txnNote, loanId: loan.id });
     G.audit(db, ctx, "Loan", loan.id, "Disbursed", null, { amount: loan.loanAmount, assignedMonthlyInterest: rate, date });
