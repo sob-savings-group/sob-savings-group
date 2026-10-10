@@ -16,7 +16,7 @@
   const Table = (cols, rows, onRow, emptyText) => h("div", { class: "scroll" }, h("table", null,
     h("thead", null, h("tr", null, cols.map((c) => h("th", { class: c.num ? "n" : "" }, c.label)))),
     h("tbody", null, rows.length ? rows.map((r) => h("tr", Object.assign({ class: onRow ? "click" : "" }, onRow ? { onclick: () => onRow(r) } : {}),
-      cols.map((c) => h("td", { class: c.num ? "n" : "" }, c.render ? c.render(r) : r[c.key])))) : [h("tr", null, h("td", { colspan: cols.length, class: "wrap" }, Empty({ icon: "book", title: emptyText || "Nothing to show yet", text: emptyText ? "" : "Entries will appear here as they are recorded." })))])));
+      cols.map((c) => h("td", { class: c.num ? "n" : "", "data-label": c.label || "" }, c.render ? c.render(r) : r[c.key])))) : [h("tr", { class: "empty-row" }, h("td", { colspan: cols.length, class: "wrap" }, Empty({ icon: "book", title: emptyText || "Nothing to show yet", text: emptyText ? "" : "Entries will appear here as they are recorded." })))])));
   const State = (kind, msg, retry) => kind === "loading" ? Skeleton() : h("div", { class: "state err" }, Icon("alert", 28), h("div", null, msg), retry ? h("button", { class: "primary", onclick: retry }, "Try again") : null);
   function Modal(title, body) {
     const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg) close(); } });
