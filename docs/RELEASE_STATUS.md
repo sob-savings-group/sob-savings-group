@@ -91,3 +91,6 @@ Not yet verified on real Google: everything above except sign-in/smoke/write tes
 ### Candidate 11 - register of 6 Oct 2026
 - Records file v11 adds the 43 new register rows (loaded in-app, idempotent), supersedes the SOB-035 void with one atomic splitRepayment request, and records two register items. Private pack kept outside the repository.
 - New gated command splitRepayment; loader plan steps repayLoan / supersedeRequest.
+
+### Candidate 12 - interest without grace; settlement from savings
+- No grace unless the Chairperson authorises it per loan. New gated command settleLoanFromSavings (interest first, no cash) and a read-only settlementReview; offsets are NOT applied until the Chairperson chooses the effective date.

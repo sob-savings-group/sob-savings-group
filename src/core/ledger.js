@@ -40,7 +40,7 @@
       case "Bank Charge": return { savings: -amt, loan: 0, profit: 0, cashflow: -amt };
       case "Profit": return { savings: amt, loan: 0, profit: amt, cashflow: amt };
       case "Loan Disbursement": return { savings: 0, loan: -amt, profit: 0, cashflow: -amt };
-      case "Loan Repayment": return { savings: 0, loan: amt, profit: 0, cashflow: amt };
+      case "Loan Repayment": return t.viaSavings ? { savings: -amt, loan: amt, profit: 0, cashflow: 0 } : { savings: 0, loan: amt, profit: 0, cashflow: amt };   // viaSavings = settled from the member's own savings: no cash moves
       // Group-level movements: they change cash, never a member's savings.
       // (CONFIRMED by SOB: the UGX 5,000 annual subscription is group income, separate from member savings.)
       case "Subscription":

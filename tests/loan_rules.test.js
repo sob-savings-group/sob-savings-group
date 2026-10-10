@@ -7,6 +7,7 @@ let pass = 0; const t = (n, fn) => { try { fn(); pass++; console.log("  ok  " + 
 const U = { admin: { name: "Super Admin", id: "U1", role: "Admin" }, chair: { name: "Chair", id: "U2", role: "Chairperson" } };
 const at = (day, who) => G.makeCtx(U[who || "admin"], { today: day, now: day + "T09:00:00.000Z" });
 const fresh = () => ({ members: ["A", "B"].map((x, i) => ({ id: "SOB-00" + (i + 1), name: "Member " + x, status: "Active", regDate: "2025-01-01" })), transactions: [], loans: [], guarantees: [], auditLog: [] });
+const ST_review = (db) => LN.settlementReview(db, "2026-10-10");
 const dep = (db, m, d, a, ty) => G.createEntry(db, at(d), { date: d, memberId: m, amount: a, type: ty || "Savings" });
 function withLoan() {
   const db = fresh(); dep(db, "SOB-001", "2026-01-05", 1000000);
@@ -75,5 +76,23 @@ t("a consolidated repayment is replaced by its dated parts in ONE approved step:
   const reps = db.transactions.filter((x) => x.type === "Loan Repayment" && !x.voided); assert.deepEqual(reps.map((x) => x.amount).sort(), [100000, 200000]); assert.equal(db.transactions.find((x) => x.id === orig.id).voided, true);
   assert.equal(L.loanInterestPosition(db.loans[0], db, "2026-10-10").totalRepaid, 300000, "same total as before");
   assert.throws(() => CMD.run(db, at("2026-10-02"), "splitRepayment", { id: orig.id, parts, reason: "again", evidence: "e" }), /voided/, "cannot be split twice");
+});
+t("savings settle a loan only once they cover it: interest first, remainder kept, no cash created, audited; below that nothing is deducted and interest keeps running", () => {
+  const { db, id } = withLoan();   // 500,000 from 2 Feb 2026 at 30,000 a month; savings 1,000,000 deposited 5 Jan
+  db.transactions.find((x) => x.type === "Savings").amount = 300000;   // savings 300,000: below the 500,000 loan
+  assert.throws(() => LN.settleFromSavings(db, at("2026-03-05"), id, "2026-03-05"), /INSUFFICIENT_SAVINGS/);
+  assert.equal(L.memberSavings(db, "SOB-001"), 300000, "nothing was deducted"); assert.equal(L.loanOutstanding(db.loans[0], db, "2026-08-10"), 680000, "interest keeps running");
+  dep(db, "SOB-001", "2026-08-01", 600000); const cashBefore = L.computeGroupTotals(db, "2026-08-10").cashBalance;
+  const before = L.loanOutstanding(db.loans[0], db, "2026-08-10"); assert.equal(before, 680000);
+  const r = CMD.run(db, at("2026-08-10"), "settleLoanFromSavings", { loanId: id, date: "2026-08-10" }); assert.equal(r.pendingApproval, true); assert.equal(db.loans[0].status, "Active", "nothing changes before approval");
+  CMD.run(db, at("2026-08-10", "chair"), "approveRequest", { id: r.requestId });
+  const e = db.transactions.find((x) => x.viaSavings); assert.equal(e.amount, 680000); assert.equal(e.offset.interest, 180000); assert.equal(e.offset.principal, 500000);
+  assert.equal(db.loans[0].status, "Cleared"); assert.equal(L.memberSavings(db, "SOB-001"), 900000 - 680000, "savings beyond the loan are kept");
+  assert.equal(L.computeGroupTotals(db, "2026-08-10").cashBalance, cashBefore, "no cash was created or removed");
+  assert.equal(L.loanOutstanding(db.loans[0], db, "2026-12-31"), 0, "interest stops at settlement");
+  assert.ok(db.auditLog.some((a) => a.action === "Settled from savings"));
+});
+t("the settlement review shows when savings first covered each loan and flags repayments recorded after that date", () => {
+  const { db, id } = withLoan(); const rv = ST_review(db); assert.equal(rv[0].coveredToday, true); assert.equal(rv[0].firstCovered.date, "2026-02-02"); assert.equal(rv[0].firstCovered.savingsLeft, 500000);
 });
 console.log(pass + " passed");

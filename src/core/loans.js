@@ -275,6 +275,40 @@
     G.audit(db, ctx, "Loan", loan.id, "Further payout added", { loanAmount: prior }, { loanAmount: loan.loanAmount, date, entry: entry.id }, o.reason || "Instalment of the approved loan");
     return loan;
   }
+  /* Savings that cover a loan settle it. Rule (Chairperson): when a member's savings reach the loan principal plus unpaid interest, the loan is settled FROM those savings,
+     interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
+     entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
+  const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
+  function settleFromSavings(db, ctx, loanId, date) {
+    G.require(ctx, "loan.repay");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
+    date = date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date"); if (date > ctx.today) throw new Error("INVALID: the settlement date cannot be in the future");
+    if (date < readyDate(loan)) throw new Error("INVALID: the loan was not fully paid out until " + readyDate(loan));
+    if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
+    const owed = L.loanOutstanding(loan, db, date), savings = L.memberSavingsAsOf(db, loan.memberId, date);
+    if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
+    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
+    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
+      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
+    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    return loan;
+  }
+  /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),
+     what the offset would be on that date, what is left, and whether recorded repayments come after it (which would make that date impossible). Changes nothing. */
+  function settlementReview(db, asOf) {
+    return db.loans.filter((l) => !l.voided && l.status === "Active").map((l) => {
+      const base = { loanId: l.id, memberId: l.memberId, dateKnown: !l.dateUnknown && dates.isISO(l.date) };
+      if (!base.dateKnown) return Object.assign(base, { firstCovered: null, note: "start date not established" });
+      const ready = readyDate(l), cands = [...new Set([ready, asOf].concat(L.activeTransactions(db).filter((t) => t.memberId === l.memberId && t.date >= ready && t.date <= asOf).map((t) => t.date)))].filter((d) => d >= ready && d <= asOf).sort();
+      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberSavingsAsOf(db, l.memberId, d) });
+      let first = null; for (const d of cands) { const x = at(d); if (x.owed > 0 && x.savings >= x.owed) { first = x; break; } }
+      const today = at(asOf), later = first ? L.activeTransactions(db).filter((t) => t.loanId === l.id && t.type === "Loan Repayment" && t.date > first.date).length : 0;
+      return Object.assign(base, { coveredToday: today.owed > 0 && today.savings >= today.owed, owedToday: today.owed, savingsToday: today.savings, firstCovered: first ? { date: first.date, owed: first.owed, savings: first.savings, savingsLeft: first.savings - first.owed } : null, repaymentsAfterThatDate: later });
+    });
+  }
   function repayLoan(db, ctx, loanId, amount, date) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
@@ -347,5 +381,5 @@
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });

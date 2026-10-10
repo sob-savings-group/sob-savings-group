@@ -132,7 +132,7 @@
       case "Bank Charge": return { savings: -amt, loan: 0, profit: 0, cashflow: -amt };
       case "Profit": return { savings: amt, loan: 0, profit: amt, cashflow: amt };
       case "Loan Disbursement": return { savings: 0, loan: -amt, profit: 0, cashflow: -amt };
-      case "Loan Repayment": return { savings: 0, loan: amt, profit: 0, cashflow: amt };
+      case "Loan Repayment": return t.viaSavings ? { savings: -amt, loan: amt, profit: 0, cashflow: 0 } : { savings: 0, loan: amt, profit: 0, cashflow: amt };   // viaSavings = settled from the member's own savings: no cash moves
       // Group-level movements: they change cash, never a member's savings.
       // (CONFIRMED by SOB: the UGX 5,000 annual subscription is group income, separate from member savings.)
       case "Subscription":
@@ -711,6 +711,40 @@
     G.audit(db, ctx, "Loan", loan.id, "Further payout added", { loanAmount: prior }, { loanAmount: loan.loanAmount, date, entry: entry.id }, o.reason || "Instalment of the approved loan");
     return loan;
   }
+  /* Savings that cover a loan settle it. Rule (Chairperson): when a member's savings reach the loan principal plus unpaid interest, the loan is settled FROM those savings,
+     interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
+     entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
+  const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
+  function settleFromSavings(db, ctx, loanId, date) {
+    G.require(ctx, "loan.repay");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
+    date = date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date"); if (date > ctx.today) throw new Error("INVALID: the settlement date cannot be in the future");
+    if (date < readyDate(loan)) throw new Error("INVALID: the loan was not fully paid out until " + readyDate(loan));
+    if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
+    const owed = L.loanOutstanding(loan, db, date), savings = L.memberSavingsAsOf(db, loan.memberId, date);
+    if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
+    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
+    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
+      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
+    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    return loan;
+  }
+  /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),
+     what the offset would be on that date, what is left, and whether recorded repayments come after it (which would make that date impossible). Changes nothing. */
+  function settlementReview(db, asOf) {
+    return db.loans.filter((l) => !l.voided && l.status === "Active").map((l) => {
+      const base = { loanId: l.id, memberId: l.memberId, dateKnown: !l.dateUnknown && dates.isISO(l.date) };
+      if (!base.dateKnown) return Object.assign(base, { firstCovered: null, note: "start date not established" });
+      const ready = readyDate(l), cands = [...new Set([ready, asOf].concat(L.activeTransactions(db).filter((t) => t.memberId === l.memberId && t.date >= ready && t.date <= asOf).map((t) => t.date)))].filter((d) => d >= ready && d <= asOf).sort();
+      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberSavingsAsOf(db, l.memberId, d) });
+      let first = null; for (const d of cands) { const x = at(d); if (x.owed > 0 && x.savings >= x.owed) { first = x; break; } }
+      const today = at(asOf), later = first ? L.activeTransactions(db).filter((t) => t.loanId === l.id && t.type === "Loan Repayment" && t.date > first.date).length : 0;
+      return Object.assign(base, { coveredToday: today.owed > 0 && today.savings >= today.owed, owedToday: today.owed, savingsToday: today.savings, firstCovered: first ? { date: first.date, owed: first.owed, savings: first.savings, savingsLeft: first.savings - first.owed } : null, repaymentsAfterThatDate: later });
+    });
+  }
   function repayLoan(db, ctx, loanId, amount, date) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
@@ -783,7 +817,7 @@
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
 });
 
 /* src/core/security.js */
@@ -2053,6 +2087,7 @@
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }),
+    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date),
     addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
@@ -2101,6 +2136,7 @@
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
+    settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
@@ -2113,7 +2149,7 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
@@ -2810,7 +2846,7 @@
     const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to), inP = hist.filter((t) => !from || t.date >= from);
     const opening = from ? L.memberSavingsAsOf(dd, memberId, dates.addDays(from, -1)) : 0, closing = L.memberSavingsAsOf(dd, memberId, to);
     const mv = { deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, offsets: 0, other: 0 };
-    inP.forEach((t) => { const e = L.classifyTransaction(t).savings; if (!e) return; const b = BUCKET[t.type] || "other"; mv[b] += (b === "deposits" || b === "profit" || b === "other") ? e : -e; });   // "other" keeps its own sign
+    inP.forEach((t) => { const e = L.classifyTransaction(t).savings; if (!e) return; const b = t.viaSavings ? "offsets" : (BUCKET[t.type] || "other"); mv[b] += (b === "deposits" || b === "profit" || b === "other") ? e : -e; });   // "other" keeps its own sign
     const net = mv.deposits + mv.profit - mv.withdrawals - mv.shareOuts - mv.offsets + mv.other;
     const savings = Object.assign({ opening, closing }, mv, { net, checks: { movementsAddUp: opening + net === closing, matchesRunningBalance: !inP.length || inP[inP.length - 1].runningSavings === closing || !!from, matchesPosition: L.memberPositionAsAt(dd, memberId, to).savings === closing } });
     const years = FY.table(dd).filter((c) => c.openedDate <= to && (!from || !c.closedDate || c.closedDate >= from)).map((c) => { const r = FY.position(dd, c.year).rows.find((x) => x.memberId === memberId) || { opening: 0, deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0, closing: 0 };
@@ -2820,7 +2856,7 @@
     const earlier = (dd.historicalLoans || []).filter((l) => l.memberId === memberId && !l.voided && (!dates.isISO(l.date) || l.date <= to) && (!only || l.id === only || l.registerRef === only)).map((l) => histBlock(dd, l, to));
     const loanTotals = { principalLeft: loans.reduce((a, x) => a + x.principalLeft, 0), interestDue: loans.reduce((a, x) => a + x.interestDue, 0), penaltiesDue: loans.reduce((a, x) => a + x.penaltiesDue, 0), owed: loans.reduce((a, x) => a + x.totalOwed, 0), earlierOwed: earlier.reduce((a, x) => a + x.totalOwed, 0) };
     const compsOf = (t) => { const ln = t.type === "Loan Disbursement" && !t.instalment ? (dd.loans || []).find((x) => x.id === t.loanId) : null; return ln && ln.components && ln.components.length > 1 && ln.components.reduce((a, c) => a + Number(c.amount), 0) === Number(t.amount) ? ln.components : null; };
-    const transactions = [].concat(...inP.filter((t) => !only || t.loanId === only).map((t) => { const cs = compsOf(t); return cs ? cs.map((c, i) => Object.assign({}, t, { id: t.id + "-P" + (i + 1), baseId: t.id, date: c.date, amount: Number(c.amount), sourceRef: c.ref || t.sourceRef, purpose: "Part " + (i + 1) + " of " + cs.length + " of one loan paid out in instalments" })) : [t]; })).map((t) => ({ loanId: t.loanId || "", date: t.date, ref: t.id, source: t.sourceRef || "", type: TYPE_LABEL[t.type] || t.type, details: [t.purpose && t.purpose !== t.type ? t.purpose : "", t.correctionNote ? "Correction: " + t.correctionNote : "", t.dateUnknown ? "Date not established" : ""].filter(Boolean).join(" · "), amount: Number(t.amount), effect: L.classifyTransaction(t).savings, balance: t.runningSavings, open: { kind: "entry", id: t.baseId || t.id } }));
+    const transactions = [].concat(...inP.filter((t) => !only || t.loanId === only).map((t) => { const cs = compsOf(t); return cs ? cs.map((c, i) => Object.assign({}, t, { id: t.id + "-P" + (i + 1), baseId: t.id, date: c.date, amount: Number(c.amount), sourceRef: c.ref || t.sourceRef, purpose: "Part " + (i + 1) + " of " + cs.length + " of one loan paid out in instalments" })) : [t]; })).map((t) => ({ loanId: t.loanId || "", date: t.date, ref: t.id, source: t.sourceRef || "", type: t.viaSavings ? "Loan settled from savings (offset)" : (TYPE_LABEL[t.type] || t.type), details: [t.purpose && t.purpose !== t.type ? t.purpose : "", t.correctionNote ? "Correction: " + t.correctionNote : "", t.dateUnknown ? "Date not established" : ""].filter(Boolean).join(" · "), amount: Number(t.amount), effect: L.classifyTransaction(t).savings, balance: t.runningSavings, open: { kind: "entry", id: t.baseId || t.id } }));
     /* corrections and audit notes: nothing is overwritten; each correction sits beside the original */
     const mine = (db.transactions || []).filter((t) => t.memberId === memberId && (!only || t.loanId === only)), ids = {}; mine.forEach((t) => { ids[t.id] = 1; }); [].concat(loans, earlier).forEach((x) => { ids[x.id || x.ref] = 1; }); if (!only) ids[memberId] = 1;
     const notes = [];
