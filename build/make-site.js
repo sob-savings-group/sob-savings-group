@@ -9,5 +9,6 @@ const url = process.env.SOB_URL || ""; if (url && !/^https:\/\/script\.google\.c
 fs.writeFileSync(path.join(out, "app.bundle.js"), bundle);
 fs.writeFileSync(path.join(out, "config.js"), "window.SOB_CONFIG = " + JSON.stringify({ ledgerUrl: url, build: require("./common.js").buildId() }) + ";\n");
 fs.copyFileSync(path.join(root, "app/styles.css"), path.join(out, "styles.css"));
-fs.writeFileSync(path.join(out, "index.html"), html.replace(/(<script src="[^"]+"><\/script>)+/, '<script src="config.js"></script><script src="app.bundle.js"></script>'));
+const prodTitle = (h) => (url ? h.replace(/<title>[^<]*<\/title>/, "<title>Sons of Bethel Savings Group</title>") : h);
+fs.writeFileSync(path.join(out, "index.html"), prodTitle(html).replace(/(<script src="[^"]+"><\/script>)+/, '<script src="config.js"></script><script src="app.bundle.js"></script>'));
 console.log("site built:", out, "| backend:", url || "(none - demo disabled; set SOB_URL)");
