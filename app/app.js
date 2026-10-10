@@ -185,6 +185,46 @@
     wrap.append(h("div", { class: "grid" }, Card("Collected", ugx(cm.collected), "of " + ugx(cm.expected) + " · as at " + D.longDate(p.to), () => { st.view = "subs"; render(); }), Card("Unpaid members", String(cm.unpaid.length), "as at " + D.longDate(p.to), () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)))));
     return wrap;
   }
+  /* ---------- the full member statement: one account object feeds this screen, the PDF and the WhatsApp text ---------- */
+  const SX = S.statements;
+  const accountRep = (a) => ({ title: (a.mode === "loan" ? "Loan statement " + a.loanId : "Member account statement") + " — " + a.member.name + " (" + a.member.id + ")", period: a.period.text, printHTML: (meta) => SX.toPrintHTML(a, meta) });
+  const printAccount = (memberId, period, internal, loanId) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return printReport(accountRep(a), a.period.text); };
+  const statementText = (a) => ["*Sons of Bethel (SOB) Savings Group*", "Statement " + a.ref, a.member.name + " (" + a.member.id + ")", a.period.text, "", "Opening savings: " + ugx(a.savings.opening), "Deposits: " + ugx(a.savings.deposits), "Profit credited: " + ugx(a.savings.profit), "Withdrawals: " + ugx(a.savings.withdrawals), "Share-outs: " + ugx(a.savings.shareOuts), "*Closing savings: " + ugx(a.savings.closing) + "*"]
+    .concat(a.loans.length ? ["", "Loans owed: " + ugx(a.loanTotals.owed) + " (loan " + ugx(a.loanTotals.principalLeft) + " + interest " + ugx(a.loanTotals.interestDue) + ")"] : []).concat(["", "CONFIDENTIAL: for the named member only. Full PDF statement available from the Treasurer."]).join("\n");
+  const waSend = (text) => { if (navigator.share) { navigator.share({ title: "SOB statement", text }).catch(() => {}); } else { const a = h("a", { href: "https://wa.me/?text=" + encodeURIComponent(text), target: "_blank", rel: "noopener" }); document.body.append(a); a.click(); a.remove(); } };
+  function statementView(memberId, internal, toDate) {
+    const box = h("div", { id: "stmt-view" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
+    let key = "all", cust = null; const maxTo = toDate || today();
+    const periodOf = () => (key === "custom" && cust ? cust : (() => { const p = D.presetPeriod(key, maxTo, FYM.table(st.db)); return p; })());
+    const lines = (rows) => h("div", { class: "panel kvs" }, rows.map(([l, v, cls]) => h("div", { class: "kv" + (cls ? " " + cls : "") }, h("span", null, l), h("b", null, typeof v === "number" ? ugx(v) : v))));
+    const paint = () => {
+      const p = periodOf(), a = SX.memberAccount(st.db, memberId, { from: p.from, to: p.to > maxTo ? maxTo : p.to }, { internal }), s = a.savings;
+      const byType = (label, test) => () => drill(label + " — " + a.period.text, null, Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }, { label: "Ref", key: "ref" }, { label: "Transaction", key: "type" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }], a.transactions.filter(test), internal ? (x) => openEntry(x.ref) : null, "Nothing in this period"));
+      const cards = [["Opening savings", s.opening, null, null], ["Deposits", s.deposits, "avail", byType("Deposits", (x) => x.type === "Savings deposit")], ["Profit credited", s.profit, "profit", byType("Profit credited", (x) => x.type === "Profit share")], ["Withdrawals", s.withdrawals, "loan", byType("Withdrawals", (x) => /Withdrawal|Bank charge/.test(x.type))], ["Share-outs", s.shareOuts, "loan", byType("Share-outs", (x) => x.type === "Annual share-out")], ["Closing savings", s.closing, null, null]];
+      box.replaceChildren(h("div", null,
+        Chips(PRE, key, (k) => { key = k; if (k === "custom" && !cust) cust = D.customPeriod("", maxTo, maxTo); paint(); }),
+        key === "custom" ? h("div", { class: "pb-custom" }, h("label", null, "From", h("input", { type: "date", id: "stm-from", value: (cust && cust.from) || "", max: maxTo })), h("label", null, "To", h("input", { type: "date", id: "stm-to", value: (cust && cust.to) || maxTo, max: maxTo })), h("button", { class: "primary", id: "stm-apply", onclick: () => { try { cust = D.customPeriod(document.getElementById("stm-from").value, document.getElementById("stm-to").value, maxTo); paint(); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
+        h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
+        h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
+        s.checks.movementsAddUp ? Banner("ok", "Opening " + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + ". Agrees with the ledger.") : Banner("bad", "These figures do not add up to the ledger. Please tell the Treasurer before relying on this statement."),
+        h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
+          h("button", { id: "stm-csv", "data-csv": 1, onclick: () => download("statement_" + a.member.id + ".csv", "text/csv", R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref })) }, "Download CSV")),
+        h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
+        h("p", { class: "mute rg-blurb" }, a.reserve.text),
+        h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
+        a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")),
+          lines([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—"], ["Agreed interest per month", l.monthlyInterest], ["Interest charged to date", l.accruedInterest], ["Interest paid", l.interestPaid], ["Interest still due", l.interestDue], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft], ["TOTAL OWED", l.totalOwed, "tot"]]),
+          h("p", { class: "mute rg-blurb" }, "Interest working: " + l.working), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
+          l.repayments.length ? Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }, { label: "Ref", key: "ref" }, { label: "Paid", num: 1, render: (r) => num(r.amount) }, { label: "To interest", num: 1, render: (r) => num(r.interest) }, { label: "To loan", num: 1, render: (r) => num(r.principal) }, { label: "Loan left", num: 1, render: (r) => num(r.principalLeft) }], l.repayments, null) : h("p", { class: "mute rg-blurb" }, "No repayments recorded yet. " + l.rule))),
+        a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, "Earlier loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
+        h("h2", { class: "sec" }, "Every transaction · tap one to review it"), Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }, { label: "Ref", key: "ref" }, { label: "Transaction", key: "type" }, { label: "Details", key: "details" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }, { label: "Effect", num: 1, render: (x) => num(x.effect) }, { label: "Balance", num: 1, render: (x) => num(x.balance) }], a.transactions.slice().reverse().slice(0, 150), internal ? (x) => openEntry(x.ref) : null, "No transactions in this period"),
+        a.transactions.length > 150 ? h("p", { class: "mute" }, "Showing the latest 150 of " + a.transactions.length + " — the PDF has all of them.") : null,
+        a.notes.length ? h("div", null, h("h2", { class: "sec" }, "Corrections and audit notes"), Table([{ label: "Date", render: (n) => D.toDisplay(n.date) }, { label: "Ref", key: "ref" }, { label: "Note", key: "note" }], a.notes.slice(0, 60), null)) : null,
+        internal && (a.pending.length || a.review.length) ? h("div", null, h("h2", { class: "sec" }, "For the officers: awaiting decision"), a.pending.length ? Table([{ label: "Request", key: "ref" }, { label: "Action", key: "label" }, { label: "Detail", key: "summary" }], a.pending, null) : null, a.review.length ? Table([{ label: "Register item", key: "ref" }, { label: "Kind", key: "kind" }, { label: "Detail", key: "summary" }], a.review, null) : null) : null));
+    };
+    paint(); return box;
+  }
+  function openStatement(memberId, internal) { Modal("Statement", statementView(memberId, internal)); }
   /* the ledger as it stood on a past day (entries after it removed) */
   const asAtDb = (asOf) => Object.assign({}, st.db, { transactions: (st.db.transactions || []).filter((t) => t.date <= asOf) });
   /* Every PDF/print goes through here -> R.toPrintHTML -> mandatory SOB header + footer (repeats on every page). Printed from a hidden frame (no pop-up blocking). */
@@ -192,11 +232,12 @@
     return Busy.run("Preparing your PDF…", () => new Promise((res) => {
       const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
       /* Opens the branded statement in its own tab: desktop prints straight away; on a phone use "Print / Save as PDF" there (then share the PDF on WhatsApp). */
-      const w = window.open(URL.createObjectURL(new Blob([R.toPrintHTML(rep, Object.assign({ toolbar: true }, meta))], { type: "text/html" })), "_blank");
+      const render = (m) => (rep.printHTML ? rep.printHTML(m) : R.toPrintHTML(rep, m));
+      const w = window.open(URL.createObjectURL(new Blob([render(Object.assign({ toolbar: true }, meta))], { type: "text/html" })), "_blank");
       if (w) { setTimeout(res, 300); return; }
       toast("Please allow pop-ups for this page to open the PDF.", "warn");
       const f = document.createElement("iframe"); f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"; document.body.append(f);
-      const d = f.contentWindow.document; d.open(); d.write(R.toPrintHTML(rep, meta)); d.close();
+      const d = f.contentWindow.document; d.open(); d.write(render(meta)); d.close();
       setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast("Could not open the print dialog", true); } setTimeout(() => f.remove(), 60000); res(); }, 400);
     }));
   }
@@ -205,7 +246,7 @@
   /* ---------- members ---------- */
   function openMember(id, asAt0) {
     const m = st.db.members.find((x) => x.id === id); if (!m) return;
-    const asAt = asAt0 || today(), hist = asAt < today(), dd = asAtDb(asAt), pos = L.memberPositionAsAt(st.db, id, asAt), stmt = R.memberStatementPrint(st.db, id, { to: asAt });
+    const asAt = asAt0 || today(), hist = asAt < today(), dd = asAtDb(asAt), pos = L.memberPositionAsAt(st.db, id, asAt);
     const loans = L.activeLoansAsAt(dd, asAt).filter((l) => l.memberId === id), owed = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, dd, asAt)), 0);
     drill(m.id + " — " + m.name, null, h("div", null, hist ? Banner("info", "Showing this member as at " + D.longDate(asAt) + ". Open them from the Members page for today's position.") : null,
       h("div", { class: "grid" }, Card("Savings" + (hist ? " (as at " + D.longDate(asAt) + ")" : ""), ugx(pos.savings), "From the ledger"), Card("Guarantee committed", ugx(pos.committed)), Card("Available", ugx(pos.available)), Card("Outstanding loan", ugx(owed))),
@@ -213,7 +254,7 @@
         ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset PIN for " + m.name, [{ name: "n", label: "New PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
         : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
       h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(dd, asAt).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id, asAt)),
-      h("h2", { class: "sec" }, "Savings statement"), h("div", { class: "row" }, printButton(stmt, stmt.period)), tableFromReport({ columns: stmt.columns, rows: stmt.rows.slice().reverse().slice(0, 100) }, (r) => openEntry(r._open.id)), stmt.rows.length > 100 ? h("p", { class: "mute" }, "Showing the latest 100 of " + stmt.rows.length + " entries — the PDF has all of them.") : null));
+      h("h2", { class: "sec" }, "Statement"), statementView(id, true, asAt)));
   }
   /* live search: only the result area is redrawn, so typing never loses focus */
   const Searchable = (placeholder, build) => { let q = ""; const box = h("div"); const paint = () => box.replaceChildren(build(q.trim().toLowerCase())); const inp = h("input", { type: "search", class: "search", placeholder, "aria-label": placeholder, oninput: (e) => { q = e.target.value; paint(); } }); paint(); return h("div", null, inp, box); };
@@ -236,6 +277,7 @@
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
     const b = h("div", null,
+      h("div", { class: "row" }, h("button", { class: "primary", "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("download", 18), " Loan statement (PDF)")),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " months after grace"), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
@@ -364,11 +406,13 @@
     drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
   }
   function reports() {
-    const p = periodNow(), ov = K.overview(st.db, p), grouped = REPORT_GROUPS.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
+    const extra = FYM.table(st.db).map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; });
+    const groups = REPORT_GROUPS.map((g) => (g[0] === "General Reserve Fund" ? [g[0], g[1], g[2].concat(extra)] : g));
+    const p = periodNow(), ov = K.overview(st.db, p), grouped = groups.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
     const rcard = (n) => { const c = Card(n, PERIOD_AWARE.includes(n) ? "Follows the period" : "As at today", "Open · print / PDF · CSV", () => openReport(n)); c.classList.add("rpt"); return c; };
     return h("div", null, periodBar(),
       h("h2", { class: "sec" }, "Key figures · tap one to see the transactions behind it"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, kpiShow(ov[k]), d.period, () => openKpi(k)); })),
-      REPORT_GROUPS.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
+      groups.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
         h("div", { class: "grid" }, names.filter((n) => REPORTS[n]).map(rcard)))),
       h("p", { class: "mute", style: "font-size:13px;margin-top:18px" }, "Statements marked 'As at today' show today's position. Those marked 'Follows the period' use the reporting period chosen above. Every statement carries the SOB letterhead when printed or saved as a PDF."));
   }
@@ -394,7 +438,7 @@
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
-  const MV = window.SOBMember({ st, act, commit, render, today, printReport, go });
+  const MV = window.SOBMember({ st, act, commit, render, today, printReport, go, printAccount, openStatement, statementView });
 
   /* ---------- airtime (members request; Admin fulfils) ---------- */
   const airtimeCols = (staff) => [{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(staff ? [{ label: "Member", render: (r) => r.memberName + " (" + r.memberId + ")" }] : [], [{ label: "Phone", key: "phone" }, { label: "Airtime", num: 1, render: (r) => num(r.airtimeAmount) }, { label: "Fee", num: 1, render: (r) => num(r.fee) }, { label: "Total", num: 1, render: (r) => num(r.total) },

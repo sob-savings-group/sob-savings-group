@@ -53,7 +53,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click('[data-nav="savings"]'); ok((await pg.locator("#stmt-list .li").count()) >= 1, "statement lists transactions with running balances");
   await pg.click("[data-chip=wd]"); ok(/Nothing here yet/.test(await text()), "a filter with no matches shows a friendly empty state");
   await pg.click('[data-nav="home"]'); const [pop] = await Promise.all([ctx.waitForEvent("page"), pg.click("text=Statement (PDF)")]); await pop.waitForLoadState();
-  const ptxt = await pop.evaluate(() => document.body.innerText); ok(/Sons of Bethel \(SOB\) Savings Group/.test(ptxt) && /Savings statement/.test(ptxt) && /Kironde John/.test(ptxt) && (await pop.locator(".bar button").count()) === 2, "the statement opens as a branded page with Print / Save as PDF"); await pop.close();
+  const ptxt = await pop.evaluate(() => document.body.innerText); ok(/Sons of Bethel \(SOB\) Savings Group/.test(ptxt) && /Member account statement/.test(ptxt) && /Savings summary/.test(ptxt) && /Kironde John/.test(ptxt) && (await pop.locator(".bar button").count()) === 2, "the statement opens as a branded page with Print / Save as PDF"); await pop.close();
   ok((await pg.evaluate(() => window.__SOB_IDLE.ms)) === 20 * 60000, "inactivity sign-out is set to 20 minutes");
   await pg.evaluate(() => { window.SOB_IDLE_MS = 700; window.__SOB_IDLE.touch(); }); await pg.waitForSelector("#login-go", { timeout: 4000 }); ok(/signed out after 20 minutes/.test(await pg.locator(".toast").innerText()), "an idle session signs out with an explanation");
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs[0] : "")); await b.close(); srv.close();

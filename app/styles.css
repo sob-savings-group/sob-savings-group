@@ -185,3 +185,11 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 
 .rpt .val{font-size:15px;font-weight:700;color:var(--navy);margin-top:5px}.rpt .sub{color:var(--interest);font-weight:600}.rg-blurb{margin:-4px 0 12px;font-size:13.5px}
 .scroll td:empty{display:none!important}
+/* member statement */
+.panel{background:#fff;border:1px solid var(--line2);border-radius:var(--r);padding:12px 14px;box-shadow:var(--shadow-s);margin:0 0 12px}
+.panel .lh{display:flex;justify-content:space-between;align-items:center;margin:0 0 6px}.panel .lh b{font-size:16px;color:var(--navy)}
+.panel.kvs{padding:4px 14px}.kv.tot{border-top:2px solid var(--navy);border-bottom:0;padding-top:12px;font-size:16px}.kv.tot b{color:var(--navy)}
+.panel.loanp{border-left:4px solid var(--loan)}
+#stmt-view .grid.two .card .val{font-size:clamp(15px,2vw,19px)}
+@media(min-width:700px){#stmt-view .grid.two{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:1000px){.modal:has(#stmt-view){max-width:1000px}}

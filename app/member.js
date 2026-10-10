@@ -2,7 +2,7 @@
    Colours always mean the same thing: green = available, amber = held for guarantees, coral = loan owed, blue = interest, teal = profit. */
 window.SOBMember = function (E) {
   const { h, ugx, num, badge, Table, Modal, Form, toast, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Banner, Chips, Confirm, Field } = window.SOBUI;
-  const { st, act, commit, render, today, printReport, go } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
+  const { st, act, commit, render, today, printReport, go, printAccount, openStatement } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
   const me = () => st.user.memberId, myName = () => (st.db.members.find((m) => m.id === me()) || {}).name || st.user.name;
   const help = () => S.reports.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
 
@@ -38,7 +38,7 @@ window.SOBMember = function (E) {
     return ["*Sons of Bethel (SOB) Savings Group*", "Statement for " + myName() + " (" + me() + ")", "As at " + fdate(today()), "", "Total savings: " + ugx(p.savings), "Held for guarantees: " + ugx(p.committed), "Available: " + ugx(p.available), "", "Latest activity:"]
       .concat(last.map((t) => "• " + fdate(t.date) + " " + typeInfo(t.type)[0] + " " + num(t.amount))).concat(["", "Issued from the SOB platform."]).join("\n");
   }
-  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "print-statement", "data-print": 1, onclick: () => { const p = stmtPeriod(); printReport(R.memberStatementPrint(st.db, me(), { from: p.from, to: p.to }), p.key === "all" ? "Lifetime statement to " + fdate(today()) : p.text); } }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "share-statement", onclick: () => waShare(statementText()) }, Icon("share", 18), " Share on WhatsApp"));
+  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "print-statement", "data-print": 1, onclick: () => { const p = stmtPeriod(); printAccount(me(), { from: p.from, to: p.to }, false); } }, Icon("download", 18), " Statement (PDF)"), h("button", { id: "open-statement", onclick: () => openStatement(me(), false) }, Icon("book", 18), " Full statement"), h("button", { id: "share-statement", onclick: () => waShare(statementText()) }, Icon("share", 18), " Share on WhatsApp"));
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
   const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name, so you can view your balances and statements. To request a loan, accept a guarantee or change your PIN, sign in with your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
@@ -69,7 +69,7 @@ window.SOBMember = function (E) {
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
     if (given.length) el.append(Section("Loans I guarantee"), List([Row({ icon: "shield", tone: "commit", title: given.length + (given.length === 1 ? " active guarantee" : " active guarantees"), sub: "Held until the borrowers repay", right: ugx(pos.committed), onOpen: () => go("myguar") })]));
     /* Shortcuts */
-    el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("print", "Statement (PDF)", "Print or save", () => printReport(R.memberStatementPrint(st.db, me(), {}), "Lifetime statement to " + fdate(today()))), quick("share", "Share on WhatsApp", "Send your balance", () => waShare(statementText())), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
+    el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("print", "Statement (PDF)", "Print or save", () => printAccount(me(), {}, false)), quick("share", "Share on WhatsApp", "Send your balance", () => waShare(statementText())), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
     /* Recent activity */
     const recent = history().slice(0, 5);
     el.append(Section("Recent activity", h("button", { class: "iconbtn", "aria-label": "See all", onclick: () => go("savings") }, Icon("chevron"))), recent.length ? List(recent.map((t) => txnRow(t, txnDetail))) : Empty({ icon: "wallet", title: "No activity yet", text: "Your savings and payments will appear here as they are recorded." }));
@@ -127,7 +127,7 @@ window.SOBMember = function (E) {
       b.append(Section("Repayments"), steps.length ? List(steps.map((x) => Row({ icon: "loan", tone: "interest", title: ugx(x.amount), sub: fdate(x.date) + " · " + (x.interest ? ugx(x.interest) + " interest" : "no interest") + (x.principal ? " · " + ugx(x.principal) + " off the loan" : ""), right: x.principal ? "−" + num(x.principal) : "", rightSub: x.principal ? "off the loan" : "" }))) : Empty({ icon: "loan", title: "No repayments yet", text: "Repayments you make will show here, split into interest and loan." }));
     } else b.append(h("div", { class: "card" }, Field("Amount requested", ugx(loan.loanAmount)), Field("Applied on", fdate(loan.applicationDate)), h("p", { class: "mute" }, nextStep(loan))));
     if (gs.length) b.append(Section("Guarantors"), List(gs.map((g) => Row({ icon: "shield", tone: g.status === "Active" ? "commit" : "", title: (st.db.members.find((m) => m.id === g.guarantorId) || {}).name || g.guarantorId, sub: g.status === "Requested" ? "Asked — waiting for their answer" : g.status === "Active" ? "Backing " + ugx(L.guaranteeRemaining(g)) + " now" : "Released", right: ugx(g.amount), rightSub: g.releasedAmount ? "released " + num(g.releasedAmount) : "" }))));
-    if (live) b.append(h("div", { class: "row" }, h("button", { class: "primary", "data-print": 1, onclick: () => printReport(R.loanMemberStatement(st.db, id, today()), "As at " + fdate(today())) }, Icon("download", 18), " Loan statement (PDF)")));
+    if (live) b.append(h("div", { class: "row" }, h("button", { class: "primary", "data-print": 1, onclick: () => printAccount(me(), {}, false, id) }, Icon("download", 18), " Loan statement (PDF)")));
     Modal("Loan " + ugx(loan.loanAmount), b);
   }
 
