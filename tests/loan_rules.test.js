@@ -95,4 +95,26 @@ t("savings settle a loan only once they cover it: interest first, remainder kept
 t("the settlement review shows when savings first covered each loan and flags repayments recorded after that date", () => {
   const { db, id } = withLoan(); const rv = ST_review(db); assert.equal(rv[0].coveredToday, true); assert.equal(rv[0].firstCovered.date, "2026-02-02"); assert.equal(rv[0].firstCovered.savingsLeft, 500000);
 });
+t("VERIFIED SAVINGS: balances brought forward from before the last share-out never count towards a settlement (SOB-004 case: 250,000 against 861,000 does not qualify)", () => {
+  const db = fresh(); db.members.push({ id: "SOB-003", name: "Member C", status: "Active", regDate: "2024-01-01" });
+  dep(db, "SOB-001", "2025-06-01", 1300000);                       // old carried-forward balance, no share-out entry for this member
+  (dep(db, "SOB-002", "2025-12-01", 1), dep(db, "SOB-002", "2025-12-21", 1, "Share-Out"));               // the group's 21 Dec 2025 share-out (any member) starts the savings year
+  dep(db, "SOB-001", "2025-12-21", 50000); dep(db, "SOB-001", "2026-01-11", 200000);
+  const l = LN.recordExistingLoan(db, at("2026-03-09"), { memberId: "SOB-001", amount: 811000, date: "2026-03-09", assignedMonthlyInterest: 30000 });
+  LN.addDisbursement(db, at("2026-04-30"), l.id, { amount: 50000, date: "2026-04-30", reason: "second payout" });
+  assert.equal(L.memberSavingsAsOf(db, "SOB-001", "2026-04-30"), 1550000, "lifetime position still shows the old balance");
+  assert.equal(L.memberVerifiedSavingsAsOf(db, "SOB-001", "2026-04-30"), 250000, "verified savings are the register's 250,000");
+  assert.throws(() => LN.settleFromSavings(db, at("2026-04-30"), l.id, "2026-04-30"), /INSUFFICIENT_SAVINGS/);
+  const rv = LN.settlementReview(db, "2026-10-10").find((r) => r.memberId === "SOB-001"); assert.equal(rv.firstCovered, null); assert.equal(rv.coveredToday, false);
+});
+t("VERIFIED SAVINGS: the first date the register savings cover principal plus interest is found on calendar months (SOB-002 case) and a Running Balance never stands in for savings", () => {
+  const db = fresh(); (dep(db, "SOB-002", "2025-12-01", 1), dep(db, "SOB-002", "2025-12-21", 1, "Share-Out")); dep(db, "SOB-001", "2025-12-21", 10000);
+  LN.recordExistingLoan(db, at("2026-01-01"), { memberId: "SOB-001", amount: 200000, date: "2026-01-01", assignedMonthlyInterest: 30000 });
+  dep(db, "SOB-001", "2026-01-07", 150000); dep(db, "SOB-001", "2026-01-11", 100000);
+  const rv = LN.settlementReview(db, "2026-10-10")[0]; assert.equal(rv.firstCovered.date, "2026-01-11"); assert.equal(rv.firstCovered.owed, 200000, "January is the loan's own month: no interest yet"); assert.equal(rv.firstCovered.savings, 260000);
+  const db2 = fresh(); (dep(db2, "SOB-002", "2025-12-01", 1), dep(db2, "SOB-002", "2025-12-21", 1, "Share-Out")); dep(db2, "SOB-001", "2025-12-21", 50000); dep(db2, "SOB-001", "2026-08-09", 100000);
+  LN.recordExistingLoan(db2, at("2026-01-18"), { memberId: "SOB-001", amount: 200000, date: "2026-01-18", assignedMonthlyInterest: 30000 });
+  G.createEntry(db2, at("2026-08-09"), { date: "2026-08-09", memberId: "SOB-001", amount: 220000, type: "Loan Repayment", purpose: "Loan Repayment", loanId: db2.loans[0].id });
+  const r2 = LN.settlementReview(db2, "2026-10-10")[0]; assert.equal(r2.firstCovered, null, "SOB-032 case: 150,000 savings against 250,000 owed does not qualify"); assert.equal(r2.owedToday, 250000);
+});
 console.log(pass + " passed");

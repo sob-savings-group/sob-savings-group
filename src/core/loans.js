@@ -286,7 +286,7 @@
     date = date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date"); if (date > ctx.today) throw new Error("INVALID: the settlement date cannot be in the future");
     if (date < readyDate(loan)) throw new Error("INVALID: the loan was not fully paid out until " + readyDate(loan));
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
-    const owed = L.loanOutstanding(loan, db, date), savings = L.memberSavingsAsOf(db, loan.memberId, date);
+    const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
     if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
     const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
@@ -303,7 +303,7 @@
       const base = { loanId: l.id, memberId: l.memberId, dateKnown: !l.dateUnknown && dates.isISO(l.date) };
       if (!base.dateKnown) return Object.assign(base, { firstCovered: null, note: "start date not established" });
       const ready = readyDate(l), cands = [...new Set([ready, asOf].concat(L.activeTransactions(db).filter((t) => t.memberId === l.memberId && t.date >= ready && t.date <= asOf).map((t) => t.date)))].filter((d) => d >= ready && d <= asOf).sort();
-      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberSavingsAsOf(db, l.memberId, d) });
+      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberVerifiedSavingsAsOf(db, l.memberId, d) });
       let first = null; for (const d of cands) { const x = at(d); if (x.owed > 0 && x.savings >= x.owed) { first = x; break; } }
       const today = at(asOf), later = first ? L.activeTransactions(db).filter((t) => t.loanId === l.id && t.type === "Loan Repayment" && t.date > first.date).length : 0;
       return Object.assign(base, { coveredToday: today.owed > 0 && today.savings >= today.owed, owedToday: today.owed, savingsToday: today.savings, firstCovered: first ? { date: first.date, owed: first.owed, savings: first.savings, savingsLeft: first.savings - first.owed } : null, repaymentsAfterThatDate: later });

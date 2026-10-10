@@ -127,7 +127,7 @@
     if (aw) items.push(["warn", aw + (aw === 1 ? " item is" : " items are") + " waiting for the Chairperson's approval" + (role === "Chairperson" ? " — your decision is needed." : "."), "approvals", "Open"]);
     if (p.Pending) items.push(["info", p.Pending + (p.Pending === 1 ? " loan application needs" : " loan applications need") + " review.", "loans", "Open"]);
     if (pendingAirtime() && (role === "Admin")) items.push(["info", pendingAirtime() + " airtime " + (pendingAirtime() === 1 ? "request is" : "requests are") + " waiting.", "airtime", "Open"]);
-    if (isStaff() && G.can(ctx(), "loan.repay")) { const cov = LN.settlementReview(st.db, today()).filter((r) => r.coveredToday); if (cov.length) items.push(["info", cov.length + (cov.length === 1 ? " loan is" : " loans are") + " covered by the member's own savings (" + cov.map((r) => r.memberId).join(", ") + ") and can be settled from them — open the loan and choose Settle from savings.", "loans", "Open"]); }
+    if (isStaff() && G.can(ctx(), "loan.repay")) { const cov = LN.settlementReview(st.db, today()).filter((r) => r.coveredToday); if (cov.length) items.push(["info", cov.length + (cov.length === 1 ? " loan is" : " loans are") + " covered by the member's verified savings this year (" + cov.map((r) => r.memberId).join(", ") + ") and can be settled from them — open the loan and choose Settle from savings.", "loans", "Open"]); }
     if (open) items.push(["warn", open + " reconciliation " + (open === 1 ? "difference is" : "differences are") + " still open.", "recon", "Open"]);
     return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
   }

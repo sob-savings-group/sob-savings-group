@@ -110,6 +110,11 @@
   }
   const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
   const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  /* VERIFIED SAVINGS (used for settling a loan from savings). The register records each member's savings for the current savings year only: deposits + profit - withdrawals since the
+     last share-out. Balances brought forward from earlier years are NOT counted here, because the old share-out entries do not clear them and the register does not confirm them.
+     The loan books and the member's lifetime position are unchanged; this only decides what may be offset against a loan. */
+  const cycleStartAsOf = (db, asOf) => activeTransactions(db).filter((t) => t.type === "Share-Out" && t.date <= asOf).reduce((m, t) => (t.date > m ? t.date : m), "");
+  const memberVerifiedSavingsAsOf = (db, memberId, asOf) => { const start = cycleStartAsOf(db, asOf); return activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf && t.date >= start && !(t.type === "Share-Out" && t.date === start)).reduce((a, t) => a + classifyTransaction(t).savings, 0); };
   const memberPositionAsAt = (db, memberId, asOf) => { const savings = memberSavingsAsOf(db, memberId, asOf), committed = memberCommittedAsOf(db, memberId, asOf); return { savings, committed, available: savings - committed }; };
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
@@ -189,7 +194,7 @@
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
-    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
+    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
   };
 });
