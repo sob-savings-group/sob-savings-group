@@ -196,6 +196,11 @@
   }
   const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
   const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  /* VERIFIED SAVINGS (used for settling a loan from savings). The register records each member's savings for the current savings year only: deposits + profit - withdrawals since the
+     last share-out. Balances brought forward from earlier years are NOT counted here, because the old share-out entries do not clear them and the register does not confirm them.
+     The loan books and the member's lifetime position are unchanged; this only decides what may be offset against a loan. */
+  const cycleStartAsOf = (db, asOf) => activeTransactions(db).filter((t) => t.type === "Share-Out" && t.date <= asOf).reduce((m, t) => (t.date > m ? t.date : m), "");
+  const memberVerifiedSavingsAsOf = (db, memberId, asOf) => { const start = cycleStartAsOf(db, asOf); return activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf && t.date >= start && !(t.type === "Share-Out" && t.date === start)).reduce((a, t) => a + classifyTransaction(t).savings, 0); };
   const memberPositionAsAt = (db, memberId, asOf) => { const savings = memberSavingsAsOf(db, memberId, asOf), committed = memberCommittedAsOf(db, memberId, asOf); return { savings, committed, available: savings - committed }; };
   const memberPosition = (db, memberId) => { const savings = memberSavings(db, memberId), committed = memberCommitted(db, memberId); return { savings, committed, available: savings - committed, withdrawable: Math.max(0, savings - committed) }; };
 
@@ -275,7 +280,7 @@
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
     loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
-    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
+    memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
   };
 });
@@ -718,7 +723,7 @@
     date = date || ctx.today; if (!dates.isISO(date)) throw new Error("INVALID: date"); if (date > ctx.today) throw new Error("INVALID: the settlement date cannot be in the future");
     if (date < readyDate(loan)) throw new Error("INVALID: the loan was not fully paid out until " + readyDate(loan));
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
-    const owed = L.loanOutstanding(loan, db, date), savings = L.memberSavingsAsOf(db, loan.memberId, date);
+    const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
     if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
     const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
@@ -735,7 +740,7 @@
       const base = { loanId: l.id, memberId: l.memberId, dateKnown: !l.dateUnknown && dates.isISO(l.date) };
       if (!base.dateKnown) return Object.assign(base, { firstCovered: null, note: "start date not established" });
       const ready = readyDate(l), cands = [...new Set([ready, asOf].concat(L.activeTransactions(db).filter((t) => t.memberId === l.memberId && t.date >= ready && t.date <= asOf).map((t) => t.date)))].filter((d) => d >= ready && d <= asOf).sort();
-      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberSavingsAsOf(db, l.memberId, d) });
+      const at = (d) => ({ date: d, owed: L.loanOutstanding(l, db, d), savings: L.memberVerifiedSavingsAsOf(db, l.memberId, d) });
       let first = null; for (const d of cands) { const x = at(d); if (x.owed > 0 && x.savings >= x.owed) { first = x; break; } }
       const today = at(asOf), later = first ? L.activeTransactions(db).filter((t) => t.loanId === l.id && t.type === "Loan Repayment" && t.date > first.date).length : 0;
       return Object.assign(base, { coveredToday: today.owed > 0 && today.savings >= today.owed, owedToday: today.owed, savingsToday: today.savings, firstCovered: first ? { date: first.date, owed: first.owed, savings: first.savings, savingsLeft: first.savings - first.owed } : null, repaymentsAfterThatDate: later });
@@ -3441,7 +3446,7 @@ window.SOBMember = function (E) {
     if (aw) items.push(["warn", aw + (aw === 1 ? " item is" : " items are") + " waiting for the Chairperson's approval" + (role === "Chairperson" ? " — your decision is needed." : "."), "approvals", "Open"]);
     if (p.Pending) items.push(["info", p.Pending + (p.Pending === 1 ? " loan application needs" : " loan applications need") + " review.", "loans", "Open"]);
     if (pendingAirtime() && (role === "Admin")) items.push(["info", pendingAirtime() + " airtime " + (pendingAirtime() === 1 ? "request is" : "requests are") + " waiting.", "airtime", "Open"]);
-    if (isStaff() && G.can(ctx(), "loan.repay")) { const cov = LN.settlementReview(st.db, today()).filter((r) => r.coveredToday); if (cov.length) items.push(["info", cov.length + (cov.length === 1 ? " loan is" : " loans are") + " covered by the member's own savings (" + cov.map((r) => r.memberId).join(", ") + ") and can be settled from them — open the loan and choose Settle from savings.", "loans", "Open"]); }
+    if (isStaff() && G.can(ctx(), "loan.repay")) { const cov = LN.settlementReview(st.db, today()).filter((r) => r.coveredToday); if (cov.length) items.push(["info", cov.length + (cov.length === 1 ? " loan is" : " loans are") + " covered by the member's verified savings this year (" + cov.map((r) => r.memberId).join(", ") + ") and can be settled from them — open the loan and choose Settle from savings.", "loans", "Open"]); }
     if (open) items.push(["warn", open + " reconciliation " + (open === 1 ? "difference is" : "differences are") + " still open.", "recon", "Open"]);
     return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
   }
