@@ -19,7 +19,7 @@ const R = require("../src/core/reports.js"), M = require("../src/core/migrate.js
       if (!/A4|595/.test(info)) throw new Error(k + ": not A4"); if (pages < minPages) throw new Error(k + ": expected >= " + minPages + " pages, got " + pages);
       for (let p = 1; p <= pages; p++) {
         const t = execSync(`pdftotext -layout -f ${p} -l ${p} ${f} -`).toString();
-        ["Sons of Bethel (SOB) Savings Group", "Kironde John", "0706 496 404", "Kagimu Francis", "Nabawanuka Amina", "Ssebadduka Joshua", "Kuteesa Waddimba", "Page " + p + " of " + pages].concat(p === 1 ? must : []).forEach((s) => { if (!t.includes(s)) throw new Error(`${k} page ${p} missing: ${s}`); });
+        ["Sons of Bethel (SOB) Savings Group", "Chairperson", "Treasurer", "Secretary", "Coordinator", "Patron", "Page " + p + " of " + pages].concat(p === 1 ? must : []).forEach((s) => { if (!t.includes(s)) throw new Error(`${k} page ${p} missing: ${s}`); });
         if (/undefined|NaN|\[object|savingsEffect|&amp;|&#/.test(t)) throw new Error(k + " page " + p + " has broken text");
         if (execSync(`pdfimages -list -f ${p} -l ${p} ${f}`).toString().trim().split("\n").length < 3) throw new Error(`${k} page ${p}: no logo`);
       }

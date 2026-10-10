@@ -32,7 +32,7 @@ window.SOBMember = function (E) {
       h("p", { class: "mute" }, "Something not right? Please contact " + help().map((o) => o[0] + " " + o[2]).join(" or ") + ".")));
   }
   const grouped = (rows) => { const out = []; let cur = ""; rows.forEach((t) => { const m = t.date.slice(0, 7); if (m !== cur) { cur = m; out.push(h("div", { class: "month" }, fdate(m + "-01").replace(/^1 /, ""))); } out.push(txnRow(t, txnDetail)); }); return out; };
-  const waShare = (text) => { if (navigator.share) { navigator.share({ title: "SOB statement", text }).catch(() => {}); } else window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank", "noopener"); };
+  const waShare = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   function statementText() {
     const p = L.memberPosition(st.db, me()), last = history().slice(0, 5);
     return ["*Sons of Bethel (SOB) Savings Group*", "Statement for " + myName() + " (" + me() + ")", "As at " + fdate(today()), "", "Total savings: " + ugx(p.savings), "Held for guarantees: " + ugx(p.committed), "Available: " + ugx(p.available), "", "Latest activity:"]

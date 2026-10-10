@@ -21,7 +21,9 @@
   function Modal(title, body) {
     const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg) close(); } });
     const onKey = (e) => { if (e.key === "Escape") close(); };
-    const close = () => { document.removeEventListener("keydown", onKey); bg.remove(); };
+    /* the phone/browser Back button closes the top window instead of leaving the app */
+    let pushed = false; try { history.pushState({ sobModal: 1 }, ""); pushed = true; } catch (e) {}
+    const close = () => { document.removeEventListener("keydown", onKey); const was = bg.isConnected; bg.remove(); if (was && pushed && history.state && history.state.sobModal) { try { history.back(); } catch (e) {} } };
     document.addEventListener("keydown", onKey);
     bg.append(h("div", { class: "modal" }, h("div", { class: "grab" }), h("div", { class: "mhead" }, h("h2", null, title), h("button", { class: "iconbtn", "data-close": "1", "aria-label": "Close", onclick: close }, Icon("x"))), body));
     document.body.append(bg); return { close, el: bg };

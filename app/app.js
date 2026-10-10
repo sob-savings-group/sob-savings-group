@@ -89,7 +89,12 @@
     try { await st.store.load(); st.db = st.store.db; st.lastLoad = Date.now(); if (!document.querySelector(".modal-bg")) render(); if (!quiet) toast("Up to date"); } catch (e) { if (!quiet) toast(friendly(e), true); } finally { st.refreshing = false; }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && st.live && st.user && Date.now() - (st.lastLoad || 0) > 60000) refresh(true); });
-  const go = (v) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); };
+  const go = (v, fromBack) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); if (!fromBack && st.user) { try { history.pushState({ sobView: v }, ""); } catch (e) {} } };
+  /* Back button / swipe-back: closes the open window first, then returns to the previous screen */
+  window.addEventListener("popstate", (e) => {
+    const m = document.querySelectorAll(".modal-bg"); if (m.length) { m[m.length - 1].remove(); return; }
+    const sv = e.state && e.state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
+  });
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
   function navBadge(k) {
     if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.awaiting(st.db) : 0;
@@ -192,7 +197,8 @@
   const printAccount = (memberId, period, internal, loanId, download) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return (download ? downloadReport : printReport)(accountRep(a), a.period.text); };
   const statementText = (a) => ["*Sons of Bethel (SOB) Savings Group*", "Statement " + a.ref, a.member.name + " (" + a.member.id + ")", a.period.text, "", "Opening savings: " + ugx(a.savings.opening), "Deposits: " + ugx(a.savings.deposits), "Profit credited: " + ugx(a.savings.profit), "Withdrawals: " + ugx(a.savings.withdrawals), "Share-outs: " + ugx(a.savings.shareOuts), "*Closing savings: " + ugx(a.savings.closing) + "*"]
     .concat(a.loans.length ? ["", "Loans owed: " + ugx(a.loanTotals.owed) + " (loan " + ugx(a.loanTotals.principalLeft) + " + interest " + ugx(a.loanTotals.interestDue) + ")"] : []).concat(["", "CONFIDENTIAL: for the named member only. Full PDF statement available from the Treasurer."]).join("\n");
-  const waSend = (text) => { if (navigator.share) { navigator.share({ title: "SOB statement", text }).catch(() => {}); } else { const a = h("a", { href: "https://wa.me/?text=" + encodeURIComponent(text), target: "_blank", rel: "noopener" }); document.body.append(a); a.click(); a.remove(); } };
+  /* WhatsApp: always opens WhatsApp itself (the app on a phone, WhatsApp Web on a computer) with the message ready; never the Windows/OS share list */
+  const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   function statementView(memberId, internal, toDate) {
     const box = h("div", { id: "stmt-view" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
     let key = "all", cust = null; const maxTo = toDate || today();
@@ -203,7 +209,7 @@
       const byType = (label, test) => () => drill(label + " — " + a.period.text, null, Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }, { label: "Ref", key: "ref" }, { label: "Transaction", key: "type" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }], a.transactions.filter(test), internal ? (x) => openEntry(x.ref) : null, "Nothing in this period"));
       const cards = [["Opening savings", s.opening, null, null], ["Deposits", s.deposits, "avail", byType("Deposits", (x) => x.type === "Savings deposit")], ["Profit credited", s.profit, "profit", byType("Profit credited", (x) => x.type === "Profit share")], ["Withdrawals", s.withdrawals, "loan", byType("Withdrawals", (x) => /Withdrawal|Bank charge/.test(x.type))], ["Share-outs", s.shareOuts, "loan", byType("Share-outs", (x) => x.type === "Annual share-out")], ["Closing savings", s.closing, null, null]];
       box.replaceChildren(h("div", null,
-        Chips(PRE, key, (k) => { key = k; if (k === "custom" && !cust) cust = D.customPeriod("", maxTo, maxTo); paint(); }),
+        Chips(PRE, key, (k) => { key = k; if (k === "custom" && !cust) cust = D.customPeriod(maxTo.slice(0, 8) + "01", maxTo, maxTo); paint(); }),
         key === "custom" ? h("div", { class: "pb-custom" }, h("label", null, "From", h("input", { type: "date", id: "stm-from", value: (cust && cust.from) || "", max: maxTo })), h("label", null, "To", h("input", { type: "date", id: "stm-to", value: (cust && cust.to) || maxTo, max: maxTo })), h("button", { class: "primary", id: "stm-apply", onclick: () => { try { cust = D.customPeriod(document.getElementById("stm-from").value, document.getElementById("stm-to").value, maxTo); paint(); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
         h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
         h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
@@ -290,8 +296,9 @@
   function openLoan(id, asAt0) {
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
-    const b = h("div", null,
-      h("div", { class: "row" }, h("button", { class: "primary", "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("download", 18), " Loan statement (PDF)")),
+    /* every action sits at the TOP of the loan, next to the statement buttons, so nothing is hidden below a long page */
+    const row = h("div", { class: "row", id: "loan-actions" }, h("button", { "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("print", 18), " Loan statement (PDF)"), h("button", { "data-dlpdf": 1, id: "loan-statement-dl", onclick: () => printAccount(loan.memberId, {}, true, id, true) }, Icon("download", 18), " Download PDF"));
+    const b = h("div", null, row,
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
@@ -304,7 +311,7 @@
       ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), (() => { const lr = R.loanStatement(st.db, id, today()); return h("div", null, printButton(lr), tableFromReport(lr)); })()) : null,
       h("h2", { class: "sec" }, "Interest history"), Table([{ label: "Date", key: "date" }, { label: "From", num: 1, render: (x) => x.previousAmount == null ? "—" : num(x.previousAmount) }, { label: "To", num: 1, render: (x) => num(x.newAmount) }, { label: "Reason", key: "reason" }], v.interestHistory),
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
-    const row = h("div", { class: "row" }); const M = () => document.querySelector(".modal-bg");
+    const M = () => document.querySelector(".modal-bg");
     const add = (label, cond, fn, cls) => cond && row.append(h("button", { class: cls || "", "data-act": label, onclick: fn }, label));
     const preDisb = ["Pending", "AwaitingApproval", "Approved"].includes(loan.status);
 add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" && !loan.dateUnknown, () => Form("Settle from the member's savings (interest first, then the loan; no cash moves)", [Object.assign(dateF("date", "Effective date (the first day verified savings covered the loan, when known)"), { value: ((LN.settlementReview(st.db, today()).find((r) => r.loanId === id) || {}).firstCovered || {}).date || D.todayISO() })], act(async (f) => { await commit("settleLoanFromSavings", { loanId: id, date: f.date }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"))),
@@ -318,7 +325,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
-    b.append(row); Modal("Loan " + id, b);
+    Modal("Loan " + id, b);
   }
   /* Why a loan can or cannot proceed: 3x guideline, the shortfall and exactly what backs it. */
   function loanBacking(loan) {
