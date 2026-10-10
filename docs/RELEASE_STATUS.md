@@ -1,0 +1,96 @@
+# SOB Lifetime Platform — release status (branch `dev`)
+
+Member-level figures are deliberately NOT in this file: the repository is public. They are in the private reconciliation report delivered to the Admin.
+
+## Verdict
+- **Merge `dev` → `main` is technically safe**: the change is purely additive (new files only, no existing file modified or deleted, fast-forwardable). The live `index.html` and its Apps Script backends are untouched.
+- **Production candidate on `dev`**: all automated checks pass. Cut-over still needs (1) the Google scratch rehearsal and deployment checklist (`docs/DEPLOYMENT.md` section H, run from your own Google account: this environment cannot reach Google), (2) the real deployment verification checklist passing, (3) your explicit approval before anything is merged to `main`.
+- Recommended: **squash-merge** (so `main` does not inherit earlier `dev` commits that contained real data), then delete/rewrite `dev`. See "Repository privacy".
+
+## Completed
+Notification outbox + SMS/WhatsApp adapters (dry-run by default, never marked SENT without a confirming live gateway; consent/opt-out; failure log) · airtime requests (UGX 20,000/month, UGX 200 fee, loan block, savings reservation, Admin fulfil → audited Withdraw) · backups & disaster recovery (checksummed nightly snapshots, offline export, editor-only restore, whole-system rebuild into an empty Sheet) · forced PIN change for slip/Admin-set PINs · Airtime/Messages/System screens and three extra reports · Engine (ledger, loans, guarantors, subscriptions, share-out, KPIs, reports, reconciliation register, integrity checks) · server-side authorization (per-user hashed PINs, lockout, server sessions, role from server, closed command whitelist, role-filtered reads, audit) · Admin + Member UI incl. PIN change/reset/sign-in creation and reconciliation screen · Apps Script bundle + manifest + deployment kit · `sobctl` (smoke, import-ledger, import-users, register-discrepancies, apply-plan, verify) · offline PIN provisioning · production site packaging (no demo data) · synthetic test data + privacy guard.
+
+## SOB rules implemented on `dev` (final rules; none left pending)
+1. **Repayment allocation is fixed: accumulated unpaid interest first, remainder to principal.** Guarantee release = principal actually reduced (never cash); interest-only releases nothing; release never exceeds principal reduced (integrity-checked). 2. **Loan qualification**: 3x savings is a guideline; the shortfall is backed by one or more guarantors (acceptance commits at once; Actual unchanged, Committed up, Available down; committed cannot be withdrawn or shared out) or, exceptionally, approved security. 3. **Interest Receivable** = accumulated interest due less interest paid, per loan with full drill-down. 4. **Profit** = (Member Eligible Savings / Total Eligible Savings) x Approved Profit Pool; members with an outstanding loan at the distribution date are ineligible; Super Admin enters pool and date; complete schedule shown before posting; Chairperson approval posts it; everything preserved in the audit history. 5. **December share-out**: Actual - Committed = Available; only Available is paid. 6. **Roles**: only the Super Admin enters/edits; Chairperson is the second approver (cannot bypass: the Super Admin only *requests*); Treasurer/Committee review only. 7. **Second approval is required** for new loan approval, exceptional/property security, voids/reversals, manual financial adjustments and final profit/share-out posting; not for savings deposits and loan repayments (audited). Creator/approver separation is enforced.
+
+Staff accounts: `tools/provision-users.js --staff "ADMIN:Admin:..,CHAIR:Chairperson:..,TREAS:Treasurer:.."`.
+
+## Tests (`npm run verify`)
+core 16 · workflow 19 · reconciliation 6 · SOB loan/guarantee/profit rules 22 · second-approval and integrity controls 5 · history import · notifications+airtime 18 · backups 6 · backend authorization/attack 22 · client+reports 9 · Apps Script compatibility, scopes & 20k-row scale 5 · deployment-process incl. Chairperson-approved writes, backup/restore/disaster-recovery (real CLI against the bundled backend over HTTP) 18 · privacy guard 2 · browser: demo desktop+mobile (all screens, no horizontal scroll), live-mode 33 checks, demo 66 checks (desktop+mobile) (also against the production site bundle). All pass on synthetic data and, locally, on the real data.
+Not possible from this environment, so NOT verified: contacting Google (deployed Apps Script/Sheet run) and any real SMS/WhatsApp delivery. Both are user-run steps with ready tooling (`docs/DEPLOYMENT.md` A, B, F).
+
+## Policy decisions still needed from SOB
+None are pending for the financial rules. Open items are source-data matters only: the individual historical exceptions, and the owner of the sheet staged for SOB-003 (private report). SMS/WhatsApp stay disabled until credentials exist and a controlled live test succeeds; this does not block launch.
+
+## Data approvals needed (evidence-based; tooling ready, one command each)
+A. Apply the prepared loan-history correction (dated per the source workbook; audited; original dates kept). B. Two loans that the old system consolidated: one loan or two, and each one's interest. C. A recorded withdrawal larger than a member's savings (negative balance). D. One zero-amount withdrawal entry. E. **Historical workbook import (row-level):** the pack imports every established row; individual rows that cannot be established are registered one by one for resolution with evidence; one sheet (owner not stated) waits for a single identity confirmation. Counts and member lists are in the private report delivered to the Admin, not here.
+
+## Repository privacy
+The repository is public. Pre-existing: `index.html` on `main` embeds real member names/phones. Introduced on `dev` earlier in this work and since removed from the tip: a demo file with real names and a reconciliation report/fixtures with member IDs and balances; they remain in `dev` history. All current tests/demo use synthetic data and `tests/privacy.test.js` blocks real data from being committed again.
+
+## Report letterhead (mandatory)
+Every printed/PDF report goes through `reports.brandedPage()` (via `toPrintHTML`): BWOMI logo, group name, report title, period/date in the header; the five officers (name, role, phone) in the footer. Header/footer repeat on every page (verified on a 5-page PDF by `e2e/pdf.js`). `tests/branding.test.js` fails if any report builder lacks them or another print path appears. Loading indicators: sign-in, ledger load, saving and PDF generation show a spinner + progress bar (`Busy` in app/ui.js). Still unverified on real Google: loans/guarantors/repayments/profit/share-out through this app.
+
+## Premium member/staff experience (this release)
+One sign-in for everyone (role detected after sign-in). Member app (phone-first): Home (savings split available / held for guarantees, loan card, actions, activity), Savings (filters, running balance, row details, PDF + WhatsApp), Loans (plain-words status, repayments split interest/principal, guarantors, loan PDF), Guarantees (accept with confirmation), More (subscription, share-out & profit, airtime, notices, PIN, help). Staff: sidebar/top navigation with badges, "needs attention" banner, search on Members/Ledger/Audit. Shared: loading skeletons, saving overlay with elapsed time, success/warning/error toasts, empty states, retry on load failure, offline banner, session-expiry message, 20-minute inactivity sign-out, plain-words error messages.
+Tested in a real browser: `e2e/crawl.js` (every screen for every role and many members, phone + desktop, no broken text / dead taps / sideways scroll), `e2e/member.js` (member journey), `e2e/dates.js` (dates + numbers on screen equal the engine), `e2e/pdf.js` (multi-page PDFs and member/loan statements).
+Not yet verified on real Google: everything above except sign-in/smoke/write tests. See docs/REAL_GOOGLE_WALKTHROUGH.md.
+
+## Candidate 3 (this build) — what changed and how far it is tested
+- **HTML-instead-of-JSON sign-in error:** the Apps Script entry point now ALWAYS answers JSON (`SERVER_ERROR: …`), the client reads the response as text and classifies every HTML answer (not public / needs permission / old code / wrong or deleted address / /dev address / script error) in plain words on the sign-in screen, the app checks the endpoint before anyone types a PIN, and the Admin dashboard warns when the deployed build differs from the app's build. Tested against a real HTTP server that emulates Apps Script's POST→302 redirect and each HTML page (`tests/endpoint.test.js`). **Not yet proven against real Google** — the real deployment is the next walkthrough step; the app will now name the exact cause if it still fails.
+- **Automatic backend:** the production /exec address is built into `sob-app.html` (no URL to type); `?dev=` override for developers only.
+- **Date/period on KPIs:** see `docs/KPI_PERIODS.md` (as-at balances, cash with opening/closing, period activity, live queues; one calculation feeds card → drill-down → entries → PDF; tie-out tick on screen). As-at correctness fixed in the engine (loans paid out later, loans cleared later, guarantees committed/released by date).
+- Tested: `npm run verify` (unit + property tests + browser e2e). Needs real Google: the walkthrough in `docs/REAL_GOOGLE_WALKTHROUGH.md`.
+
+## Candidate 4 — real SOB records loader
+- Admin screen *Load SOB records* (System): file pick, dry run, guarded demo removal, idempotent load, Chairperson-gated corrections, reconciliation report (screen, PDF, CSV), member/staff sign-in creation. See docs/LOAD_RECORDS.md.
+- New server action `purgeDemoLedger` (Admin; refuses unless every member is a known demo name and none is real; backup first).
+- Tests: tests/loader.test.js, e2e/records.js (synthetic). Private rehearsal on the real records passed all checks; report kept out of git.
+
+## Candidate 5 - settled decisions applied
+- Bishop = SOB-003; undated rows keep source position (dateUnknown/dateAfter/dateBefore); consolidated loans keep `components` via the Chairperson-gated `recordLoanComponents`; `guarantorPolicyStart` 2027-01-01; report shows deposits, profit, withdrawals, share-outs and actual savings; one-step `installSOBRecords`.
+- Tests: tests/decisions.test.js, tests/loader.test.js, tests/install.test.js, e2e/records.js.
+
+## Candidate 6 - financial years, historical loans, General Reserve, profit reconciliation
+- **Financial years follow the actual share-outs** (`src/core/fy.js`): each year closes at its approved share-out and the next opens that same day; 31 December is never assumed. Savings not withdrawn carry forward. Years are defined once, with evidence, by the loader (idempotent; changing a defined year is refused).
+- **Historical loan accounts** (`src/core/histloans.js`): separate from today's loan book (no effect on savings, cash or loans owed). Interest is a loan-interest record, repayments are allocated interest-first, oldest loan first (derived, never duplicated). Unsupported loan accounts are never created: gaps are reported.
+- **SOB General Reserve Fund** (`src/core/reserve.js`): collective; only verified, unallocated group profit can enter it; every movement needs evidence, Admin request + Chairperson approval, audited. Members' savings and approved-but-uncollected distributions can never be moved.
+- **Profit reconciliation** (`src/core/profitrec.js`, `finreports.js`): charged / received / receivable / credited / undistributed / reserve per year. Member credits are never presented as group profit earned; gaps are shown, not plugged.
+- **Reconciliation report** shows original, approved correction, revised and remaining differences for every account. The earlier savings total is not presented as verified.
+- Tested locally: tests/fy, histloans, reserve, loader, decisions, install; e2e/records. NOT yet verified on the real Google Sheet and not live-tested. The current production system stays until the corrected package is installed and verified there.
+- Follow-up (9 Oct 2026): an undated source row can be reclassified as a historical loan repayment without inventing a date (`dateUnknown` + `dateAfter`); a Chairperson-corrected loan-register amount is recorded beside the original (`registerCorrection`), never overwritten; a cash-out typed Withdraw on a share-out day is reported as part of that share-out in the financial-year positions. Per-loan statements and financial-year positions are produced in the private report.
+- **General Reserve policy (Chairperson, 9 Oct 2026)**: `settleFinancialYear` (gated: Super Admin requests, Chairperson approves) settles a COMPLETED year: verified group result = interest actually received (interest first) + other income - expenses, all computed from the ledger (an approved `expectedResult` pins the figure; if the records change the command refuses). The remainder after member distributions is moved into the reserve if positive, or reflected as a loss if negative; the reserve balance (positive or negative) carries forward. The open year is refused (its result stays separate). Member savings, loans owed, entitlements and unexplained differences are never moved.
+- **Source-row coverage control**: the records pack lists every numeric source row; the loader verifies that each one is posted, recorded as a loan event or kept as an audit note, and discloses dated rows without an amount; a row can no longer be dropped silently.
+
+## Candidate 7 - close-out controls (9 Oct 2026, Chairperson's final directive)
+- **VOID rows**: every source row without an amount is kept as an audit note with `status: "VOID"` and nothing is posted. The loader fails if a listed void row is missing or if anything was posted against it (`coverage.voidRows`).
+- **Loan date not established**: `markLoanDateUnknown` (gated: Super Admin requests, Chairperson approves; permission `reconcile.manage`). The placeholder date is kept internally only for ordering (`placeholderDate`); loan views and statements say "date not established" and mark interest as indicative. A later `correctLoanDate` from a document clears the flag. History is kept.
+- **Savings offset** `offsetHistoricalLoan` (gated): a member's own savings repay a historical loan (interest first). New entry type `Savings Offset` lowers savings and moves no cash; paired with a `Historical Loan Repayment`. Refused beyond the savings held or the loan outstanding.
+- **Approved write-off** `writeOffHistoricalLoan` (gated, `reserve.manage`): principal written off is a verified group loss of a CLOSED year (`lossYear`) and lowers that year's result; if the year was already settled the loss is posted to the reserve at once (negative movement, balance can go negative and carries forward). Written-off interest is not a further loss. Nothing is written off automatically; savings are never touched.
+- UI: *Reserve* screen lists historical loans with balances and has *Offset savings against a loan* and *Write off a loan balance* (Super Admin requests, Chairperson approves).
+- Tests: tests/closeout.test.js (7), loader VOID check, existing suites. Needs real Google: the walkthrough in docs/REAL_GOOGLE_WALKTHROUGH.md. Not live-tested.
+
+## Candidate 8 - real Google Sheets behaviour (9 Oct 2026, found at first live install)
+- **Cause**: Google Sheets converts text that looks like a date, date-time or number into a real date/number when a script writes it; `getValues` then returns a `Date`. The platform stored ISO dates as text and never converted them back, so the installer's second run failed with `FY_DIFFERS`, and the earlier version re-saved those dates in a shifted form. Not reproducible in a plain mock.
+- **Fix**: text columns are formatted as plain text on write; any `Date` that still comes back is repaired on read to `yyyy-MM-dd` (or an ISO timestamp) in the Sheet's own time zone; the installer detects the damage of the earlier version and, ONLY when nothing was approved, clears the partial install and reloads from the verified records (it refuses once approvals exist).
+- **Installer time limit**: Google stops a run at six minutes. Exceptions and resolutions are written in batches (`openDiscrepancies`, `resolveDiscrepancies`); the installer stops itself at 4 minutes with "NOT FINISHED YET - run installSOBRecords again" and continues where it stopped.
+- **Tests**: the test Sheet now emulates Sheets' conversions (date, date-time, number) and its row limits; tests/sheets_behaviour.test.js (6); upgrade rehearsal from a Sheet written by the earlier version.
+
+## Candidate 9 — Complete member statements and year-end reconciliation (10 Oct 2026)
+- New `core/statements.js`: one account object per member feeds the on-screen statement, the PDF and the WhatsApp text. It carries the member identification block, the savings summary (opening, deposits, profit, withdrawals, share-outs, offsets, other adjustments, closing), the per-financial-year table, every loan with its interest working (calendar months less grace months × agreed monthly interest), repayments with references and the interest/loan split, the placeholder-date label for a loan whose date is not established, guarantors, every transaction with its reference, corrections and audit notes, and a note separating carried-forward member savings from the General Reserve Fund.
+- Every statement carries its own tie-outs (opening + movements = closing; financial-year rows add up; each loan's parts add up to what the ledger says is owed) and says so in plain words; a statement that does not agree says so.
+- Period selection: lifetime, this/last financial year (share-out to share-out), this month, custom dates; tap a card or a transaction to review it.
+- Loan statements print from the same data (member portal and staff loan screen). A year-end reconciliation report per financial year shows member savings carried forward beside the General Reserve Fund.
+- Tests: tests/statements.test.js (hand-built interest and allocation cases, plus every member of the synthetic load across four period types).
+
+### Candidate 10 - the three loan/balance rules (verified against the register and the engine)
+- Interest accrues until settlement; repayments clear interest first (already implemented, now proved in tests/loan_rules.test.js).
+- Loans paid out in instalments: ONE loan, first payout date is the start, every instalment kept (new Chairperson-approved command addDisbursement; statements list each part).
+- Savings position = savings + profit - withdrawals - share-outs; loans/interest shown separately on statements.
+
+### Candidate 11 - register of 6 Oct 2026
+- Records file v11 adds the 43 new register rows (loaded in-app, idempotent), supersedes the SOB-035 void with one atomic splitRepayment request, and records two register items. Private pack kept outside the repository.
+- New gated command splitRepayment; loader plan steps repayLoan / supersedeRequest.
+
+### Candidate 12 - interest without grace; settlement from savings
+- No grace unless the Chairperson authorises it per loan. New gated command settleLoanFromSavings (interest first, no cash) and a read-only settlementReview; offsets are NOT applied until the Chairperson chooses the effective date.
