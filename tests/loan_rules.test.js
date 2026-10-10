@@ -130,4 +130,27 @@ t("CLOSING the brought-forward balances: one Chairperson-approved entry per memb
   const again = CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines, reason: "r", evidence: "e" }); assert.ok(again.pendingApproval);
   CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: again.requestId }); assert.equal(db.transactions.filter((x) => x.type === "Share-Out" && /^CLOSE/.test(x.sourceRef || "")).length, 2, "applying it twice adds nothing");
 });
+t("HISTORICAL LOANS: where savings at the share-out covered the unpaid loan it is settled from them (no cash, audited); a loan the savings did not cover stays open; the rest is paid out", () => {
+  const db = fresh(); db.members.push({ id: "SOB-003", name: "C", status: "Active", regDate: "2025-01-01" }); dep(db, "SOB-001", "2025-03-01", 1293298); dep(db, "SOB-002", "2025-03-01", 10131); dep(db, "SOB-003", "2025-03-01", 5);
+  CMD.run(db, at("2026-10-08"), "importHistoricalLoans", { batchId: "HL", source: "t", accounts: [
+    { key: "J1", memberId: "SOB-001", date: "2025-08-08", registerAmount: 1000000, registerRef: "r104", evidence: "register" }, { key: "K1", memberId: "SOB-002", date: "2025-06-16", registerAmount: 100000, registerRef: "r1", evidence: "register" }],
+    events: [{ kind: "DISBURSEMENT", loanKey: "J1", memberId: "SOB-001", date: "2025-08-08", amount: 1000000, sourceRef: "d1" }, { kind: "DISBURSEMENT", loanKey: "K1", memberId: "SOB-002", date: "2025-06-16", amount: 100000, sourceRef: "d2" }, { kind: "REPAYMENT", memberId: "SOB-002", date: "2025-09-01", amount: 68000, sourceRef: "d3", loanKeys: ["K1"] }] });
+  dep(db, "SOB-003", "2025-12-21", 5, "Share-Out");
+  const lines = [{ memberId: "SOB-001", amount: 1293298, offsets: [{ key: "J1", amount: 1000000 }] }, { memberId: "SOB-002", amount: 10131 }];
+  assert.throws(() => CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines: [{ memberId: "SOB-001", amount: 1293298, offsets: [{ key: "J1", amount: 999999 }] }], reason: "r", evidence: "e" }), /STALE/, "the loan amount must be exactly what is unpaid");
+  const cash0 = db.transactions.reduce((a, x) => a + (L.classifyTransaction(x).cashflow || 0), 0);
+  const r = CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines, reason: "r", evidence: "e" }); CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: r.requestId });
+  const FR = require("../src/core/finreports.js"), rows = FR.historicalLoans(db).rows;
+  assert.equal(rows.find((x) => x.memberId === "SOB-001").status, "Settled"); assert.equal(rows.find((x) => x.memberId === "SOB-002").principalUnpaid, 32000, "a loan the savings did not cover stays open");
+  assert.equal(L.memberSavingsAsOf(db, "SOB-001", "2026-10-10"), 0); assert.equal(db.transactions.filter((x) => x.type === "Share-Out" && /^CLOSE/.test(x.sourceRef || "")).find((x) => x.memberId === "SOB-001").amount, 293298, "only the remainder is paid out");
+  assert.equal(db.transactions.reduce((a, x) => a + (L.classifyTransaction(x).cashflow || 0), 0), cash0 - 293298 - 10131, "the settled part moves no cash");
+  const r2 = CMD.run(db, at("2026-10-10"), "closeYearBalances", { date: "2025-12-21", lines, reason: "r", evidence: "e" }); CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: r2.requestId });
+  assert.equal(db.transactions.filter((x) => x.type === "Savings Offset").length, 1, "applying it twice settles nothing twice");
+});
+t("a savings deposit's amount is corrected to the source record by an approved replacement: the original is kept voided, the discrepancy is closed, nothing is edited in place", () => {
+  const db = fresh(); const e = dep(db, "SOB-001", "2026-06-14", 3000); db.discrepancies = [{ id: "D1", subject: "SOB-001 savings 2026-06-14", status: "Open" }];
+  const r = CMD.run(db, at("2026-10-10"), "correctEntryAmount", { id: e.id, amount: 5000, ref: "reg|r302", discrepancySubject: "SOB-001 savings 2026-06-14", reason: "register", evidence: "row 302" }); assert.equal(r.pendingApproval, true); assert.equal(L.memberSavings(db, "SOB-001"), 3000);
+  CMD.run(db, at("2026-10-10", "chair"), "approveRequest", { id: r.requestId });
+  assert.equal(L.memberSavings(db, "SOB-001"), 5000); assert.equal(db.transactions.find((x) => x.id === e.id).voided, true); assert.equal(db.discrepancies[0].status, "Resolved");
+});
 console.log(pass + " passed");
