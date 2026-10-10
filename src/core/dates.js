@@ -38,7 +38,7 @@
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const longDate = (s) => (isISO(s) ? Number(s.slice(8, 10)) + " " + MONTHS[Number(s.slice(5, 7)) - 1] + " " + s.slice(0, 4) : "");
   const lastDayOfMonth = (y, m) => fmt(new Date(Date.UTC(y, m, 0)));
-  const PERIOD_PRESETS = [["month", "This month"], ["lastMonth", "Last month"], ["quarter", "This quarter"], ["year", "This year"], ["lastYear", "Last year"], ["all", "All time"], ["custom", "Custom"]];
+  const PERIOD_PRESETS = [["month", "This month"], ["lastMonth", "Last month"], ["quarter", "This quarter"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["all", "All time"], ["custom", "Custom"]];
   function describePeriod(p) {
     if (p.key === "all" || !p.from) return "Start of records – " + longDate(p.to);
     return p.from === p.to ? longDate(p.to) : longDate(p.from) + " – " + longDate(p.to);
@@ -46,8 +46,20 @@
   function makePeriod(key, from, to, today) {
     const p = { key, from, to }; p.label = (PERIOD_PRESETS.find((x) => x[0] === key) || [0, "Custom"])[1]; p.text = describePeriod(p); p.toDate = to >= today; return p;
   }
-  function presetPeriod(key, today) {
-    today = today || todayISO(); const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), pad = (n) => String(n).padStart(2, "0");
+  /* SOB financial years are defined by the actual share-out dates (db.yearCycles: year, openedDate, closedDate), never by the calendar.
+     "This financial year" = the year that is open today; "Last financial year" = the one before it. Both run from the share-out that opened them
+     to the share-out that closed them (the day itself belongs to the year that ended). Without registered years this falls back to the calendar. */
+  function fyPreset(key, today, years) {
+    const tb = (years || []).filter((c) => c && c.year && isISO(c.openedDate)).slice().sort((a, b) => a.year - b.year);
+    if (!tb.length) return null;
+    let i = tb.length - 1; for (let k = 0; k < tb.length; k++) if (tb[k].openedDate <= today && (!tb[k].closedDate || today <= tb[k].closedDate)) i = k;
+    const c = key === "year" ? tb[i] : tb[i - 1]; if (!c) return null;
+    const to = c.closedDate && c.closedDate < today ? c.closedDate : today, p = makePeriod(key, c.openedDate, to, today);
+    p.fy = c.year; p.fyOpened = c.openedDate; p.fyClosed = c.closedDate || null; p.fyLabel = "FY" + c.year; p.label = (key === "year" ? "This financial year" : "Last financial year") + " (FY" + c.year + ")"; return p;
+  }
+  function presetPeriod(key, today, years) {
+    today = today || todayISO();
+    if (key === "year" || key === "lastYear") { const f = fyPreset(key, today, years); if (f) return f; } const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), pad = (n) => String(n).padStart(2, "0");
     if (key === "month") return makePeriod(key, y + "-" + pad(m) + "-01", today, today);
     if (key === "lastMonth") { const ly = m === 1 ? y - 1 : y, lm = m === 1 ? 12 : m - 1; return makePeriod(key, ly + "-" + pad(lm) + "-01", lastDayOfMonth(ly, lm), today); }
     if (key === "quarter") { const qm = Math.floor((m - 1) / 3) * 3 + 1; return makePeriod(key, y + "-" + pad(qm) + "-01", today, today); }

@@ -130,15 +130,15 @@
     return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
   }
   /* ---- the reporting period: ONE selector for the whole dashboard and the Reports page. Balances are read as at its last day; activity covers first to last day. ---- */
-  const periodNow = () => { if (!st.period) { try { const v = JSON.parse(sessionStorage.getItem("sob.period") || "null"); if (v && v.key) st.period = v.key === "custom" ? D.customPeriod(v.from, v.to, today()) : D.presetPeriod(v.key, today()); } catch (e) { /* fall through to the default */ } } if (!st.period || st.period.to > today()) st.period = D.presetPeriod("year", today()); else if (st.period.key !== "custom") st.period = D.presetPeriod(st.period.key, today()); return st.period; };
+  const periodNow = () => { if (!st.period) { try { const v = JSON.parse(sessionStorage.getItem("sob.period") || "null"); if (v && v.key) st.period = v.key === "custom" ? D.customPeriod(v.from, v.to, today()) : D.presetPeriod(v.key, today(), FYM.table(st.db)); } catch (e) { /* fall through to the default */ } } if (!st.period || st.period.to > today()) st.period = D.presetPeriod("year", today(), FYM.table(st.db)); else if (st.period.key !== "custom") st.period = D.presetPeriod(st.period.key, today(), FYM.table(st.db)); return st.period; };
   const setPeriod = (p) => { st.period = p; st.customOpen = false; try { sessionStorage.setItem("sob.period", JSON.stringify({ key: p.key, from: p.from, to: p.to })); } catch (e) { /* optional */ } render(); };
   function periodBar() {
     const p = periodNow(), custom = p.key === "custom" || st.customOpen;
     const from = h("input", { type: "date", id: "p-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "p-to", value: p.to, max: today(), "aria-label": "To date" });
     return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Reporting period"),
-      Chips(D.PERIOD_PRESETS, custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today())); }),
+      Chips(D.PERIOD_PRESETS, custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
       custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
-      h("div", { class: "pb-note", id: "period-note" }, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
+      h("div", { class: "pb-note", id: "period-note" }, p.fy ? h("span", null, h("b", null, p.fyLabel), " (financial year from share-out to share-out) · ") : null, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
   }
   const kpiShow = (d) => d.unit === "%" ? (d.value == null ? "—" : d.value + "%") : d.unit === "count" ? String(d.value) : ugx(d.value);
   const download = (name, type, data) => { const a = h("a", { href: URL.createObjectURL(new Blob([data], { type })), download: name }); document.body.append(a); a.click(); a.remove(); };

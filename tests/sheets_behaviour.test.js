@@ -8,7 +8,7 @@ const rec = fs.readFileSync(gsf, "utf8"); let n = 0; const t = async (name, fn) 
 const ledger = async (s) => (await s.session((await s.call({ action: "login", id: "ADMIN", pin: "Adm1n-Setup-77" })).token)({ action: "getLedger" })).db;
 (async () => {
   await t("the mock really behaves like Sheets: a date written as text comes back as a Date", async () => {
-    const s = g.start({}, rec); s.setupAdmin(); const sh = s.sheets.Members || (s.sheets.Members = null); const ss = s.sb.SpreadsheetApp.getActiveSpreadsheet(), x = ss.insertSheet("probe"); x.getRange(1, 1, 1, 3).setValues([["2023-12-24", "0774020205", "text"]]);
+    const s = g.start({}, rec); s.setupAdmin(); const sh = s.sheets.Members || (s.sheets.Members = null); const ss = s.sb.SpreadsheetApp.getActiveSpreadsheet(), x = ss.insertSheet("probe"); x.getRange(1, 1, 1, 3).setValues([["2023-12-24", "0700000123", "text"]]);
     const v = x.getRange(1, 1, 1, 3).getValues()[0]; assert.ok(v[0] instanceof Date); assert.equal(typeof v[1], "number"); assert.equal(v[2], "text");
   });
   await t("dates, phone numbers and sign-in data are stored as TEXT and read back exactly", async () => {

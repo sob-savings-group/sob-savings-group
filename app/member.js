@@ -11,8 +11,8 @@ window.SOBMember = function (E) {
   const LOAN_STATUS = { Pending: ["Under review", "warn"], AwaitingApproval: ["Awaiting Chairperson approval", "warn"], Approved: ["Approved — awaiting payout", "ok"], Active: ["Active", "ok"], Cleared: ["Fully repaid", "mute"], Declined: ["Declined", "bad"] };
   const myLoans = () => (st.db.loans || []).filter((l) => l.memberId === me() && !l.voided).sort((a, b) => ((a.applicationDate || a.date || "") < (b.applicationDate || b.date || "") ? 1 : -1));
   /* the statement period the member chose: the list, the opening/closing balances and the PDF all use it */
-  const MP = [["all", "All time"], ["year", "This year"], ["lastYear", "Last year"], ["lastMonth", "Last month"], ["custom", "Custom"]];
-  const stmtPeriod = () => { const p = st.stmtPeriod; if (!p || p.key === "all") return D.presetPeriod("all", today()); return p.key === "custom" ? p : D.presetPeriod(p.key, today()); };
+  const MP = [["all", "All time"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["lastMonth", "Last month"], ["custom", "Custom"]];
+  const stmtPeriod = () => { const p = st.stmtPeriod; if (!p || p.key === "all") return D.presetPeriod("all", today()); return p.key === "custom" ? p : D.presetPeriod(p.key, today(), S.fy.table(st.db)); };
   const history = () => { const p = stmtPeriod(); return L.memberLifetimeHistory(st.db, me(), { from: p.from, to: p.to }).slice().reverse(); };
   const first = () => String(myName() || "").split(/\s+/)[0];
   const viewOnly = () => !!st.user.readOnly;
@@ -82,7 +82,7 @@ window.SOBMember = function (E) {
   function periodControl() {
     const p = stmtPeriod(), custom = st.stmtPeriod && st.stmtPeriod.key === "custom" || st.stmtCustom, from = h("input", { type: "date", id: "sp-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "sp-to", value: p.to, max: today(), "aria-label": "To date" });
     const opening = p.from ? L.memberSavingsAsOf(st.db, me(), D.addDays(p.from, -1)) : 0, closing = L.memberSavingsAsOf(st.db, me(), p.to);
-    return h("div", { id: "stmt-period" }, Chips(MP, custom ? "custom" : (st.stmtPeriod ? st.stmtPeriod.key : "all"), (k) => { if (k === "custom") { st.stmtCustom = true; render(); } else { st.stmtCustom = false; st.stmtPeriod = k === "all" ? null : D.presetPeriod(k, today()); render(); } }),
+    return h("div", { id: "stmt-period" }, Chips(MP, custom ? "custom" : (st.stmtPeriod ? st.stmtPeriod.key : "all"), (k) => { if (k === "custom") { st.stmtCustom = true; render(); } else { st.stmtCustom = false; st.stmtPeriod = k === "all" ? null : D.presetPeriod(k, today(), S.fy.table(st.db)); render(); } }),
       custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "sp-apply", onclick: () => { try { st.stmtPeriod = D.customPeriod(from.value, to.value, today()); st.stmtCustom = false; render(); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
       h("div", { class: "mute", style: "font-size:13px;margin:0 0 8px", id: "stmt-note" }, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) + " · brought forward " + ugx(opening) + " · closing " + ugx(closing) : "Everything up to " + D.longDate(p.to) + " · closing balance " + ugx(closing)));
   }

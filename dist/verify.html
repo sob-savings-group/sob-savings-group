@@ -48,7 +48,7 @@
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const longDate = (s) => (isISO(s) ? Number(s.slice(8, 10)) + " " + MONTHS[Number(s.slice(5, 7)) - 1] + " " + s.slice(0, 4) : "");
   const lastDayOfMonth = (y, m) => fmt(new Date(Date.UTC(y, m, 0)));
-  const PERIOD_PRESETS = [["month", "This month"], ["lastMonth", "Last month"], ["quarter", "This quarter"], ["year", "This year"], ["lastYear", "Last year"], ["all", "All time"], ["custom", "Custom"]];
+  const PERIOD_PRESETS = [["month", "This month"], ["lastMonth", "Last month"], ["quarter", "This quarter"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["all", "All time"], ["custom", "Custom"]];
   function describePeriod(p) {
     if (p.key === "all" || !p.from) return "Start of records – " + longDate(p.to);
     return p.from === p.to ? longDate(p.to) : longDate(p.from) + " – " + longDate(p.to);
@@ -56,8 +56,20 @@
   function makePeriod(key, from, to, today) {
     const p = { key, from, to }; p.label = (PERIOD_PRESETS.find((x) => x[0] === key) || [0, "Custom"])[1]; p.text = describePeriod(p); p.toDate = to >= today; return p;
   }
-  function presetPeriod(key, today) {
-    today = today || todayISO(); const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), pad = (n) => String(n).padStart(2, "0");
+  /* SOB financial years are defined by the actual share-out dates (db.yearCycles: year, openedDate, closedDate), never by the calendar.
+     "This financial year" = the year that is open today; "Last financial year" = the one before it. Both run from the share-out that opened them
+     to the share-out that closed them (the day itself belongs to the year that ended). Without registered years this falls back to the calendar. */
+  function fyPreset(key, today, years) {
+    const tb = (years || []).filter((c) => c && c.year && isISO(c.openedDate)).slice().sort((a, b) => a.year - b.year);
+    if (!tb.length) return null;
+    let i = tb.length - 1; for (let k = 0; k < tb.length; k++) if (tb[k].openedDate <= today && (!tb[k].closedDate || today <= tb[k].closedDate)) i = k;
+    const c = key === "year" ? tb[i] : tb[i - 1]; if (!c) return null;
+    const to = c.closedDate && c.closedDate < today ? c.closedDate : today, p = makePeriod(key, c.openedDate, to, today);
+    p.fy = c.year; p.fyOpened = c.openedDate; p.fyClosed = c.closedDate || null; p.fyLabel = "FY" + c.year; p.label = (key === "year" ? "This financial year" : "Last financial year") + " (FY" + c.year + ")"; return p;
+  }
+  function presetPeriod(key, today, years) {
+    today = today || todayISO();
+    if (key === "year" || key === "lastYear") { const f = fyPreset(key, today, years); if (f) return f; } const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7)), pad = (n) => String(n).padStart(2, "0");
     if (key === "month") return makePeriod(key, y + "-" + pad(m) + "-01", today, today);
     if (key === "lastMonth") { const ly = m === 1 ? y - 1 : y, lm = m === 1 ? 12 : m - 1; return makePeriod(key, ly + "-" + pad(lm) + "-01", lastDayOfMonth(ly, lm), today); }
     if (key === "quarter") { const qm = Math.floor((m - 1) / 3) * 3 + 1; return makePeriod(key, y + "-" + pad(qm) + "-01", today, today); }
@@ -1000,7 +1012,12 @@
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.kpis = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, L, LN, C) {
-  const upTo = (db, asOf) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= asOf) });
+  /* Financial-year periods (period.fy): the share-out day belongs to BOTH labels, so each entry on it is counted once, in the year it belongs to:
+     share-out/withdrawal entries close the year that ends that day; everything else on that day opens the next year (same rule as fy.yearOfEntry). */
+  const SETTLE = ["Share-Out", "Withdraw"];
+  const fyEnd = (period) => (period && period.fy && period.fyClosed && period.to === period.fyClosed) ? (t) => t.date === period.to && !SETTLE.includes(t.type) : null;      // belongs to the NEXT year
+  const fyStart = (period) => (period && period.fy && period.fyOpened) ? (t) => t.date === period.fyOpened && SETTLE.includes(t.type) : null;                           // belongs to the PREVIOUS year
+  const upTo = (db, asOf, out) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= asOf && !(out && out(t))) });
   const cls = L.classifyTransaction, sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
@@ -1015,8 +1032,8 @@
      ====================================================================================================================== */
   function frame(db, period) {
     const to = (period && period.to) || dates.todayISO(), from = (period && period.from) || "";
-    const d = upTo(db, to), live = L.activeTransactions(d), names = {}; (db.members || []).forEach((m) => { names[m.id] = m.name; });
-    const f = { db, d, to, from, live, loans: L.activeLoansAsAt(d, to), name: (id) => (id ? names[id] || id : "Group"), inP: (t) => (!from || t.date >= from) && t.date <= to, cache: {} };
+    const oe = fyEnd(period), os = fyStart(period), d = upTo(db, to, oe), live = L.activeTransactions(d), names = {}; (db.members || []).forEach((m) => { names[m.id] = m.name; });
+    const f = { db, d, to, from, live, loans: L.activeLoansAsAt(d, to), name: (id) => (id ? names[id] || id : "Group"), inP: (t) => (!from || t.date >= from) && t.date <= to && !(os && os(t)) && !(oe && oe(t)), cache: {} };
     f.pos = (l) => (f.cache[l.id] = f.cache[l.id] || L.loanInterestPosition(l, d, to));
     f.owed = (l) => L.loanOutstanding(l, d, to);
     f.loanOf = (id) => f.loans.find((l) => l.id === id);
@@ -1111,7 +1128,7 @@
     asOf = asOf || dates.todayISO(); const p = period || {}; let from = p.from || "", to = asOf;
     if (p.year) { const a = p.year + "-" + (p.quarter ? String((p.quarter - 1) * 3 + 1).padStart(2, "0") : "01") + "-01"; if (!from || a > from) from = a; if (p.quarter) { const e = dates.addDays(dates.addMonths(a, 3), -1); if (e < to) to = e; } else if (p.year + "-12-31" < to) to = p.year + "-12-31"; }
     if (p.to && p.to < to) to = p.to;
-    const o = overview(db, { from, to });
+    const o = overview(db, p.fy ? { from, to, fy: p.fy, fyOpened: p.fyOpened, fyClosed: p.fyClosed } : { from, to });
     return { asOf, period: period || null, totalSavings: o.totalSavings, availableCash: o.availableCash, outstandingLoans: o.outstandingLoans, interestReceivable: o.interestReceivable, profit: o.profit, expenses: o.expenses, members: o.members,
       loanExposure: o.loanExposure, awaitingApproval: { value: o.awaitingApproval, definition: "Items waiting for the Chairperson's second approval (loans, exceptional security, voids/adjustments, profit distribution, share-out)." } };
   }
@@ -2599,8 +2616,8 @@
   }
   function annualSummary(db, year) {
     /* A financial year runs from one share-out to the next (never 1 Jan - 31 Dec); a year still running is summarised to today, never into the future. */
-    const cyc = FY.byYear(db, year), today = dates.todayISO(), end = cyc ? (cyc.closedDate && dates.addDays(cyc.closedDate, -1) < today ? dates.addDays(cyc.closedDate, -1) : today) : (year + "-12-31" < today ? year + "-12-31" : today);
-    const d = cyc ? K.dashboard(db, end, { from: cyc.openedDate }) : K.dashboard(db, end, { year: Number(year) });
+    const cyc = FY.byYear(db, year), today = dates.todayISO(), end = cyc ? (cyc.closedDate && cyc.closedDate < today ? cyc.closedDate : today) : (year + "-12-31" < today ? year + "-12-31" : today);
+    const d = cyc ? K.dashboard(db, end, { from: cyc.openedDate, fy: cyc.year, fyOpened: cyc.openedDate, fyClosed: cyc.closedDate || null }) : K.dashboard(db, end, { year: Number(year) });
     return R((cyc ? "Financial year FY" + year + " summary (" + dates.toDisplay(cyc.openedDate) + " – " + (cyc.closedDate ? dates.toDisplay(cyc.closedDate) : "to date") + ")" : "Annual summary " + year), ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
   }
   const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));

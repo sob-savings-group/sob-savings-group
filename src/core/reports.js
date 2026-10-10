@@ -88,8 +88,8 @@
   }
   function annualSummary(db, year) {
     /* A financial year runs from one share-out to the next (never 1 Jan - 31 Dec); a year still running is summarised to today, never into the future. */
-    const cyc = FY.byYear(db, year), today = dates.todayISO(), end = cyc ? (cyc.closedDate && dates.addDays(cyc.closedDate, -1) < today ? dates.addDays(cyc.closedDate, -1) : today) : (year + "-12-31" < today ? year + "-12-31" : today);
-    const d = cyc ? K.dashboard(db, end, { from: cyc.openedDate }) : K.dashboard(db, end, { year: Number(year) });
+    const cyc = FY.byYear(db, year), today = dates.todayISO(), end = cyc ? (cyc.closedDate && cyc.closedDate < today ? cyc.closedDate : today) : (year + "-12-31" < today ? year + "-12-31" : today);
+    const d = cyc ? K.dashboard(db, end, { from: cyc.openedDate, fy: cyc.year, fyOpened: cyc.openedDate, fyClosed: cyc.closedDate || null }) : K.dashboard(db, end, { year: Number(year) });
     return R((cyc ? "Financial year FY" + year + " summary (" + dates.toDisplay(cyc.openedDate) + " – " + (cyc.closedDate ? dates.toDisplay(cyc.closedDate) : "to date") + ")" : "Annual summary " + year), ["measure", "value"], ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "profit", "expenses", "members"].map((k) => ({ measure: k, value: d[k].value })), {});
   }
   const esc = (v) => String(v === undefined || v === null ? "" : v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));

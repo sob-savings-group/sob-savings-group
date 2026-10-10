@@ -5,7 +5,12 @@
   const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.kpis = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, L, LN, C) {
-  const upTo = (db, asOf) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= asOf) });
+  /* Financial-year periods (period.fy): the share-out day belongs to BOTH labels, so each entry on it is counted once, in the year it belongs to:
+     share-out/withdrawal entries close the year that ends that day; everything else on that day opens the next year (same rule as fy.yearOfEntry). */
+  const SETTLE = ["Share-Out", "Withdraw"];
+  const fyEnd = (period) => (period && period.fy && period.fyClosed && period.to === period.fyClosed) ? (t) => t.date === period.to && !SETTLE.includes(t.type) : null;      // belongs to the NEXT year
+  const fyStart = (period) => (period && period.fy && period.fyOpened) ? (t) => t.date === period.fyOpened && SETTLE.includes(t.type) : null;                           // belongs to the PREVIOUS year
+  const upTo = (db, asOf, out) => Object.assign({}, db, { transactions: db.transactions.filter((t) => t.date <= asOf && !(out && out(t))) });
   const cls = L.classifyTransaction, sum = (rows, k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
@@ -20,8 +25,8 @@
      ====================================================================================================================== */
   function frame(db, period) {
     const to = (period && period.to) || dates.todayISO(), from = (period && period.from) || "";
-    const d = upTo(db, to), live = L.activeTransactions(d), names = {}; (db.members || []).forEach((m) => { names[m.id] = m.name; });
-    const f = { db, d, to, from, live, loans: L.activeLoansAsAt(d, to), name: (id) => (id ? names[id] || id : "Group"), inP: (t) => (!from || t.date >= from) && t.date <= to, cache: {} };
+    const oe = fyEnd(period), os = fyStart(period), d = upTo(db, to, oe), live = L.activeTransactions(d), names = {}; (db.members || []).forEach((m) => { names[m.id] = m.name; });
+    const f = { db, d, to, from, live, loans: L.activeLoansAsAt(d, to), name: (id) => (id ? names[id] || id : "Group"), inP: (t) => (!from || t.date >= from) && t.date <= to && !(os && os(t)) && !(oe && oe(t)), cache: {} };
     f.pos = (l) => (f.cache[l.id] = f.cache[l.id] || L.loanInterestPosition(l, d, to));
     f.owed = (l) => L.loanOutstanding(l, d, to);
     f.loanOf = (id) => f.loans.find((l) => l.id === id);
@@ -116,7 +121,7 @@
     asOf = asOf || dates.todayISO(); const p = period || {}; let from = p.from || "", to = asOf;
     if (p.year) { const a = p.year + "-" + (p.quarter ? String((p.quarter - 1) * 3 + 1).padStart(2, "0") : "01") + "-01"; if (!from || a > from) from = a; if (p.quarter) { const e = dates.addDays(dates.addMonths(a, 3), -1); if (e < to) to = e; } else if (p.year + "-12-31" < to) to = p.year + "-12-31"; }
     if (p.to && p.to < to) to = p.to;
-    const o = overview(db, { from, to });
+    const o = overview(db, p.fy ? { from, to, fy: p.fy, fyOpened: p.fyOpened, fyClosed: p.fyClosed } : { from, to });
     return { asOf, period: period || null, totalSavings: o.totalSavings, availableCash: o.availableCash, outstandingLoans: o.outstandingLoans, interestReceivable: o.interestReceivable, profit: o.profit, expenses: o.expenses, members: o.members,
       loanExposure: o.loanExposure, awaitingApproval: { value: o.awaitingApproval, definition: "Items waiting for the Chairperson's second approval (loans, exceptional security, voids/adjustments, profit distribution, share-out)." } };
   }
