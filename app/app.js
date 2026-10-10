@@ -110,6 +110,7 @@
     shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, nav.map(([k, l, , ic, cls]) => { const n = navBadge(k);
       return h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null); })));
     const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
+    try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
     try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
@@ -161,6 +162,7 @@
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
   function dashboard() {
     const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
+    const hl = FRP.historicalLoans(st.db, p.to);
     const c = (key, label, tone, sub) => Card(label, kpiShow(o[key]), sub || o[key].period, () => openKpi(key), tone);
     const wrap = h("div", null, periodBar(),
       h("h2", { class: "sec" }, "Where the group stands · as at " + D.longDate(p.to)),
@@ -173,6 +175,9 @@
         c("savingsReceived", "Savings Received", "avail", o.savingsReceived.count + " deposits"), c("withdrawals", "Withdrawals & Share-Out", null, o.withdrawals.count + " payments"), c("loansDisbursed", "Loans Paid Out", "loan", o.loansDisbursed.count + " loans"),
         c("repaymentsReceived", "Loan Repayments", "loan", o.repaymentsReceived.count + " payments"), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
         c("otherIncome", "Other Income", null, o.otherIncome.count + " entries"), c("profit", "Profit Recorded", "profit", "Profit entries in the period"), c("expenses", "Expenses", null, o.expenses.count + " entries")),
+      h("h2", { class: "sec" }, "General Reserve Fund and older loans"),
+      h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => { st.view = "reserve"; render(); }, "profit"),
+        Card("Historical loans unpaid", ugx(hl.totals.principalUnpaid + hl.totals.interestUnpaid), "Principal " + num(hl.totals.principalUnpaid) + " + interest " + num(hl.totals.interestUnpaid) + " · kept apart from loans owed", () => drill(hl.title, null, tableFromReport(hl)), "loan")),
       h("h2", { class: "sec" }, "Needs attention · right now"), attention(o.awaitingApproval, pipe),
       h("div", { class: "grid", id: "pipeline" }, Card("Awaiting approval", String(o.awaitingApproval), "Chairperson second approval", () => { st.view = "approvals"; render(); }), Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))),
       h("h2", { class: "sec" }, "Subscription compliance " + p.to.slice(0, 4)));
@@ -347,15 +352,25 @@
   const withPeriod = (rep) => Object.assign(rep, { period: rep.period || periodNow().text || D.describePeriod(periodNow()) });
   const REPORTS = { "Interest Receivable": () => R.interestReceivable(st.db, today()), "Awaiting approval": () => R.approvals(st.db), "Exceptional security": () => R.securities(st.db), "Profit distribution": () => R.quarterlyDistribution(st.db), "Savings by member": () => R.savings(st.db), "Loan book": () => R.loans(st.db, today()), "Loan repayments": () => withPeriod(R.repayments(st.db, { from: periodNow().from, to: periodNow().to })), "Guarantor exposure": () => R.guarantors(st.db), "Subscriptions": () => R.subscriptions(st.db, today().slice(0, 4)), "Income & expenses": () => withPeriod(R.incomeExpenses(st.db, { from: periodNow().from, to: periodNow().to })), "December share-out": () => R.shareOut(st.db, (FYM.current(st.db) || { year: Number(today().slice(0, 4)) }).year, today()), "Financial years": () => FRP.financialYears(st.db), "Financial year (current)": () => FRP.financialYear(st.db, (FYM.current(st.db) || { year: 0 }).year), "Profit reconciliation": () => FRP.profitReconciliation(st.db, today()), "Historical loans": () => FRP.historicalLoans(st.db, today()), "General Reserve Fund": () => FRP.generalReserve(st.db), "Reserve movements": () => FRP.reserveMovements(st.db), "Airtime requests": () => R.airtime(st.db), "Notification log": () => R.notificationLog(st.db), "Reconciliation register": () => R.reconciliationRegister(st.db), "Annual summary": () => R.annualSummary(st.db, FYM.yearOfDate(st.db, periodNow().to) || periodNow().to.slice(0, 4)), "Interest vs principal received": () => R.repaymentAllocation(st.db), "Quarterly distribution": () => R.quarterlyDistribution(st.db, { year: Number(today().slice(0, 4)), quarter: 1 }) };
   const PERIOD_AWARE = ["Loan repayments", "Income & expenses", "Annual summary"];
+  /* The reports page is a catalogue: every statement is grouped by what it tells you, says whether it follows the chosen period, and opens as a table with PDF and CSV. */
+  const REPORT_GROUPS = [
+    ["Financial statements", "Statements that follow the approved financial years, from share-out to share-out.", ["Financial year (current)", "Financial years", "Annual summary", "Income & expenses", "Profit reconciliation"]],
+    ["Savings, profit and share-out", "What members hold, what was earned for them, and what was paid out.", ["Savings by member", "Subscriptions", "Profit distribution", "Quarterly distribution", "December share-out"]],
+    ["Loans and interest", "Money lent, repaid and still owed, with interest shown separately from principal.", ["Loan book", "Loan repayments", "Interest vs principal received", "Interest Receivable", "Guarantor exposure", "Exceptional security", "Historical loans"]],
+    ["General Reserve Fund", "The group's collective reserve and every movement into or out of it.", ["General Reserve Fund", "Reserve movements"]],
+    ["Governance and records", "Approvals, reconciliation and the notices that were sent.", ["Awaiting approval", "Reconciliation register", "Notification log", "Airtime requests"]]];
+  function openReport(n) {
+    const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
+    drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+  }
   function reports() {
-    const p = periodNow();
+    const p = periodNow(), ov = K.overview(st.db, p), grouped = REPORT_GROUPS.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
+    const rcard = (n) => { const c = Card(n, PERIOD_AWARE.includes(n) ? "Follows the period" : "As at today", "Open · print / PDF · CSV", () => openReport(n)); c.classList.add("rpt"); return c; };
     return h("div", null, periodBar(),
-      h("h2", { class: "sec" }, "Dashboard figures · follow the period above"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, "Open", d.period, () => openKpi(k)); })),
-      h("h2", { class: "sec" }, "Registers, statements and schedules"), h("p", { class: "mute" }, "These show today's position, except " + PERIOD_AWARE.join(", ") + ", which follow the period above."),
-      h("div", { class: "grid" }, Object.keys(REPORTS).map((n) => Card(n, "Open", PERIOD_AWARE.includes(n) ? "Follows the period" : "Today", () => {
-        const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
-        drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
-      }))));
+      h("h2", { class: "sec" }, "Key figures · tap one to see the transactions behind it"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, kpiShow(ov[k]), d.period, () => openKpi(k)); })),
+      REPORT_GROUPS.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
+        h("div", { class: "grid" }, names.filter((n) => REPORTS[n]).map(rcard)))),
+      h("p", { class: "mute", style: "font-size:13px;margin-top:18px" }, "Statements marked 'As at today' show today's position. Those marked 'Follows the period' use the reporting period chosen above. Every statement carries the SOB letterhead when printed or saved as a PDF."));
   }
   function recon() {
     const list = (st.db.discrepancies || []).slice().sort((a, b) => (a.status === b.status ? 0 : a.status === "Open" ? -1 : 1)), integ = S.integrity.check(st.db, today()), un = S.integrity.unaccounted(st.db, today());
