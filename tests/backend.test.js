@@ -135,7 +135,8 @@ t("a disabled user's EXISTING session stops working immediately; role changes ap
   assert.ok(w.call({ action: "getLedger", token: w.member }).ok);
   assert.ok(w.call({ action: "disableUser", token: w.admin, userId: memberWith.id }).ok);
   assert.equal(w.call({ action: "getLedger", token: w.member }).error, "UNAUTHENTICATED");
-  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error, "BAD_CREDENTIALS");
+  assert.ok(/^MEMBER_INACTIVE/.test(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error));   // verified (right PIN) but disabled: told so, no session
+  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "wrong-pin" }).error, "BAD_CREDENTIALS");   // not verified: nothing revealed
   const users = S.readCollection(w.env.ss, "users"); users.find((u) => u.id === "COMM").role = "Admin"; S.writeCollection(w.env.ss, "users", users);
   assert.ok(cmd(w, w.comm, "createEntry", { date: "2026-02-01", memberId: otherMember.id, amount: 1, type: "Savings" }).ok, "promotion takes effect without re-login");
 });
@@ -151,7 +152,8 @@ t("user management is Admin-only; weak PINs refused; members may change only the
   assert.match(w.call({ action: "setPin", token: w.member, userId: otherMember.id, newPin: "9999", oldPin: "1234" }).error, /FORBIDDEN/);
   assert.match(w.call({ action: "setPin", token: w.member, newPin: "5678", oldPin: "wrong" }).error, /BAD_CREDENTIALS/);
   assert.ok(w.call({ action: "setPin", token: w.member, newPin: "5678", oldPin: "1234" }).ok);
-  assert.ok(w.call({ action: "login", id: memberWith.id, pin: "5678" }).ok); assert.equal(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error, "BAD_CREDENTIALS");
+  assert.ok(w.call({ action: "login", id: memberWith.id, pin: "5678" }).ok); assert.ok(/^MEMBER_INACTIVE/.test(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error));   // verified (right PIN) but disabled: told so, no session
+  assert.equal(w.call({ action: "login", id: memberWith.id, pin: "wrong-pin" }).error, "BAD_CREDENTIALS");   // not verified: nothing revealed
 });
 t("importSnapshot: Admin only and only into an EMPTY ledger; there is no general snapshot-write", () => {
   const w = world();
