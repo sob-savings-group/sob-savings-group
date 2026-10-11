@@ -32,15 +32,16 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB ID, e.g. SOB-005 or sob5", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Only if you have one", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const go = async () => {
         if (working) return; working = true; problem.replaceChildren();
         try {
           /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
           /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-          const typed = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
+          const idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), typed = [idPart, fname.value.trim()].filter(Boolean).join(" "), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
           let id = typed, secret = pin.value.trim();
           if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = typed;
           if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
@@ -57,12 +58,13 @@
         }
         finally { working = false; }
       };
-      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
-        h("label", { for: "mid" }, "SOB ID"), mid, h("div", { class: "hint", id: "id-hint" }, "Type it any way you like: SOB-005, sob5 or SOB005 all work."),
-        h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint", id: "pin-hint" }, "Enter your PIN. No PIN yet? Leave it empty and type your SOB ID followed by your first name in the first box, for example: SOB-005 Aaron (view only)."),
+        h("label", { for: "fname" }, "First name"), fname,
+        h("label", { for: "mid" }, "SOB ID"), mid,
+        h("label", { for: "pin" }, "PIN (optional)"), pin,
         h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"), problem,
         h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }

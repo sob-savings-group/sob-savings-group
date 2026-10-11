@@ -32,15 +32,17 @@ const iso = (d) => d.toISOString().slice(0, 10);
     await ctx.route(/wa\.me/, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "wa" }));
     await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
     /* sign-in guidance + exact access messages */
-    ok(/SOB-005/.test(await pg.getAttribute("#mid", "placeholder")) && /sob5|SOB005/.test(await pg.innerText("#id-hint")) && /first name/i.test(await pg.innerText("#pin-hint")), T("login screen shows how to enter the SOB ID and first name"));
+    ok(/Aaron/.test(await pg.getAttribute("#fname", "placeholder")) && /SOB005/.test(await pg.getAttribute("#mid", "placeholder")) && (await pg.locator("#login-go").count()) === 1, T("login screen: first name box (Aaron), SOB ID box (SOB005), then PIN"));
     const DENIED = "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", PENDING = "Your membership is pending approval. Please contact the Administrator for assistance.", INACTIVE = "Your account is currently inactive or restricted. Please contact the Administrator for assistance.";
-    const tryLogin = async (idText, pinText) => { await pg.fill("#mid", idText); await pg.fill("#pin", pinText); await pg.click("#login-go"); await pg.waitForSelector("#login-error", { timeout: 15000 }); const m = (await pg.innerText("#login-error")).trim(); await pg.evaluate(() => { const e = document.getElementById("login-error"); if (e) e.remove(); }); return m; };
+    const tryLogin = async (idText, pinText, nameText) => { await pg.fill("#fname", nameText || ""); await pg.fill("#mid", idText); await pg.fill("#pin", pinText); await pg.click("#login-go"); await pg.waitForSelector("#login-error", { timeout: 15000 }); const m = (await pg.innerText("#login-error")).trim(); await pg.evaluate(() => { const e = document.getElementById("login-error"); if (e) e.remove(); }); return m; };
     const setStatus = (id, status) => { const ms = S.readCollection(env.ss, "members"); ms.forEach((m) => { if (m.id === id) m.status = status; }); S.writeCollection(env.ss, "members", ms); };
     ok((await tryLogin("SOB-999", "1234")) === DENIED, T("unknown SOB ID: exact 'Access denied' message"));
     ok((await tryLogin(mem.id, "wrong-pin-x")) === DENIED, T("wrong PIN: the same exact 'Access denied' message (nothing revealed)"));
-    setStatus(newMem.id, "Pending"); ok((await tryLogin(newMem.id.toLowerCase().replace("-", "") + " " + newMem.name.split(/\s+/)[0], "")) === PENDING, T("verified pending member: exact pending message"));
+    setStatus(newMem.id, "Pending"); ok((await tryLogin(newMem.id.toLowerCase().replace("-", ""), "", newMem.name.split(/\s+/)[0])) === PENDING, T("verified pending member: exact pending message"));
     ok((await tryLogin(newMem.id, "")) === DENIED, T("pending member's ID alone (not verified): 'Access denied', not the pending message"));
     setStatus(mem.id, "Inactive"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified inactive member: exact inactive/restricted message")); setStatus(mem.id, "Restricted"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified restricted member: exact inactive/restricted message")); setStatus(mem.id, "Active"); setStatus(newMem.id, "Active");
+    await pg.fill("#fname", mem.name.split(/\s+/)[0]); await pg.fill("#mid", mem.id.toLowerCase().replace("-", "")); await pg.fill("#pin", ""); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]', { timeout: 15000 });
+    ok(true, T("first name + SOB ID (no PIN) opens the member's own view")); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#fname", "");
     await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
     /* mobile/desktop layout: no page ever scrolls sideways */
     const wide = async () => pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
