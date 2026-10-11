@@ -152,7 +152,7 @@ t("user management is Admin-only; weak PINs refused; members may change only the
   assert.match(w.call({ action: "setPin", token: w.member, userId: otherMember.id, newPin: "9999", oldPin: "1234" }).error, /FORBIDDEN/);
   assert.match(w.call({ action: "setPin", token: w.member, newPin: "5678", oldPin: "wrong" }).error, /BAD_CREDENTIALS/);
   assert.ok(w.call({ action: "setPin", token: w.member, newPin: "5678", oldPin: "1234" }).ok);
-  assert.ok(w.call({ action: "login", id: memberWith.id, pin: "5678" }).ok); assert.ok(/^MEMBER_INACTIVE/.test(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error));   // verified (right PIN) but disabled: told so, no session
+  assert.ok(w.call({ action: "login", id: memberWith.id, pin: "5678" }).ok); assert.equal(w.call({ action: "login", id: memberWith.id, pin: "1234" }).error, "BAD_CREDENTIALS");
   assert.equal(w.call({ action: "login", id: memberWith.id, pin: "wrong-pin" }).error, "BAD_CREDENTIALS");   // not verified: nothing revealed
 });
 t("importSnapshot: Admin only and only into an EMPTY ledger; there is no general snapshot-write", () => {
