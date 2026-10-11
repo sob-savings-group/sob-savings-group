@@ -241,16 +241,20 @@ t("notifications + airtime through the server: members see only their own, only 
   gw(true); const d2 = w.call({ action: "dispatchOutbox", token: w.admin }); assert.ok(d2.result.sent >= 1); assert.equal(d2.live.SMS, true);
   assert.ok(cmd(w, w.admin, "fulfilAirtime", { id: r.result.id }).ok);
 });
-t("staff roles over the API: Super Admin inputs; Chairperson second-approves; Treasurer and Chairperson cannot edit figures", () => {
+t("staff roles over the API: Super Admin inputs; Chairperson second-approves; Treasurer records routine entries only; Chairperson and Secretary cannot edit figures", () => {
   const w = world();
-  S.writeCollection(w.env.ss, "users", S.readCollection(w.env.ss, "users").concat([A.makeUser(w.env, { id: "CHAIR", role: "Chairperson", pin: "chair-pin-1" }), A.makeUser(w.env, { id: "TREAS", role: "Treasurer", pin: "treas-pin-1" })]));
-  const chair = w.tok("CHAIR", "chair-pin-1"), treas = w.tok("TREAS", "treas-pin-1");
-  for (const tk of [chair, treas]) {
+  S.writeCollection(w.env.ss, "users", S.readCollection(w.env.ss, "users").concat([A.makeUser(w.env, { id: "CHAIR", role: "Chairperson", pin: "chair-pin-1" }), A.makeUser(w.env, { id: "TREAS", role: "Treasurer", pin: "treas-pin-1" }), A.makeUser(w.env, { id: "SECR", role: "Secretary", pin: "secr-pin-1" })]));
+  const chair = w.tok("CHAIR", "chair-pin-1"), treas = w.tok("TREAS", "treas-pin-1"), secr = w.tok("SECR", "secr-pin-1");
+  for (const tk of [chair, treas, secr]) {
     assert.ok(w.call({ action: "getLedger", token: tk }).ok);
-    for (const [n, a] of [["createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "x" }], ["applyForLoan", { memberId: memberWith.id, amount: 1000 }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "x" }], ["setProfitCycle", { period: "x", pool: 1, measurementDate: "2026-04-01", sourceNote: "n", reason: "r" }]])
+    for (const [n, a] of [...(tk === treas ? [] : [["createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "x" }]]), ["applyForLoan", { memberId: memberWith.id, amount: 1000 }], ["setPolicy", { key: "loan", values: {}, reason: "x" }], ["distributeProfit", { period: "x" }], ["setProfitCycle", { period: "x", pool: 1, measurementDate: "2026-04-01", sourceNote: "n", reason: "r" }]])
       assert.match(cmd(w, tk, n, a).error || "", /FORBIDDEN/, n);
   }
   assert.match(cmd(w, treas, "approveEntry", { id: "X" }).error || "", /FORBIDDEN/);
+  const te = cmd(w, treas, "createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "Treasurer" }); assert.ok(te.ok, "Treasurer records a routine entry: " + te.error);
+  for (const n of ["voidEntry", "voidLoan", "editAssignedInterest", "writeOffHistoricalLoan", "executeShareOut", "approveRequest"]) assert.match(cmd(w, treas, n, { id: "X", loanId: "X", reason: "x" }).error || "", /FORBIDDEN/, "Treasurer: " + n);
+  assert.match(cmd(w, secr, "repayLoan", { loanId: "X", amount: 1 }).error || "", /FORBIDDEN/);
+  assert.equal(w.call({ action: "getLedger", token: secr }).db.users.length, 0);
   assert.ok(cmd(w, w.admin, "setPolicy", { key: "approval", values: { requiredTypes: ["Withdraw"] }, reason: "SOB decision (test)" }).ok);
   const e = cmd(w, w.admin, "createEntry", { memberId: memberWith.id, type: "Savings", amount: 1000, date: "2026-04-01", collector: "Test collector" }); assert.ok(e.ok, e.error);
   assert.match(cmd(w, w.admin, "approveEntry", { id: "X" }).error || "", /FORBIDDEN/);

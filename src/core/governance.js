@@ -7,13 +7,15 @@
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.gov = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
   /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
-     (reviews/approves, never inputs). The Treasurer reviews (read-only on figures). "Committee" is the generic read-only reviewer. */
+     (reviews/approves, never inputs). The Treasurer records routine transactions (see TREASURER_WRITE). The Secretary is view-only. "Committee" is the generic read-only reviewer. */
   const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
     "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "reserve.manage", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
   const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
-  const READ = ["report.view", "audit.view", "shareout.preview"];
+  const READ = ["report.view", "audit.view", "shareout.preview", "report.export"];   // report.export = the Export / Share menu (PDF, print, WhatsApp, CSV); officers only
   const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones
-  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"];
+  /* Treasurer: routine money entries only (savings/other ledger entries, loan repayments, subscriptions). Voids, loan approval/payout, interest changes, reconciliation, members, security, policy, share-out and system stay with the Super Admin; gated actions still need the Chairperson. */
+  const TREASURER_WRITE = ["ledger.create", "loan.repay", "subscription.record"];
 
   // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions (never write permissions).
   const config = {
@@ -24,7 +26,8 @@
   const PERMS = {
     Admin: () => ALL,
     Chairperson: () => READ.concat(APPROVE, ["self.view"]),
-    Treasurer: () => READ.concat(["self.view"]),
+    Treasurer: () => READ.concat(TREASURER_WRITE, ["self.view"]),
+    Secretary: () => ["report.view", "self.view"],   // records and permitted reports, view-only; no export menu
     Committee: () => (config.committeePermissions || ["report.view", "shareout.preview"]).filter((p) => !WRITE.includes(p) && !APPROVE.includes(p)),
     Member: () => ["self.view", "loan.apply", "report.self", "airtime.request", "guarantee.accept"]
   };

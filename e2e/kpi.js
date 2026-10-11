@@ -32,13 +32,13 @@ let fails = 0; const ok = (c, m) => { if (c) console.log("  ok  " + m); else { f
   if (lyv.rows.length) { await pg.locator(".modal tbody tr").first().click(); await pg.waitForFunction(() => document.querySelectorAll(".modal-bg").length === 2); ok(/as at 31 Dec/.test(await pg.locator(".modal-bg").last().innerText()), "opening a member from a past-date figure shows them as at that date"); }
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove()));
   /* PDF carries the period and the same total */
-  await pg.click('[data-chip="year"]'); await pg.click('[data-card="Savings Received"]'); await pg.waitForSelector('.modal [data-print]');
-  const [pop] = await Promise.all([ctx.waitForEvent("page"), pg.click('.modal [data-print]')]); await pop.waitForLoadState(); const html = await pop.content();
+  await pg.click('[data-chip="year"]'); await pg.click('[data-card="Savings Received"]'); await pg.waitForSelector('.modal [data-export]'); await pg.click('.modal [data-export]'); await pg.waitForSelector('#xm-print');
+  const [pop] = await Promise.all([ctx.waitForEvent("page"), pg.click('#xm-print')]); await pop.waitForLoadState(); const html = await pop.content();
   const yp = D.presetPeriod("year", today, YRS), yv = K.detail(live, "savingsReceived", yp);
   ok(html.includes("Reporting period: " + yp.text) && /BWOMI/.test(html), "the PDF header carries the same period (" + yp.text + ") and the SOB letterhead");
   ok(yv.value === 0 || html.includes(Math.round(yv.value).toLocaleString("en-US")), "the PDF total equals the dashboard figure (" + Math.round(yv.value).toLocaleString("en-US") + ")"); await pop.close();
   /* Download PDF: a real PDF file is saved straight to the device, with no print dialog */
-  { const [dl] = await Promise.all([pg.waitForEvent("download", { timeout: 15000 }), pg.click('.modal [data-dlpdf]')]); const dp = await dl.path(), buf = require("fs").readFileSync(dp);
+  { const [dl] = await Promise.all([pg.waitForEvent("download", { timeout: 15000 }), (async () => { await pg.click('.modal [data-export]'); await pg.click('#xm-dl'); })()]); const dp = await dl.path(), buf = require("fs").readFileSync(dp);
     ok(/\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === "%PDF-" && buf.length > 2000, "Download PDF saves a real PDF file (" + dl.suggestedFilename() + ")"); }
   /* the selection survives navigation */
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await pg.click('[data-chip="lastYear"]'); await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#kpi-reports");

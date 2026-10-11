@@ -40,7 +40,7 @@ t("every new loan, the Super Admin cannot disable it; routine savings and repaym
   const { db, l } = setup(); throwsMsg(() => G.setPolicy(db, at("2026-02-01"), "approval", { loanSecondApproval: false }, "r"), /./);
   for (const n of ["createEntry", "repayLoan"]) assert.equal(Object.prototype.hasOwnProperty.call(CMD.GATED, n), false);
   CMD.run(db, at("2026-03-01"), "createEntry", { date: "2026-03-01", memberId: "SOB-001", amount: 1000, type: "Savings" }); assert.equal(L.memberSavings(db, "SOB-001"), 101000);
-  throwsMsg(() => CMD.run(db, at("2026-03-01", "chair"), "createEntry", { date: "2026-03-01", memberId: "SOB-001", amount: 1, type: "Savings" }), /FORBIDDEN/); throwsMsg(() => CMD.run(db, at("2026-03-01", "treas"), "createEntry", { date: "2026-03-01", memberId: "SOB-001", amount: 1, type: "Savings" }), /FORBIDDEN/);
+  throwsMsg(() => CMD.run(db, at("2026-03-01", "chair"), "createEntry", { date: "2026-03-01", memberId: "SOB-001", amount: 1, type: "Savings" }), /FORBIDDEN/); CMD.run(db, at("2026-03-01", "treas"), "createEntry", { date: "2026-03-01", memberId: "SOB-001", amount: 500, type: "Savings" }); assert.equal(L.memberSavings(db, "SOB-001"), 101500, "the Treasurer records routine entries"); throwsMsg(() => CMD.run(db, at("2026-03-01", "treas"), "voidEntry", { id: "X", reason: "r" }), /FORBIDDEN/);
 });
 t("December share-out cannot consume committed savings; posting needs the Chairperson", () => {
   const { db } = setup(); const r = CMD.run(db, at("2026-12-20"), "executeShareOut", { year: 2026, date: "2026-12-20" }); assert.equal(r.pendingApproval, true); assert.equal(L.memberSavings(db, "SOB-002"), 1000000, "nothing paid until the Chairperson approves");

@@ -18,14 +18,14 @@
     h("tbody", null, rows.length ? rows.map((r) => h("tr", Object.assign({ class: onRow ? "click" : "" }, onRow ? { onclick: () => onRow(r) } : {}),
       cols.map((c) => h("td", { class: c.num ? "n" : "", "data-label": c.label || "" }, c.render ? c.render(r) : r[c.key])))) : [h("tr", { class: "empty-row" }, h("td", { colspan: cols.length, class: "wrap" }, Empty({ icon: "book", title: emptyText || "Nothing to show yet", text: emptyText ? "" : "Entries will appear here as they are recorded." })))])));
   const State = (kind, msg, retry) => kind === "loading" ? Skeleton() : h("div", { class: "state err" }, Icon("alert", 28), h("div", null, msg), retry ? h("button", { class: "primary", onclick: retry }, "Try again") : null);
-  function Modal(title, body) {
-    const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg) close(); } });
+  function Modal(title, body, opts) {
+    const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg && !(opts && opts.sticky)) close(); } });   // a form is never dismissed by a stray tap outside it
     const onKey = (e) => { if (e.key === "Escape") close(); };
     /* the phone/browser Back button closes the top window instead of leaving the app */
     let pushed = false; try { history.pushState({ sobModal: 1 }, ""); pushed = true; } catch (e) {}
-    const close = () => { document.removeEventListener("keydown", onKey); const was = bg.isConnected; bg.remove(); if (was && pushed && history.state && history.state.sobModal) { try { history.back(); } catch (e) {} } };
+    const close = () => { document.removeEventListener("keydown", onKey); const was = bg.isConnected; bg.remove(); if (was && pushed && history.state && history.state.sobModal) { try { window.SOBUI.ignorePop = (window.SOBUI.ignorePop || 0) + 1; history.back(); } catch (e) { window.SOBUI.ignorePop = Math.max(0, (window.SOBUI.ignorePop || 1) - 1); } } };
     document.addEventListener("keydown", onKey);
-    bg.append(h("div", { class: "modal" }, h("div", { class: "grab" }), h("div", { class: "mhead" }, h("h2", null, title), h("button", { class: "iconbtn", "data-close": "1", "aria-label": "Close", onclick: close }, Icon("x"))), body));
+    bg.append(h("div", { class: "modal" }, h("div", { class: "grab" }), h("div", { class: "mhead" }, h("h2", null, title), h("button", { class: "closebtn", "data-close": "1", "aria-label": "Close", onclick: close }, Icon("x", 18), " Close")), body));
     document.body.append(bg); return { close, el: bg };
   }
   /* Busy: one global "working" indicator (spinner + message + progress bar) used for sign-in, loading, saving and report generation. */
@@ -54,7 +54,7 @@
       const v = {}; fields.forEach((f) => { if (f.type !== "note") v[f.name] = inputs[f.name].value; });
       const btn = m.el.querySelector("[data-submit]"); if (btn.disabled) return; btn.disabled = true; err.textContent = "";
       try { await onSubmit(v); m.close(); } catch (e) { err.textContent = friendly(e); btn.disabled = false; }
-    } }, submitLabel || "Save"))));
+    } }, submitLabel || "Save"), h("button", { "data-cancel": "1", onclick: () => m.close() }, "Cancel"))), { sticky: true });
     return m;
   }
   const friendly = (e) => {

@@ -25,7 +25,7 @@
     const box = h("div", { class: "card", style: "max-width:420px;margin:40px auto" }, h("h2", { class: "sec", style: "margin-top:0" }, "Sons of Bethel Savings Group"),
       h("div", { class: "mute" }, st.live ? "Sign in" : "DEV preview — demo data, nothing is saved or sent anywhere."));
     if (!st.live) {
-      const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
+      const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
       const mem = h("select", { id: "demo-member" }, st.db.members.map((m) => h("option", { value: m.id }, m.id + " — " + m.name)));
       box.append(h("label", null, "Role"), role, h("label", null, "Member (for Member role)"), mem,
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
@@ -93,12 +93,18 @@
     try { await st.store.load(); st.db = st.store.db; st.lastLoad = Date.now(); if (!document.querySelector(".modal-bg")) render(); if (!quiet) toast("Up to date"); } catch (e) { if (!quiet) toast(friendly(e), true); } finally { st.refreshing = false; }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && st.live && st.user && Date.now() - (st.lastLoad || 0) > 60000) refresh(true); });
-  const go = (v, fromBack) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); if (!fromBack && st.user) { try { history.pushState({ sobView: v }, ""); } catch (e) {} } };
+  const go = (v, fromBack) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); if (v !== st.view) st.prevView = st.view; st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); if (!fromBack && st.user) { try { history.pushState({ sobView: v }, ""); } catch (e) {} } };
   /* Back button / swipe-back: closes the open window first, then returns to the previous screen */
   window.addEventListener("popstate", (e) => {
+    const U = window.SOBUI;
+    if (U.ignorePop > 0) { U.ignorePop--; return; }                       // the Back we issued ourselves when a window was closed
     const m = document.querySelectorAll(".modal-bg"); if (m.length) { m[m.length - 1].remove(); return; }
-    const sv = e.state && e.state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
+    const state = e.state || {};
+    if (st.user && state.sobModal) { try { history.back(); } catch (x) {} return; }   // a leftover window entry: step over it
+    if (st.user && !state.sobView) { try { history.pushState({ sobView: st.view }, ""); } catch (x) {} toast("You are still signed in. Use the sign-out button (top right) to leave."); return; }   // Back never drops a signed-in user out of the app
+    const sv = state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
   });
+  window.addEventListener("beforeunload", (e) => { if (document.querySelector(".modal-bg form, .modal-bg input[name]")) { e.preventDefault(); e.returnValue = ""; } });
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
   function navBadge(k) {
     if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.awaiting(st.db) : 0;
@@ -119,6 +125,8 @@
     shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, nav.map(([k, l, , ic, cls]) => { const n = navBadge(k);
       return h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null); })));
     const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
+    if (!st.guarded) { st.guarded = true; try { history.replaceState({ sobBase: 1 }, ""); history.pushState({ sobView: st.view }, ""); } catch (e) {} }
+    if (st.view !== nav[0][0]) main.append(h("button", { class: "backbtn", id: "back-btn", "aria-label": "Back", onclick: () => go(st.prevView && st.prevView !== st.view && nav.some((n) => n[0] === st.prevView) ? st.prevView : nav[0][0]) }, Icon("chevron", 18), " Back"));
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
     try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
@@ -167,7 +175,7 @@
     const tie = k.tied ? h("p", { class: "ok", "data-tie": "ok" }, "✓ The entries below add up to the figure on the dashboard: " + shown) : h("div", { class: "blocked", "data-tie": "bad" }, "The entries below do not add up to the dashboard figure. Please tell the Super Admin before relying on it.");
     const km = Modal(rep.title, h("div", null, privacyToggle(), h("p", { class: "mute" }, rep.definition),
       rep.summary.length ? h("div", { class: "grid two" }, rep.summary.map(([l, v]) => Card(l, typeof v === "number" ? (/%/.test(l) ? v + "%" : ugx(v)) : String(v)))) : null,
-      h("div", { class: "row" }, printButton(rep, rep.period), h("button", { "data-csv": 1, onclick: () => download(key + ".csv", "text/csv", R.toCSV(shownRep(rep))) }, "Download CSV")),
+      h("div", { class: "row" }, printButton(rep, rep.period, key + ".csv")),
       tableFromReport(rep, (r) => openRow(r._open, p.to)), tie)); km.el.setAttribute("data-rep", "1");
   }
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
@@ -234,8 +242,7 @@
         h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
         h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
         s.checks.movementsAddUp ? Banner("ok", "Opening " + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + ". Agrees with the ledger.") : Banner("bad", "These figures do not add up to the ledger. Please tell the Treasurer before relying on this statement."),
-        privacyToggle(), h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "stm-dl", "data-dlpdf": 1, onclick: () => downloadReport(accountRep(a), a.period.text) }, Icon("download", 18), " Download PDF"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
-          h("button", { id: "stm-csv", "data-csv": 1, onclick: () => download("statement_" + a.member.id + ".csv", "text/csv", R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref })) }, "Download CSV")),
+        privacyToggle(), h("div", { class: "row" }, exportMenu({ id: "stm-export", rep: () => accountRep(a), period: a.period.text, wa: () => statementText(a), csv: { name: "statement_" + a.member.id + ".csv", get: () => R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref }) } })),
         h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
         h("p", { class: "mute rg-blurb" }, a.reserve.text),
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
@@ -281,7 +288,22 @@
       res();
     }, 30)));
   }
-  const printButton = (rep, period) => h("span", { class: "pdfpair" }, h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF"), h("button", { "data-dlpdf": 1, onclick: () => downloadReport(rep, period) }, Icon("download", 18), " Download PDF"));
+  /* ONE "Export / Share" button for authorised officers (Super Admin, Chairperson, Treasurer): PDF, print, WhatsApp and CSV live inside it. Members and view-only roles never see it; the permission is report.export. */
+  const canExport = () => !!st.user && isStaff() && G.can(ctx(), "report.export");
+  function exportMenu(o) {
+    if (!canExport()) return null;
+    const get = () => (typeof o.rep === "function" ? o.rep() : o.rep);
+    const item = (id, ic, title, sub, attr, fn) => h("button", Object.assign({ class: "xm-item", id }, attr, { onclick: () => { m.close(); setTimeout(fn, 60); } }), Icon(ic, 22), h("span", null, h("b", null, title), h("small", null, sub)));
+    let m;
+    return h("button", { class: "primary", id: o.id || "export-menu", "data-export": 1, onclick: () => {
+      m = Modal("Export / Share", h("div", { class: "xmenu" }, privacyToggle(),
+        item("xm-dl", "download", "Download PDF", "Save a PDF to this device", { "data-dlpdf": 1 }, () => downloadReport(get(), o.period)),
+        item("xm-print", "print", "Print / Save as PDF", "Opens the print page", { "data-print": 1 }, () => printReport(get(), o.period)),
+        o.wa ? item("xm-wa", "share", "Share on WhatsApp", "Opens WhatsApp with the message ready", { "data-wa": 1 }, () => waSend(o.wa())) : null,
+        o.csv ? item("xm-csv", "download", "Download CSV", "A spreadsheet file", { "data-csv": 1 }, () => download(o.csv.name, "text/csv", o.csv.get ? o.csv.get() : R.toCSV(shownRep(get())))) : null));
+    } }, Icon("share", 18), " Export / Share");
+  }
+  const printButton = (rep, period, csvName) => exportMenu({ rep, period, csv: csvName ? { name: csvName } : null });
 
   /* ---------- members ---------- */
   function openMember(id, asAt0) {
@@ -317,7 +339,8 @@
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
     /* every action sits at the TOP of the loan, next to the statement buttons, so nothing is hidden below a long page */
-    const row = h("div", { class: "row", id: "loan-actions" }, h("button", { "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("print", 18), " Loan statement (PDF)"), h("button", { "data-dlpdf": 1, id: "loan-statement-dl", onclick: () => printAccount(loan.memberId, {}, true, id, true) }, Icon("download", 18), " Download PDF"));
+    const loanAcct = () => SX.memberAccount(st.db, loan.memberId, {}, { internal: true, loanId: id });
+    const row = h("div", { class: "row", id: "loan-actions" }, exportMenu({ id: "loan-export", rep: () => accountRep(loanAcct()), period: loanAcct().period.text, wa: () => statementText(loanAcct()) }));
     const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
@@ -446,7 +469,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     ["Governance and records", "Approvals, reconciliation and the notices that were sent.", ["Awaiting approval", "Reconciliation register", "Notification log", "Airtime requests"]]];
   function openReport(n) {
     const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
-    drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(shownRep(rep))) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+    drill(rep.title, null, h("div", null, h("div", { class: "row" }, printButton(rep, rep.period, n.replace(/\W+/g, "_") + ".csv")), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
   }
   function reports() {
     const extra = FYM.table(st.db).map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; });
@@ -560,7 +583,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
           const slips = []; for (const m of need) { const pin = randPin(); await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin }); slips.push([m.id, m.name, pin]); }
           download("SOB-PIN-slips-" + today() + ".csv", "text/csv", "id,name,pin\n" + slips.map((x) => [x[0], '"' + x[1].replace(/"/g, '""') + '"', x[2]].join(",")).join("\n")); await refresh();
         }, "Sign-ins created; PIN slips downloaded") }, "Create member sign-ins + download PIN slips"),
-        h("button", { id: "make-staff", onclick: () => Form("Staff sign-in", [{ name: "id", label: "Sign-in ID (e.g. CHAIR)" }, { name: "name", label: "Name" }, { name: "role", label: "Role", options: ["Chairperson", "Treasurer", "Committee"] }],
+        h("button", { id: "make-staff", onclick: () => Form("Staff sign-in", [{ name: "id", label: "Sign-in ID (e.g. CHAIR)" }, { name: "name", label: "Name" }, { name: "role", label: "Role", options: ["Chairperson", "Treasurer", "Secretary", "Committee"] }],
           act(async (f) => { const pin = randPin8(); await st.store.createUser({ id: f.id.trim().toUpperCase(), name: f.name, role: f.role, pin }); download("SOB-staff-PIN-" + f.id.trim().toUpperCase() + ".csv", "text/csv", "id,name,role,pin\n" + [f.id.trim().toUpperCase(), '"' + f.name + '"', f.role, pin].join(",")); await refresh(); }, "Sign-in created; PIN downloaded")) }, "Add staff sign-in")));
     };
     return h("div", { id: "records-panel" }, h("h2", { class: "sec", style: "margin-top:0" }, "Load SOB records"),
@@ -577,7 +600,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       rep ? h("div", { id: "records-report" }, h("h2", { class: "sec" }, "Reconciliation report"),
         h("div", { class: "grid" }, Card("Actual savings", ugx(rep.totals.savings), "After withdrawals and share-outs"), Card("Available savings", ugx(rep.totals.available)), Card("Loan principal outstanding", ugx(rep.totals.loanPrincipal)), Card("Unpaid interest", ugx(rep.totals.unpaidInterest)), Card("Profit credited", ugx(rep.totals.profitCredited)), Card("Open register items", String(rep.register.filter((x) => x.status === "Open").length))),
         h("p", { class: "mute" }, "Actual savings = deposits + profit − withdrawals − share-outs. Loans never reduce savings. Available savings = actual savings less guarantee commitments (guarantors begin 2027). The last column of the member table is a memo only."),
-        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf)), h("button", { onclick: () => download(r.title.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(shownRep(r))) }, "Download CSV")), tableFromReport(r))),
+        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf), r.title.replace(/\W+/g, "_") + ".csv")), tableFromReport(r))),
         rep.missing.length ? h("div", null, h("h3", null, "Information genuinely missing"), h("ul", null, rep.missing.map((x) => h("li", null, x)))) : null,
         rep.decisions.length ? h("div", null, h("h3", null, "SOB decisions still needed"), h("ul", null, rep.decisions.map((x) => h("li", null, x)))) : null) : null,
       sign());

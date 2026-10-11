@@ -33,7 +33,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok(!/FAIL /.test(await pg.textContent("#records-result")), "every check passes after loading");
   ok((await pg.locator("#records-report table").count()) >= 8, "reconciliation report: members, controls, financial years, profit, historical loans, reserve and remaining differences");
   ok(/Actual savings/.test(await pg.textContent("#records-report")) && /Available savings/.test(await pg.textContent("#records-report")), "savings and available savings are shown separately");
-  const [dl] = await Promise.all([pg.waitForEvent("download"), pg.locator("#records-report >> text=Download CSV").first().click()]); const csv = fs.readFileSync(await dl.path(), "utf8"); ok(/Actual savings/.test(csv) && csv.split("\n").length > 5, "report downloads as CSV");
+  const [dl] = await Promise.all([pg.waitForEvent("download"), (async () => { await pg.locator("#records-report [data-export]").first().click(); await pg.click("#xm-csv"); })()]); const csv = fs.readFileSync(await dl.path(), "utf8"); ok(/Actual savings/.test(csv) && csv.split("\n").length > 5, "report downloads as CSV");
   await pg.click("#records-load"); await pg.waitForFunction(() => /already in the Sheet/.test((document.querySelector("#records-result") || {}).textContent || ""), null, { timeout: 120000 }); ok(true, "loading again adds nothing twice");
   const [sl] = await Promise.all([pg.waitForEvent("download"), pg.click("#make-signins")]); const slips = fs.readFileSync(await sl.path(), "utf8"); ok(/^id,name,pin/.test(slips) && slips.split("\n").length > 10, "member sign-ins created with a PIN-slip download");
   await pg.screenshot({ path: process.env.SHOT || path.join(os.tmpdir(), "records.png"), fullPage: true });
