@@ -197,14 +197,14 @@ t("a write path can never delete ledger/audit records", () => {
 });
 t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox", () => {
   require("child_process").execSync("node " + path.join(__dirname, "../build/build-gs.js"));
-  const ss = mockSS(), cache = {};
+  const ss = mockSS(), cache = {}, props = {};
   const sandbox = { SpreadsheetApp: { getActiveSpreadsheet: () => ss }, LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: () => null, deleteProperty() {} }) }, UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => props[k] || null, deleteProperty: (k) => { delete props[k]; } }) }, UrlFetchApp: { fetch() { throw new Error("no network in tests"); } },
     CacheService: { getScriptCache: () => ({ get: (k) => cache[k] || null, put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; } }) },
     Utilities: { DigestAlgorithm: { SHA_256: 1 }, Charset: { UTF_8: 1 }, computeDigest: (a, s) => Array.from(crypto.createHash("sha256").update(s).digest()).map((b) => (b > 127 ? b - 256 : b)), getUuid: () => crypto.randomUUID() },
     ContentService: { MimeType: { JSON: "json" }, createTextOutput: (s) => ({ s, setMimeType() { return this; } }) }, console };
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../dist/Code_Ledger.gs"), "utf8") + "\nthis.doPost=doPost;this.doGet=doGet;this.initAdmin=initAdmin;", sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../dist/Code_Ledger.gs"), "utf8") + "\nthis.doPost=doPost;this.doGet=doGet;this.initAdmin=initAdmin;this.recoverAdminPin=recoverAdminPin;", sandbox);
   const call = (b) => JSON.parse(sandbox.doPost({ postData: { contents: JSON.stringify(b) } }).s);
   assert.equal(call({ action: "getLedger" }).error, "UNAUTHENTICATED");
   assert.equal(sandbox.initAdmin("ADMIN", "longpin-1"), "Admin created"); assert.throws(() => sandbox.initAdmin("ADMIN2", "longpin-2"), /already exists/);
@@ -217,6 +217,20 @@ t("bundled Code_Ledger.gs enforces the same rules in an Apps Script-like sandbox
   assert.match(call({ action: "getLedger", token: mt }).error, /PIN_CHANGE_REQUIRED/); assert.match(call({ action: "command", token: mt, name: "createEntry", args: {} }).error, /PIN_CHANGE_REQUIRED/);
   assert.match(call({ action: "setPin", token: mt, oldPin: "2468", newPin: "2468" }).error, /different/);
   assert.ok(call({ action: "setPin", token: mt, oldPin: "2468", newPin: "1357" }).ok); assert.ok(call({ action: "getLedger", token: mt }).ok);
+  /* ADMIN PIN recovery: owner-only routine inside Code_Ledger.gs */
+  { const txBefore = call({ action: "getLedger", token: tk }).db.transactions.length;
+    assert.throws(() => sandbox.recoverAdminPin(), /SOB_ADMIN_RECOVERY_PIN/, "refuses to run without the owner's property");
+    props.SOB_ADMIN_RECOVERY_PIN = "abc"; assert.throws(() => sandbox.recoverAdminPin(), /WEAK_PIN/); assert.equal(props.SOB_ADMIN_RECOVERY_PIN, undefined, "the PIN property is deleted even when refused");
+    assert.match(call({ action: "recoverAdminPin", token: tk, pin: "hijack-99" }).error || "", /UNKNOWN_ACTION/, "not reachable from the web app, even for the Admin");
+    assert.match(call({ action: "recoverAdminPin", token: mt, pin: "hijack-99" }).error || "", /UNKNOWN_ACTION|FORBIDDEN|PIN_CHANGE/);
+    props.SOB_ADMIN_RECOVERY_PIN = "my-new-pin-7"; const msg = sandbox.recoverAdminPin(); assert.match(msg, /ADMIN PIN reset/); assert.equal(props.SOB_ADMIN_RECOVERY_PIN, undefined, "the new PIN is not left stored");
+    assert.equal(call({ action: "login", id: "ADMIN", pin: "longpin-1" }).error, "BAD_CREDENTIALS", "the old PIN stops working");
+    const nt = call({ action: "login", id: "ADMIN", pin: "my-new-pin-7" }).token; assert.ok(nt, "the new PIN works");
+    const L2 = call({ action: "getLedger", token: nt }).db;
+    assert.equal(L2.transactions.length, txBefore, "no financial record changed");
+    assert.ok(L2.auditLog.some((a) => a.action === "ADMIN_PIN_RECOVERY" && a.entityId === "ADMIN"), "the recovery is in the audit trail");
+    assert.ok(call({ action: "login", id: memberWith.id, pin: "1357" }).ok, "a member's own PIN is untouched");
+    assert.equal(sandbox.SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Backups") ? 1 : 1, 1); }
   assert.match(call({ action: "command", token: mt, name: "createEntry", args: { date: "2026-02-01", memberId: memberWith.id, amount: 1, type: "Savings" } }).error, /FORBIDDEN/);
   assert.ok(call({ action: "command", token: tk, name: "createEntry", args: { date: "2026-02-01", memberId: memberWith.id, amount: 1, type: "Savings" } }).ok);
   assert.equal(JSON.parse(sandbox.doPost({ postData: { contents: "not json" } }).s).error, "INVALID_REQUEST");

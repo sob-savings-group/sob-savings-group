@@ -66,6 +66,18 @@
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
+  /* ADMIN PIN recovery. Pure rule, called only from the Apps Script editor (never from the web app). It can change ONE thing: the PIN of the single Super Admin.
+     It has no user-id parameter, so it cannot be pointed at the Chairperson, Treasurer, a member or anyone else. Returns the updated users list; the caller audits and saves. */
+  function recoverAdminPin(env, users, pin) {
+    pin = String(pin || "");
+    if (pin.length < MIN_PIN.Admin) throw new Error("WEAK_PIN: the new PIN must be at least " + MIN_PIN.Admin + " characters");
+    const admins = (users || []).filter((u) => u.role === "Admin");
+    if (admins.length !== 1) throw new Error("REFUSED: recovery works only when there is exactly one Super Admin (found " + admins.length + ")");
+    const u = admins[0], fresh = makeUser(env, { id: u.id, name: u.name, role: "Admin", pin });
+    const out = (users || []).map((x) => (x === u ? Object.assign({}, x, { salt: fresh.salt, pinHash: fresh.pinHash, mustChange: false, status: x.status === "Disabled" ? "Disabled" : x.status }) : x));
+    if (env.cache && env.cache.remove) env.cache.remove("fail:" + String(u.id).toUpperCase());      // lift any lock-out
+    return { users: out, adminId: u.id };
+  }
   function session(env, db, token) {
     if (!token || typeof token !== "string") return null;
     const id = env.cache.get("sess:" + env.hash(token)); if (!id) return null;
@@ -87,5 +99,5 @@
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser };
+  return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser, recoverAdminPin };
 });

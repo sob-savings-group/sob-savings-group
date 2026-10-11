@@ -65,6 +65,24 @@ function setupAdmin(){
   if (!pin) throw new Error("Add Script Property SOB_INITIAL_ADMIN_PIN first");
   var r = initAdmin(id, pin); props.deleteProperty("SOB_INITIAL_ADMIN_PIN"); return r + " (" + id + "); the PIN property has been removed";
 }
+/* ADMIN PIN RECOVERY (inside this one file; nothing to add or create).
+   1. Apps Script > Project Settings > Script Properties > Add: name SOB_ADMIN_RECOVERY_PIN, value = the NEW PIN you choose privately (6+ characters).
+   2. Choose recoverAdminPin in the function list and press Run.
+   Only people who can edit this script can do this (the same people who can run setupAdmin); the web app and every member or officer cannot reach it.
+   It changes only the Super Admin's PIN (no user id can be given), takes a verified backup first, writes an audit entry, and deletes the property at once. */
+function recoverAdminPin(){
+  var props = PropertiesService.getScriptProperties(), pin = props.getProperty("SOB_ADMIN_RECOVERY_PIN");
+  if (!pin) throw new Error("Add the Script Property SOB_ADMIN_RECOVERY_PIN (your new PIN, 6+ characters) first");
+  props.deleteProperty("SOB_ADMIN_RECOVERY_PIN");                       // the PIN never stays stored, whatever happens next
+  var env = __env(), S = __M['backend/store'], A = __M['backend/auth'], G = __M['core/governance'], B = __M['backend/backup'];
+  var db = S.readAll(env.ss), bk = B.snapshot(env.ss, env, "before ADMIN PIN recovery", { force: true });
+  var r = A.recoverAdminPin(env, db.users || [], pin);
+  var before = JSON.parse(JSON.stringify(db)), now = env.now(), ctx = { by: "Spreadsheet owner (Apps Script editor)", userId: r.adminId, role: "Admin", now: now, today: now.slice(0, 10) };
+  G.audit(db, ctx, "User", r.adminId, "ADMIN_PIN_RECOVERY", null, { backup: bk && bk.id }, "Super Admin PIN replaced through the owner-only recovery routine; the new PIN was never displayed or stored in clear");
+  S.writeCollection(env.ss, "users", r.users);
+  S.writeChanged(env.ss, before, db);
+  return "ADMIN PIN reset for " + r.adminId + ". A backup was taken first and the change is in the audit trail. Sign in with the new PIN.";
+}
 function initAdmin(id, pin){
   var env = __env(), S = __M['backend/store'], A = __M['backend/auth'];
   var users = S.readCollection(env.ss, "users");
