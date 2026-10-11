@@ -32,8 +32,8 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "e.g. SOB-015", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      const mid = h("input", { id: "mid", placeholder: "SOB ID, e.g. SOB-005 or sob5", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const go = async () => {
         if (working) return; working = true; problem.replaceChildren();
@@ -52,7 +52,8 @@
           const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || "");
           problem.replaceChildren();
           if (conn) connBanner(problem, e);   /* a connection/deployment problem is never hidden in a disappearing toast: it stays on screen with the exact cause and who to call */
-          else toast(e.code === "BAD_CREDENTIALS" ? "We could not match that. Check your SOB ID, and your PIN or name." : e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true);
+          else { const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
+            if (MSG[e.code]) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code])); } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
         }
         finally { working = false; }
       };
@@ -60,8 +61,8 @@
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
-        h("label", { for: "mid" }, "SOB ID / Name"), mid, h("div", { class: "hint" }, "Enter your SOB ID or registered name."),
-        h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint" }, "Enter your PIN where required."),
+        h("label", { for: "mid" }, "SOB ID"), mid, h("div", { class: "hint", id: "id-hint" }, "Type it any way you like: SOB-005, sob5 or SOB005 all work."),
+        h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint", id: "pin-hint" }, "Enter your PIN. No PIN yet? Leave it empty and type your SOB ID followed by your first name in the first box, for example: SOB-005 Aaron (view only)."),
         h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"), problem,
         h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }

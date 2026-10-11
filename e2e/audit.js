@@ -30,7 +30,23 @@ const iso = (d) => d.toISOString().slice(0, 10);
     const ctx = await b.newContext({ viewport: vp, acceptDownloads: true }), pg = await ctx.newPage(), errs = []; pg.on("pageerror", (e) => errs.push(e.message));
     const T = (m) => "[" + vp.name + "] " + m;
     await ctx.route(/wa\.me/, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "wa" }));
-    await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+    await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
+    /* sign-in guidance + exact access messages */
+    ok(/SOB-005/.test(await pg.getAttribute("#mid", "placeholder")) && /sob5|SOB005/.test(await pg.innerText("#id-hint")) && /first name/i.test(await pg.innerText("#pin-hint")), T("login screen shows how to enter the SOB ID and first name"));
+    const DENIED = "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", PENDING = "Your membership is pending approval. Please contact the Administrator for assistance.", INACTIVE = "Your account is currently inactive or restricted. Please contact the Administrator for assistance.";
+    const tryLogin = async (idText, pinText) => { await pg.fill("#mid", idText); await pg.fill("#pin", pinText); await pg.click("#login-go"); await pg.waitForSelector("#login-error", { timeout: 15000 }); const m = (await pg.innerText("#login-error")).trim(); await pg.evaluate(() => { const e = document.getElementById("login-error"); if (e) e.remove(); }); return m; };
+    const setStatus = (id, status) => { const ms = S.readCollection(env.ss, "members"); ms.forEach((m) => { if (m.id === id) m.status = status; }); S.writeCollection(env.ss, "members", ms); };
+    ok((await tryLogin("SOB-999", "1234")) === DENIED, T("unknown SOB ID: exact 'Access denied' message"));
+    ok((await tryLogin(mem.id, "wrong-pin-x")) === DENIED, T("wrong PIN: the same exact 'Access denied' message (nothing revealed)"));
+    setStatus(newMem.id, "Pending"); ok((await tryLogin(newMem.id.toLowerCase().replace("-", "") + " " + newMem.name.split(/\s+/)[0], "")) === PENDING, T("verified pending member: exact pending message"));
+    ok((await tryLogin(newMem.id, "")) === DENIED, T("pending member's ID alone (not verified): 'Access denied', not the pending message"));
+    setStatus(mem.id, "Inactive"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified inactive member: exact inactive/restricted message")); setStatus(mem.id, "Restricted"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified restricted member: exact inactive/restricted message")); setStatus(mem.id, "Active"); setStatus(newMem.id, "Active");
+    await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+    /* mobile/desktop layout: no page ever scrolls sideways */
+    const wide = async () => pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    const navTo = async (k) => { await pg.click('[data-nav="' + k + '"]').catch(async () => { await pg.click('[data-nav="more"]'); await pg.click('[data-nav="' + k + '"]'); }); await pg.waitForTimeout(250); };
+    for (const k of ["dash", "members", "loans", "ledger", "approvals", "recon", "system"]) { try { await navTo(k); } catch (e) { continue; } const w = await wide(); ok(w <= 1, T("no sideways scrolling on " + k + (w > 1 ? " (" + w + "px too wide)" : ""))); }
+    await navTo("dash");
     /* 1. loan repayment: the button is visible at the top, no scrolling, and a back-dated repayment is recorded */
     await pg.click('[data-nav="loans"]').catch(async () => { await pg.click('[data-nav="more"]'); await pg.click('[data-nav="loans"]'); });
     await pg.waitForSelector("#main tbody tr"); await pg.locator("#main tbody tr", { hasText: loan0.id }).first().click(); await pg.waitForSelector('.modal #loan-actions');

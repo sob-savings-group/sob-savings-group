@@ -36,18 +36,31 @@
     const hits = (db.users || []).filter((u) => u.role === "Member" && u.status !== "Disabled" && (norm(u.name) === q || norm(((db.members || []).find((m) => m.id === u.memberId) || {}).name) === q));
     return hits.length === 1 ? hits[0] : null;
   }
+  /* A member's recorded status decides whether they may enter AFTER their identity is verified (never before, so nothing is revealed to a stranger). */
+  const statusKind = (st) => { const x = String(st || "").trim(); return /^pending/i.test(x) ? "pending" : /^(inactive|restricted|suspended|closed|blocked|disabled)/i.test(x) ? "inactive" : null; };
+  const memberNameMatches = (m, given) => { const g = String(given || "").trim().toLowerCase(); return !!m && g.length >= 3 && /[a-z]/.test(g) && tokens(m.name).includes(g); };
+  const blockedError = (kind) => ({ ok: false, error: kind === "pending" ? "MEMBER_PENDING: membership pending approval" : "MEMBER_INACTIVE: account inactive or restricted" });
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
     let u = findUser(db, id), byName = false;
     if (!u) { u = memberByFullName(db, id); byName = !!u; }
+    /* identity is verified here: PIN, or the SOB ID + one of the member's own names (the same trust as the view-only sign-in) */
+    if (!u) {
+      const mm = (db.members || []).find((x) => String(x.id).toUpperCase() === String(id || "").trim().toUpperCase()), kind = mm && statusKind(mm.status);
+      if (kind && memberNameMatches(mm, pin)) { env.cache.remove(k); return blockedError(kind); }
+      const any = (db.users || []).find((x) => String(x.id).toUpperCase() === String(id || "").trim().toUpperCase() && x.role === "Member" && x.status === "Disabled");
+      if (any && any.pinHash && safeEq(stretch(env, any.salt, String(pin || "")), any.pinHash)) { env.cache.remove(k); return blockedError("inactive"); }
+      env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" };
+    }
     const good = u && u.pinHash && safeEq(stretch(env, u.salt, String(pin || "")), u.pinHash);
     /* Members may also sign in with their SOB ID + any ONE of their names (first or last). That is a VIEW-ONLY session (names are not secret):
        statements and balances yes; guarantee acceptance, airtime, PIN changes etc. need the PIN. Staff roles always need their PIN. */
     const viaName = !good && u && u.role === "Member" && (byName ? norm(pin) === norm(id) : nameMatches(db, u, pin));
     if (!good && !viaName) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "BAD_CREDENTIALS" }; }
     env.cache.remove(k);
+    if (u.role === "Member") { const kind = statusKind(((db.members || []).find((x) => x.id === u.memberId) || {}).status); if (kind) return blockedError(kind); }
     const token = env.randomToken() + env.randomToken();
     env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
@@ -57,6 +70,7 @@
     if (!token || typeof token !== "string") return null;
     const id = env.cache.get("sess:" + env.hash(token)); if (!id) return null;
     const u = findUser(db, id); if (!u) return null;
+    if (u.role === "Member" && statusKind(((db.members || []).find((x) => x.id === u.memberId) || {}).status)) return null;   // a member made inactive/restricted after sign-in is cut off at once
     const ro = !!env.cache.get("ro:" + env.hash(token)); return ro ? Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) : publicUser(u);
   }
   function logout(env, token) { if (token) env.cache.remove("sess:" + env.hash(token)); }
