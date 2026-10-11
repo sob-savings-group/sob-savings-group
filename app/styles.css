@@ -194,3 +194,4 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 @media(min-width:700px){#stmt-view .grid.two{grid-template-columns:repeat(3,1fr)}}
 @media(min-width:1000px){.modal:has(#stmt-view){max-width:1000px}}
 .pdfpair{display:inline-flex;gap:10px;flex-wrap:wrap}
+.pv-toggle{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:14px;cursor:pointer}.pv-toggle input{width:18px;height:18px;margin:0}

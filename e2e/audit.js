@@ -71,6 +71,24 @@ const iso = (d) => d.toISOString().slice(0, 10);
     ok((await pg.locator("#stm-dl").count()) === 1 && (await pg.locator("#stm-pdf").count()) === 1, T("statement has Print and Download PDF"));
     const [wa] = await Promise.all([ctx.waitForEvent("page", { timeout: 8000 }), pg.click("#stm-wa")]); await wa.waitForLoadState().catch(() => {}); ok(/^https:\/\/wa\.me\/\?text=/.test(wa.url()), T("WhatsApp opens WhatsApp with the statement text (not the system share list)")); await wa.close();
     const [dl2] = await Promise.all([pg.waitForEvent("download", { timeout: 20000 }), pg.click("#stm-dl")]); ok(fs.readFileSync(await dl2.path()).slice(0, 5).toString() === "%PDF-", T("statement Download PDF saves a PDF (" + dl2.suggestedFilename() + ")"));
+    /* privacy switch: IDs instead of names on screen, in the PDF, in WhatsApp text; nothing stored changes */
+    const namesBefore = JSON.stringify(S.readCollection(env.ss, "members").map((m) => m.name));
+    ok((await pg.locator('.modal [data-hide-names]').count()) >= 1, T("the Hide member names option is offered next to the statement and report buttons"));
+    await pg.check('.modal [data-hide-names]'); await pg.waitForTimeout(300);
+    ok(!(await pg.locator(".modal-bg").last().innerText()).includes(mem.name) && (await pg.locator(".modal-bg").last().innerText()).includes(mem.id), T("on screen: the member's name is replaced by the SOB ID in the open statement"));
+    const [dl4] = await Promise.all([pg.waitForEvent("download", { timeout: 20000 }), pg.click("#stm-dl")]); const pf4 = await dl4.path(), tx4 = require("child_process").execSync("pdftotext -layout " + pf4 + " -").toString();
+    ok(!tx4.includes(mem.name) && tx4.includes(mem.id) && /Chairperson/.test(tx4), T("PDF download: no member name, SOB ID shown, officers' footer intact"));
+    const [wa3] = await Promise.all([ctx.waitForEvent("page", { timeout: 8000 }), pg.click("#stm-wa")]); const waUrl = decodeURIComponent(wa3.url()); ok(!waUrl.includes(mem.name) && waUrl.includes(mem.id), T("WhatsApp text: no member name, SOB ID shown")); await wa3.close();
+    const [pp] = await Promise.all([ctx.waitForEvent("page", { timeout: 8000 }), pg.click("#stm-pdf")]); await pp.waitForLoadState().catch(() => {}); const ph = await pp.content(); ok(!ph.includes(mem.name) && ph.includes(mem.id), T("Print / PDF page: no member name, SOB ID shown")); await pp.close();
+    await pg.uncheck('.modal [data-hide-names]'); await pg.waitForTimeout(300);
+    ok((await pg.locator(".modal-bg").last().innerText()).includes(mem.name), T("switched off: full names are shown again"));
+    ok(JSON.stringify(S.readCollection(env.ss, "members").map((m) => m.name)) === namesBefore, T("display only: the member register is unchanged"));
+    await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await navTo("dash"); await pg.click('[data-card="Total Savings"]'); await pg.waitForSelector(".modal tbody tr");
+    const allNames = db0.members.map((m) => m.name).filter((x) => x && x.length > 5), shownNames = (txt) => allNames.filter((n) => txt.includes(n));
+    ok(shownNames(await pg.locator(".modal-bg").last().innerText()).length > 0, T("a report drill-down lists member names by default"));
+    await pg.check('.modal [data-hide-names]'); await pg.waitForTimeout(300);
+    ok(shownNames(await pg.locator(".modal-bg").last().innerText()).length === 0, T("with the switch on, no member name appears anywhere in the report preview"));
+    await pg.uncheck('.modal [data-hide-names]'); await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove()));
     /* 4. navigation: Back closes a window, then returns to the previous screen */
     await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove()));
     await pg.click('[data-nav="members"]').catch(() => {}); await pg.locator("#main tbody tr").first().click(); await pg.waitForSelector(".modal");
