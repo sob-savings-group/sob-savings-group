@@ -3337,6 +3337,42 @@
 });
 
 
+/* ../src/client/privacy.js */
+/* SOB client/privacy — a DISPLAY-ONLY switch that shows SOB IDs instead of member names in reports, previews, PDFs, prints and WhatsApp text.
+   It only rewrites the text that is about to be shown; the member register, transactions, balances and audit trail are never touched.
+   The officers' footer on the letterhead is left as it is (it is the group's signature, not a member listing). */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.privacy = api; }
+})(typeof self !== "undefined" ? self : this, function () {
+  const HONORIFIC = /^(?:(?:mr|mrs|miss|ms|min|minister|elder|pastor|bishop|rev|dr|eng|hon|prof)\.?\s+)+/i;
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+  function build(members) {
+    const byName = new Map();   // lower-case variant -> [ids]
+    const add = (name, id) => { const n = norm(name); if (n.length < 5) return; const k = n.toLowerCase(); if (!byName.has(k)) byName.set(k, { text: n, ids: [] }); const e = byName.get(k); if (!e.ids.includes(id)) e.ids.push(id); };
+    (members || []).forEach((m) => { [m.name, m.originalName].forEach((n) => { if (!n) return; add(n, m.id); const s = norm(n).replace(HONORIFIC, ""); if (s !== norm(n)) add(s, m.id); }); });
+    const entries = Array.from(byName.values()).sort((a, b) => b.text.length - a.text.length);
+    const idsOf = new Map(); entries.forEach((e) => idsOf.set(e.text.toLowerCase(), e.ids.slice().sort().join("/")));
+    const pat = (list) => list.length ? new RegExp("(?<![A-Za-z0-9\\u00c0-\\u024f])(?:" + list.join("|") + ")(?![A-Za-z0-9\\u00c0-\\u024f])", "gi") : null;
+    const plain = pat(entries.map((e) => escRe(e.text).replace(/ /g, "\\s+"))), html = pat(entries.map((e) => escRe(escHtml(e.text)).replace(/ /g, "\\s+")));
+    const tidy = (s) => s.replace(/(SOB-\d+)\s*[(\[]\s*\1\s*[)\]]/g, "$1").replace(/(SOB-\d+)(\s*[·—–|:,-]\s*)\1(?!\d)/g, "$1");
+    const lookup = (m) => idsOf.get(norm(m).toLowerCase().replace(/&amp;/g, "&").replace(/&#39;/g, "'")) || "";
+    const hideText = (s) => (typeof s === "string" && plain ? tidy(s.replace(plain, (m) => lookup(m) || m)) : s);
+    /* a whole printable page: letterhead + body are rewritten, the officers' footer (tfoot) and every HTML tag are left alone */
+    const hideHTML = (h) => !html ? h : String(h).split(/(<tfoot>[\s\S]*?<\/tfoot>)/).map((part, i) => i % 2 ? part : part.split(/(<[^>]*>)/).map((p, j) => j % 2 ? p : tidy(p.replace(html, (m) => lookup(m) || m))).join("")).join("");
+    const hideReport = (rep) => {
+      const walk = (v) => Array.isArray(v) ? v.map(walk) : v && typeof v === "object" ? Object.keys(v).reduce((o, k) => { o[k] = typeof v[k] === "function" ? v[k] : walk(v[k]); return o; }, {}) : hideText(v);
+      const out = walk(rep); if (typeof rep.printHTML === "function") out.printHTML = (meta) => hideHTML(rep.printHTML(meta)); return out;
+    };
+    return { hideText, hideHTML, hideReport, active: !!plain };
+  }
+  return { build };
+});
+
+
 /* ui.js */
 /* Shared UI components. All text goes through textContent (no innerHTML with data) so ledger content can never inject markup. */
 (function () {
@@ -3748,7 +3784,7 @@ window.SOBMember = function (E) {
   /* ---------- drill-down helpers ---------- */
   const loanRows = (filter) => K.loanBook(st.db, today()).filter(filter || (() => true));
   const loanCols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Principal", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "Status", render: (v) => badge(v.status, v.balance > 0 ? "warn" : "ok") }];
-  function drill(title, definition, body) { Modal(title, h("div", null, definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); }
+  function drill(title, definition, body) { const dm = Modal(title, h("div", null, privacyToggle(), definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); dm.el.setAttribute("data-rep", "1"); }
 
   /* ---------- Admin: dashboard ---------- */
   /* What needs a human today — the first thing staff see. */
@@ -3779,17 +3815,18 @@ window.SOBMember = function (E) {
   /* a report on screen: friendly headings, numbers right-aligned with thousands separators, rows open the record behind them */
   const tableFromReport = (rep, onRow) => {
     const numCol = (c) => rep.rows.length > 0 && rep.rows.every((r) => r[c] === "" || r[c] == null || typeof r[c] === "number");
-    return Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+    const tbl = Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+    tbl.setAttribute("data-rep", "1"); return tbl;
   };
   function openRow(o, asAt) { if (!o || !o.id) return; if (o.kind === "member") openMember(o.id, asAt); else if (o.kind === "loan") openLoan(o.id, asAt); else if (o.kind === "entry") openEntry(o.id); }
   /* KPI -> drill-down -> entries -> PDF: the table, the totals and the PDF are all the same K.report() for the chosen period. */
   function openKpi(key) {
     const p = periodNow(), rep = K.report(st.db, key, p, { open: true }), k = rep.kpi, shown = k.unit === "UGX" ? ugx(k.value) : k.unit === "%" ? (k.value == null ? "—" : k.value + "%") : String(k.value);
     const tie = k.tied ? h("p", { class: "ok", "data-tie": "ok" }, "✓ The entries below add up to the figure on the dashboard: " + shown) : h("div", { class: "blocked", "data-tie": "bad" }, "The entries below do not add up to the dashboard figure. Please tell the Super Admin before relying on it.");
-    Modal(rep.title, h("div", null, h("p", { class: "mute" }, rep.definition),
+    const km = Modal(rep.title, h("div", null, privacyToggle(), h("p", { class: "mute" }, rep.definition),
       rep.summary.length ? h("div", { class: "grid two" }, rep.summary.map(([l, v]) => Card(l, typeof v === "number" ? (/%/.test(l) ? v + "%" : ugx(v)) : String(v)))) : null,
-      h("div", { class: "row" }, printButton(rep, rep.period), h("button", { "data-csv": 1, onclick: () => download(key + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV")),
-      tableFromReport(rep, (r) => openRow(r._open, p.to)), tie));
+      h("div", { class: "row" }, printButton(rep, rep.period), h("button", { "data-csv": 1, onclick: () => download(key + ".csv", "text/csv", R.toCSV(shownRep(rep))) }, "Download CSV")),
+      tableFromReport(rep, (r) => openRow(r._open, p.to)), tie)); km.el.setAttribute("data-rep", "1");
   }
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
   function dashboard() {
@@ -3823,10 +3860,25 @@ window.SOBMember = function (E) {
   const printAccount = (memberId, period, internal, loanId, download) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return (download ? downloadReport : printReport)(accountRep(a), a.period.text); };
   const statementText = (a) => ["*Sons of Bethel (SOB) Savings Group*", "Statement " + a.ref, a.member.name + " (" + a.member.id + ")", a.period.text, "", "Opening savings: " + ugx(a.savings.opening), "Deposits: " + ugx(a.savings.deposits), "Profit credited: " + ugx(a.savings.profit), "Withdrawals: " + ugx(a.savings.withdrawals), "Share-outs: " + ugx(a.savings.shareOuts), "*Closing savings: " + ugx(a.savings.closing) + "*"]
     .concat(a.loans.length ? ["", "Loans owed: " + ugx(a.loanTotals.owed) + " (loan " + ugx(a.loanTotals.principalLeft) + " + interest " + ugx(a.loanTotals.interestDue) + ")"] : []).concat(["", "CONFIDENTIAL: for the named member only. Full PDF statement available from the Treasurer."]).join("\n");
+  /* ---------- privacy switch: show SOB IDs instead of member names in reports (display only; nothing stored is changed) ---------- */
+  try { st.hideNames = sessionStorage.getItem("sob.hideNames") === "1"; } catch (e) { st.hideNames = false; }
+  const PV = () => window.SOB.privacy.build(st.db.members);
+  const shownRep = (rep) => (st.hideNames ? PV().hideReport(rep) : rep);
+  const shownText = (t) => (st.hideNames ? PV().hideText(t) : t);
+  const shownHTML = (h2) => (st.hideNames ? PV().hideHTML(h2) : h2);
+  const originals = new WeakMap();
+  /* report areas are marked data-rep; names in them are swapped for IDs (and back) in place, so every open preview follows the switch at once */
+  function applyPrivacy() {
+    const pv = st.hideNames ? PV() : null;
+    document.querySelectorAll("[data-rep]").forEach((box) => { const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) { if (pv) { if (!originals.has(n)) originals.set(n, n.data); const t = pv.hideText(originals.get(n)); if (n.data !== t) n.data = t; } else if (originals.has(n)) { n.data = originals.get(n); originals.delete(n); } } });
+  }
+  let pvTimer = null; new MutationObserver(() => { if (pvTimer) return; pvTimer = setTimeout(() => { pvTimer = null; applyPrivacy(); }, 0); }).observe(document.body, { childList: true, subtree: true });
+  const setHideNames = (v) => { st.hideNames = !!v; try { sessionStorage.setItem("sob.hideNames", v ? "1" : "0"); } catch (e) {} document.querySelectorAll("[data-hide-names]").forEach((c) => { c.checked = !!v; }); applyPrivacy(); };
+  const privacyToggle = () => (isStaff() ? h("label", { class: "pv-toggle" }, h("input", { type: "checkbox", "data-hide-names": 1, checked: st.hideNames, onchange: (e) => setHideNames(e.target.checked) }), " Hide member names (show SOB IDs only)") : null);
   /* WhatsApp: always opens WhatsApp itself (the app on a phone, WhatsApp Web on a computer) with the message ready; never the Windows/OS share list */
-  const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
+  const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(shownText(text)); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   function statementView(memberId, internal, toDate) {
-    const box = h("div", { id: "stmt-view" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
+    const box = h("div", { id: "stmt-view", "data-rep": "1" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
     let key = "all", cust = null; const maxTo = toDate || today();
     const periodOf = () => (key === "custom" && cust ? cust : (() => { const p = D.presetPeriod(key, maxTo, FYM.table(st.db)); return p; })());
     const lines = (rows) => h("div", { class: "panel kvs" }, rows.map(([l, v, cls]) => h("div", { class: "kv" + (cls ? " " + cls : "") }, h("span", null, l), h("b", null, typeof v === "number" ? ugx(v) : v))));
@@ -3840,7 +3892,7 @@ window.SOBMember = function (E) {
         h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
         h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
         s.checks.movementsAddUp ? Banner("ok", "Opening " + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + ". Agrees with the ledger.") : Banner("bad", "These figures do not add up to the ledger. Please tell the Treasurer before relying on this statement."),
-        h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "stm-dl", "data-dlpdf": 1, onclick: () => downloadReport(accountRep(a), a.period.text) }, Icon("download", 18), " Download PDF"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
+        privacyToggle(), h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "stm-dl", "data-dlpdf": 1, onclick: () => downloadReport(accountRep(a), a.period.text) }, Icon("download", 18), " Download PDF"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
           h("button", { id: "stm-csv", "data-csv": 1, onclick: () => download("statement_" + a.member.id + ".csv", "text/csv", R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref })) }, "Download CSV")),
         h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
         h("p", { class: "mute rg-blurb" }, a.reserve.text),
@@ -3865,7 +3917,7 @@ window.SOBMember = function (E) {
     return Busy.run("Preparing your PDF…", () => new Promise((res) => {
       const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
       /* Opens the branded statement in its own tab: desktop prints straight away; on a phone use "Print / Save as PDF" there (then share the PDF on WhatsApp). */
-      const render = (m) => (rep.printHTML ? rep.printHTML(m) : R.toPrintHTML(rep, m));
+      const render = (m) => shownHTML(rep.printHTML ? rep.printHTML(m) : R.toPrintHTML(rep, m));
       const w = window.open(URL.createObjectURL(new Blob([render(Object.assign({ toolbar: true }, meta))], { type: "text/html" })), "_blank");
       if (w) { setTimeout(res, 300); return; }
       toast("Please allow pop-ups for this page to open the PDF.", "warn");
@@ -3879,7 +3931,7 @@ window.SOBMember = function (E) {
     return Busy.run("Building your PDF…", () => new Promise((res) => setTimeout(() => {
       try {
         const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
-        const html = rep.printHTML ? rep.printHTML(meta) : R.toPrintHTML(rep, meta);
+        const html = shownHTML(rep.printHTML ? rep.printHTML(meta) : R.toPrintHTML(rep, meta));
         const bytes = window.SOB.pdf.fromHTML(html);
         window.SOB.pdf.save(bytes, window.SOB.pdf.fileName(rep.title || "SOB_report", today()));
         toast("PDF saved to your device.");
@@ -3924,7 +3976,7 @@ window.SOBMember = function (E) {
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
     /* every action sits at the TOP of the loan, next to the statement buttons, so nothing is hidden below a long page */
     const row = h("div", { class: "row", id: "loan-actions" }, h("button", { "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("print", 18), " Loan statement (PDF)"), h("button", { "data-dlpdf": 1, id: "loan-statement-dl", onclick: () => printAccount(loan.memberId, {}, true, id, true) }, Icon("download", 18), " Download PDF"));
-    const b = h("div", null, row,
+    const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
@@ -4052,14 +4104,14 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     ["Governance and records", "Approvals, reconciliation and the notices that were sent.", ["Awaiting approval", "Reconciliation register", "Notification log", "Airtime requests"]]];
   function openReport(n) {
     const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
-    drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+    drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(shownRep(rep))) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
   }
   function reports() {
     const extra = FYM.table(st.db).map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; });
     const groups = REPORT_GROUPS.map((g) => (g[0] === "General Reserve Fund" ? [g[0], g[1], g[2].concat(extra)] : g));
     const p = periodNow(), ov = K.overview(st.db, p), grouped = groups.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
     const rcard = (n) => { const c = Card(n, PERIOD_AWARE.includes(n) ? "Follows the period" : "As at today", "Open · print / PDF · CSV", () => openReport(n)); c.classList.add("rpt"); return c; };
-    return h("div", null, periodBar(),
+    return h("div", null, periodBar(), privacyToggle(),
       h("h2", { class: "sec" }, "Key figures · tap one to see the transactions behind it"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, kpiShow(ov[k]), d.period, () => openKpi(k)); })),
       groups.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
         h("div", { class: "grid" }, names.filter((n) => REPORTS[n]).map(rcard)))),
@@ -4183,7 +4235,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       rep ? h("div", { id: "records-report" }, h("h2", { class: "sec" }, "Reconciliation report"),
         h("div", { class: "grid" }, Card("Actual savings", ugx(rep.totals.savings), "After withdrawals and share-outs"), Card("Available savings", ugx(rep.totals.available)), Card("Loan principal outstanding", ugx(rep.totals.loanPrincipal)), Card("Unpaid interest", ugx(rep.totals.unpaidInterest)), Card("Profit credited", ugx(rep.totals.profitCredited)), Card("Open register items", String(rep.register.filter((x) => x.status === "Open").length))),
         h("p", { class: "mute" }, "Actual savings = deposits + profit − withdrawals − share-outs. Loans never reduce savings. Available savings = actual savings less guarantee commitments (guarantors begin 2027). The last column of the member table is a memo only."),
-        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf)), h("button", { onclick: () => download(r.title.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(r)) }, "Download CSV")), tableFromReport(r))),
+        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf)), h("button", { onclick: () => download(r.title.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(shownRep(r))) }, "Download CSV")), tableFromReport(r))),
         rep.missing.length ? h("div", null, h("h3", null, "Information genuinely missing"), h("ul", null, rep.missing.map((x) => h("li", null, x)))) : null,
         rep.decisions.length ? h("div", null, h("h3", null, "SOB decisions still needed"), h("ul", null, rep.decisions.map((x) => h("li", null, x)))) : null) : null,
       sign());
