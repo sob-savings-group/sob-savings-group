@@ -207,3 +207,4 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 .tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0 4px}.tab{min-height:46px;border-radius:12px;font-weight:700;background:#fff;color:var(--navy);border:1px solid var(--line)}.tab.on{background:var(--navy,#12213f);color:#fff;border-color:var(--navy,#12213f)}
 .pinrow{display:flex;gap:8px;align-items:stretch}.pinrow input{flex:1;min-width:0}.ghost{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-weight:700;color:var(--navy)}
 #conn-status{margin:12px 0 0;text-align:center}.hint.warn{color:#9a3412}
+.linkbtn{background:none;border:0;box-shadow:none;color:var(--navy);text-decoration:underline;min-height:44px;padding:0 4px;font-weight:600;margin:6px 0 0}
