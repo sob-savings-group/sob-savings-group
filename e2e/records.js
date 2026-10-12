@@ -18,7 +18,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }), ctx = await b.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } }), pg = await ctx.newPage(), errs = []; pg.on("pageerror", (e) => errs.push(e.message));
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
-  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "Adm1n-Setup-77"); await pg.click("#login-go");
+  await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "Adm1n-Setup-77"); await pg.click("#login-go");
   await pg.waitForSelector('[data-nav="system"], #kpis, #pin-new', { timeout: 20000 });
   if (await pg.locator("#pin-new").count()) { ok(true, "first sign-in asks for a new PIN"); await pg.fill("#pin-old", "Adm1n-Setup-77").catch(() => {}); }
   await pg.click('[data-nav="system"]'); await pg.waitForSelector("#records-panel");

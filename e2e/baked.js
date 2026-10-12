@@ -12,7 +12,7 @@ const build = (env) => execSync("node " + path.join(root, "build/make-app-file.j
   build({ SOB_URL: FAKE }); let pg = await open(); await pg.waitForSelector("#login-go");
   assert.equal(dialogs, 0, "no prompt for members"); assert.equal(await pg.evaluate(() => window.SOB_CONFIG.ledgerUrl), FAKE);
   assert.ok(!(await pg.content()).includes("Paste the SOB web app URL"), "no paste-a-URL text");
-  await pg.fill("#mid", "SOB-001"); await pg.fill("#pin", "0000"); await pg.click("#login-go"); await pg.waitForTimeout(800);
+  await pg.fill("#mid", "SOB-001"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "0000"); await pg.click("#login-go"); await pg.waitForTimeout(800);
   assert.ok(hits.every((u) => u.startsWith(FAKE)), "all calls go to the built-in backend"); assert.ok(hits.length > 0, "sign-in reached the built-in backend");
   const evil = await open("?dev=" + encodeURIComponent("https://evil.example/exec")); assert.equal(await evil.evaluate(() => window.SOB_CONFIG.ledgerUrl), FAKE, "bad override ignored");
   const dev = await open("?dev=" + encodeURIComponent("http://localhost:8123/exec")); assert.equal(await dev.evaluate(() => window.SOB_CONFIG.ledgerUrl), "http://localhost:8123/exec", "developer override works");

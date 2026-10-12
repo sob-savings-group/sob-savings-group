@@ -24,7 +24,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
 (async () => {
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const ctx = await b.newContext({ viewport: { width: 390, height: 844 } }); const pg = await ctx.newPage(); const errs = []; pg.on("pageerror", (e) => errs.push(e.message));
-  const signin = async (id, pin) => { await pg.waitForSelector("#login-go"); await pg.fill("#mid", id); await pg.fill("#pin", pin || ""); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]"); };
+  const signin = async (id, pin) => { await pg.waitForSelector("#login-go"); await pg.fill("#mid", id); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pin || ""); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]"); };
   const signout = async () => { await pg.click("#logout"); await pg.waitForSelector("#login-go"); };
   const text = () => pg.evaluate(() => document.getElementById("main").innerText);
   await pg.goto(base + "/app/index.html");

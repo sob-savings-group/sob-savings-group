@@ -34,7 +34,7 @@
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
       const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Only if you have one", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
       const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
@@ -80,7 +80,11 @@
       [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
-      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, h("label", { for: "pin" }, "PIN (optional)"), pin,
+      /* Two boxes for a member: First name + SOB ID. A PIN is only asked for when the member has one ("I have a PIN"); the choice is remembered on this device. */
+      let hasPin = false; try { hasPin = localStorage.getItem("sob.hasPin") === "1"; } catch (e) {}
+      const pinRow = h("div", { id: "pin-row", hidden: !hasPin }, h("label", { for: "pin" }, "PIN"), pin);
+      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { pinRow.hidden = !pinRow.hidden; pinToggle.textContent = pinRow.hidden ? "I have a PIN" : "I do not have a PIN"; try { localStorage.setItem("sob.hasPin", pinRow.hidden ? "0" : "1"); } catch (e) {} if (pinRow.hidden) pin.value = ""; else pin.focus(); } }, hasPin ? "I do not have a PIN" : "I have a PIN");
+      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, pinRow, pinToggle,
         h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
       const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
         h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));

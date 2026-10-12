@@ -27,7 +27,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
 (async () => {
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port, TODAY = D.todayISO();
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const pg = await b.newPage(); const errs = []; pg.on("pageerror", (e) => errs.push(e.message));
-  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   const closeAll = async () => { for (let i = 0; i < 20 && await pg.locator("[data-close]").count(); i++) { try { await pg.locator("[data-close]").last().click({ timeout: 3000 }); } catch (e) { await pg.waitForTimeout(250); } } };
   const openLoan = async () => { await closeAll(); await pg.click('[data-nav="loans"]'); await pg.waitForSelector("tbody tr.click"); await pg.click("tbody tr.click"); await pg.waitForSelector("text=Record repayment"); };
   const form = async (btn) => { await pg.click("text=" + btn); await pg.waitForSelector("[data-submit]"); };
@@ -66,13 +66,13 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click("[data-close]");
   /* 5. what members SEE equals what the engine computes (same ledger, member phone view) */
   const ug = (n) => "UGX " + Math.round(n).toLocaleString("en-US"), dbf = ledger(), lo2 = dbf.loans.find((x) => x.id === loan.id), w = L.loanInterestPosition(lo2, dbf, TODAY), owe = L.loanOutstanding(lo2, dbf, TODAY);
-  await pg.setViewportSize({ width: 390, height: 844 }); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-001"); await pg.fill("#pin", "1234"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
+  await pg.setViewportSize({ width: 390, height: 844 }); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-001"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "1234"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
   await pg.click('[data-nav="myloans"]'); await pg.click("[data-loan]"); await pg.waitForSelector(".modal .kv"); const mt = await pg.locator(".modal").innerText();
   const grab = (label) => { const m = new RegExp(label + "\\s*UGX ([\\d,]+)").exec(mt); return m ? Number(m[1].replace(/,/g, "")) : null; };
   ok(grab("Principal left") === w.principalOutstanding && grab("Interest due now") === w.unpaidInterest && grab("Interest paid") === w.interestPaid && grab("Interest charged so far") === w.accruedInterest, "borrower's loan screen matches the engine (principal left " + w.principalOutstanding + ", interest due " + w.unpaidInterest + ")");
   ok(new RegExp("You owe today\\s*" + ug(owe)).test(mt), "'You owe today' equals loan outstanding (" + ug(owe) + ")");
   ok(w.steps.every((x) => mt.includes(ug(x.amount)) && (x.principal === 0 || mt.includes(ug(x.principal)))), "every repayment is listed with its interest / principal split");
-  await pg.click("[data-close]"); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-002"); await pg.fill("#pin", "4321"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
+  await pg.click("[data-close]"); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-002"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "4321"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
   const pos = L.memberPosition(dbf, "SOB-002"), lg = await pg.locator(".legend").first().innerText();
   ok(lg.includes("Available to you") && lg.includes(ug(pos.available)) && lg.includes(ug(pos.committed)), "guarantor's home shows available " + ug(pos.available) + " and held " + ug(pos.committed));
   await pg.click('[data-nav="myguar"]'); const gt = await pg.locator("#main").innerText(), gg = dbf.guarantees.find((g) => g.guarantorId === "SOB-002");
