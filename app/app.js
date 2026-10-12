@@ -36,16 +36,13 @@
       const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const pin = h("input", { type: "password", id: "pin", placeholder: "Only if you have one", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
-      const go = async () => {
+      const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
+      const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
+      /* ONE place that runs a sign-in and shows the outcome; "produce" returns the store.login() promise (or throws a format message). */
+      const attempt = async (produce, kind, typedId) => {
         if (working) return; working = true; problem.replaceChildren();
         try {
-          /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
-          /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-          const idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), typed = [idPart, fname.value.trim()].filter(Boolean).join(" "), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
-          let id = typed, secret = pin.value.trim();
-          if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = typed;
-          if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
-          const u = await st.store.login(id, secret);
+          const u = await produce();
           st.user = u; st.view = null;
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
@@ -53,21 +50,49 @@
           const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || "");
           problem.replaceChildren();
           if (conn) connBanner(problem, e);   /* a connection/deployment problem is never hidden in a disappearing toast: it stays on screen with the exact cause and who to call */
-          else { const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
-            if (MSG[e.code]) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code])); } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+          else if (e.code === "BAD_CREDENTIALS" && kind === "officer") problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Access denied. Check your Staff ID and PIN. If you are a member, use the Member login instead."));
+          else if (MSG[e.code]) {
+            problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code]));
+            if (e.code === "BAD_CREDENTIALS" && kind === "member" && OFFICER_ID.test(String(typedId || "").trim())) problem.append(h("div", { class: "hint", id: "login-officer-hint" }, "Officers (ADMIN, CHAIR, TREASURER, SECRETARY): please use the Officer login tab."));
+          } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true);
         }
         finally { working = false; }
       };
+      const go = () => attempt(async () => {
+        /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted. SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
+        const nm = fname.value.trim(), idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
+        let id, secret = pin.value.trim(), typed = idPart || nm;
+        if (idPart) { const m = /^(\S+)[\s,;:]+(.+)$/.exec(idPart); id = m ? m[1] : idPart; if (!secret) secret = nm || (m ? m[2].trim() : ""); }
+        else { const m = /^(\S+)[\s,;:]+(.+)$/.exec(nm); id = nm; if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = nm; }
+        if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        return st.store.login(id, secret);
+      }, "member", mid.value || fname.value);
+      /* Officer login: Staff ID + PIN only (no first name, no member SOB ID). The PIN box has no browser auto-fill and a Show button, so a wrong or old saved PIN can never go in unseen. */
+      const sid = h("input", { id: "sid", placeholder: "ADMIN, CHAIR, TREAS or SECRETARY", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const spin = h("input", { type: "password", id: "spin", placeholder: "Your officer PIN", autocomplete: "new-password", autocorrect: "off", autocapitalize: "off", spellcheck: "false", enterkeyhint: "go" });
+      const showPin = h("button", { type: "button", id: "spin-show", class: "ghost", "aria-label": "Show or hide PIN", onclick: () => { const on = spin.type === "password"; spin.type = on ? "text" : "password"; showPin.textContent = on ? "Hide" : "Show"; } }, "Show");
+      const officerGo = () => attempt(async () => {
+        const id = sid.value.trim(), secret = spin.value.trim();
+        if (!id) throw Object.assign(new Error("Enter your Staff ID"), { code: "FORMAT" });
+        if (!secret) throw Object.assign(new Error("Enter your PIN"), { code: "FORMAT" });
+        return st.store.login(id, secret);
+      }, "officer", sid.value);
       [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
+      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, h("label", { for: "pin" }, "PIN (optional)"), pin,
+        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
+        h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));
+      const tabM = h("button", { type: "button", id: "tab-member", class: "tab on", role: "tab", onclick: () => setMode("member") }, "Member login"), tabO = h("button", { type: "button", id: "tab-officer", class: "tab", role: "tab", onclick: () => setMode("officer") }, "Officer login");
+      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? fname : sid).focus(); };
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
-        h("label", { for: "fname" }, "First name"), fname,
-        h("label", { for: "mid" }, "SOB ID"), mid,
-        h("label", { for: "pin" }, "PIN (optional)"), pin,
-        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"), problem,
+        h("div", { class: "tabs", role: "tablist" }, tabM, tabO), memberPanel, officerPanel, problem,
+        h("div", { id: "conn-status", class: "hint", role: "status" }, "Checking connection…"),
         h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }
+    if (st.conn) setTimeout(() => paintConn(st.conn), 0);
     return box;
   }
 
@@ -651,6 +676,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   const VIEWS = { reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
+  const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };
   const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or PIN."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
     if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
@@ -660,7 +686,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
         st.store.onChange((e) => { Busy.set(e.busy ? e.busyLabel : null); if (e.status === "synced") st.lastLoad = Date.now(); if (e.status === "signed-out" && st.user) { st.user = null; st.view = null; render(); toast("Your session ended. Please sign in again.", "warn"); } });
         st.db = { members: [], transactions: [], loans: [] };
-        st.store.check().then((r) => { st.conn = r; const host = document.getElementById("login-problem"); if (host && !r.ok && !host.children.length) connBanner(host, r.error); });   // tell people BEFORE they type if the endpoint is unreachable/misconfigured
+        st.store.check().then((r) => { st.conn = r; const host = document.getElementById("login-problem"); if (host && !r.ok && !host.children.length) connBanner(host, r.error); paintConn(r); });   // tell people BEFORE they type if the endpoint is unreachable/misconfigured
         if (await st.store.resume()) { st.user = st.store.user; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } }
       }
       else { const raw = await (await fetch("demo-seed.json")).json(); st.db = S.migrate.migrateLegacy(raw, today()); }

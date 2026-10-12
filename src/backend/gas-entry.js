@@ -74,6 +74,7 @@ function recoverAdminPin(){
   var props = PropertiesService.getScriptProperties(), pin = props.getProperty("SOB_ADMIN_RECOVERY_PIN");
   if (!pin) throw new Error("Add the Script Property SOB_ADMIN_RECOVERY_PIN (your new PIN, 6+ characters) first");
   props.deleteProperty("SOB_ADMIN_RECOVERY_PIN");                       // the PIN never stays stored, whatever happens next
+  pin = String(pin).trim();
   var env = __env(), S = __M['backend/store'], A = __M['backend/auth'], G = __M['core/governance'], B = __M['backend/backup'];
   var db = S.readAll(env.ss), bk = B.snapshot(env.ss, env, "before ADMIN PIN recovery", { force: true });
   var r = A.recoverAdminPin(env, db.users || [], pin);
@@ -81,7 +82,12 @@ function recoverAdminPin(){
   G.audit(db, ctx, "User", r.adminId, "ADMIN_PIN_RECOVERY", null, { backup: bk && bk.id }, "Super Admin PIN replaced through the owner-only recovery routine; the new PIN was never displayed or stored in clear");
   S.writeCollection(env.ss, "users", r.users);
   S.writeChanged(env.ss, before, db);
-  return "ADMIN PIN reset for " + r.adminId + ". A backup was taken first and the change is in the audit trail. Sign in with the new PIN.";
+  /* PROOF: sign in with the new PIN through the very same login code the website uses, reading the Users sheet back. If this fails, nothing is claimed. */
+  var chk = A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readAll(env.ss).members }, r.adminId, pin), viaRole = A.login(env, { users: S.readCollection(env.ss, "users"), members: [] }, "ADMIN", pin);
+  if (!chk.ok || !viaRole.ok) throw new Error("NOT VERIFIED: the PIN was saved but the sign-in check failed (" + (chk.error || viaRole.error) + "). Send a screenshot of this message.");
+  var sh = env.ss.getSheetByName("SOB Access Check") || env.ss.insertSheet("SOB Access Check");
+  sh.clear(); sh.getRange(1, 1, 5, 2).setValues([["Checked at", now], ["Super Admin Staff ID", r.adminId], ["Sign-in with the new PIN (read back from this Sheet)", "VERIFIED"], ["Script build", SOB_BUILD], ["Note", "No PIN is stored here. You may delete this sheet."]]);
+  return "ADMIN PIN reset and VERIFIED for Staff ID " + r.adminId + " (script build " + SOB_BUILD + "). Sign in on the website with Officer login: Staff ID ADMIN and your new PIN.";
 }
 function initAdmin(id, pin){
   var env = __env(), S = __M['backend/store'], A = __M['backend/auth'];

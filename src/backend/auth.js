@@ -40,11 +40,18 @@
   const statusKind = (st) => { const x = String(st || "").trim(); return /^pending/i.test(x) ? "pending" : /^(inactive|restricted|suspended|closed|blocked|disabled)/i.test(x) ? "inactive" : null; };
   const memberNameMatches = (m, given) => { const g = String(given || "").trim().toLowerCase(); return !!m && g.length >= 3 && /[a-z]/.test(g) && tokens(m.name).includes(g); };
   const blockedError = (kind) => ({ ok: false, error: kind === "pending" ? "MEMBER_PENDING: membership pending approval" : "MEMBER_INACTIVE: account inactive or restricted" });
+  /* Officer sign-in by role name: "ADMIN", "CHAIR", "TREASURER", "SECRETARY" (and the short forms) reach the officer holding that role even if the stored Staff ID is spelled differently.
+     Only when exactly ONE active user holds the role. The PIN is still required, so this opens nothing by itself. */
+  const ALIAS = { ADMIN: "Admin", ADMINISTRATOR: "Admin", SUPERADMIN: "Admin", CHAIR: "Chairperson", CHAIRPERSON: "Chairperson", CHAIRMAN: "Chairperson", TREAS: "Treasurer", TREASURER: "Treasurer", SEC: "Secretary", SECR: "Secretary", SECRETARY: "Secretary" };
+  function roleAlias(db, id) {
+    const role = ALIAS[String(id || "").toUpperCase().replace(/[^A-Z]/g, "")]; if (!role) return null;
+    const hits = (db.users || []).filter((u) => u.role === role && u.status !== "Disabled"); return hits.length === 1 ? hits[0] : null;
+  }
   function login(env, db, id, pin) {
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    let u = findUser(db, id), byName = false;
+    let u = findUser(db, id) || roleAlias(db, id), byName = false;
     if (!u) { u = memberByFullName(db, id); byName = !!u; }
     /* identity is verified here: PIN, or the SOB ID + one of the member's own names (the same trust as the view-only sign-in) */
     if (!u) {
@@ -74,7 +81,7 @@
     const admins = (users || []).filter((u) => u.role === "Admin");
     if (admins.length !== 1) throw new Error("REFUSED: recovery works only when there is exactly one Super Admin (found " + admins.length + ")");
     const u = admins[0], fresh = makeUser(env, { id: u.id, name: u.name, role: "Admin", pin });
-    const out = (users || []).map((x) => (x === u ? Object.assign({}, x, { salt: fresh.salt, pinHash: fresh.pinHash, mustChange: false, status: x.status === "Disabled" ? "Disabled" : x.status }) : x));
+    const out = (users || []).map((x) => (x === u ? Object.assign({}, x, { salt: fresh.salt, pinHash: fresh.pinHash, mustChange: false, status: "Active" }) : x));
     if (env.cache && env.cache.remove) env.cache.remove("fail:" + String(u.id).toUpperCase());      // lift any lock-out
     return { users: out, adminId: u.id };
   }
@@ -99,5 +106,5 @@
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser, recoverAdminPin };
+  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser, recoverAdminPin };
 });

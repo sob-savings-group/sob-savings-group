@@ -28,7 +28,23 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
   ok((await pg.locator("#demo-go").count()) === 0, "live mode shows a real sign-in, not the demo role picker");
   await signin(pg, "ADMIN", "wrong"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(true, "wrong PIN is refused");
+  /* staff IDs have no digits: the first-name box must never be glued onto the ID ("ADMIN ADMIN") */
+  await pg.fill("#fname", "ADMIN"); await pg.fill("#mid", "admin"); await pg.fill("#pin", "wrong-pin-x"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(true, "ADMIN with the first-name box filled and a wrong PIN is refused");
+  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "ADMIN signs in with a first name typed AND the SOB ID box = ADMIN");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#fname", "Elder"); await pg.fill("#mid", "CHAIR"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "CHAIR signs in with a first name typed");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#fname", ""); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "wrong"); await pg.click("#login-go"); await pg.waitForSelector("#login-error");
   await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, "admin signs in and sees the balance and activity KPI cards (computed from the server ledger view)");
+  /* two login options: Member (first name + SOB ID) and Officer (Staff ID + PIN only) */
+  await pg.click("#logout"); await pg.waitForSelector("#login-go");
+  ok((await pg.locator("#tab-member").count()) === 1 && (await pg.locator("#tab-officer").count()) === 1 && (await pg.locator("#panel-officer").isHidden()), "login offers Member login and Officer login (Member shown first)");
+  await pg.waitForFunction(() => /Connected/.test(document.getElementById("conn-status").textContent), null, { timeout: 8000 }); ok(true, "the login screen shows the server connection status");
+  await pg.click("#tab-officer"); ok((await pg.locator("#sid").isVisible()) && (await pg.locator("#spin").isVisible()) && (await pg.locator("#fname").isHidden()) && (await pg.locator("#mid").isHidden()), "Officer login asks only for Staff ID and PIN (no first name, no SOB ID)");
+  ok((await pg.getAttribute("#spin", "autocomplete")) === "new-password", "the officer PIN box refuses browser auto-fill of old saved passwords");
+  await pg.fill("#sid", "ADMIN"); await pg.fill("#spin", "wrong-pin-9"); await pg.click("#officer-go"); await pg.waitForSelector("#login-error"); ok(/Staff ID and PIN/.test(await pg.innerText("#login-error")), "officer wrong PIN: clear message, nothing revealed");
+  await pg.click("#spin-show"); ok((await pg.getAttribute("#spin", "type")) === "text", "Show reveals the typed PIN"); await pg.fill("#spin", "admin-pin-1"); await pg.click("#officer-go"); await pg.waitForSelector("#kpis"); ok(true, "ADMIN signs in with Staff ID + PIN only");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.click("#tab-officer"); await pg.fill("#sid", "chairperson"); await pg.fill("#spin", "chair-pin-1"); await pg.click("#officer-go"); await pg.waitForSelector("#kpis"); ok(true, "CHAIR signs in through Officer login (role name accepted)");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#fname", "x"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "wrong-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#login-officer-hint"); ok(true, "an officer who uses the Member tab is pointed to the Officer login");
+  await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   await pg.click('[data-nav="ledger"]'); await pg.click("#add-entry"); await pg.selectOption('.modal select[name="m"]', mem.id); await pg.fill('.modal input[name="amount"]', "3000"); await pg.click("[data-submit]");
   await pg.waitForSelector(".toast:not(.bad)"); ok(L.memberSavings(S.readAll(env.ss), mem.id) === L.memberSavings(db0, mem.id) + 3000, "an entry made in the UI is persisted by the server");
   

@@ -202,3 +202,8 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 .modal .mhead{position:sticky;top:-8px;background:#fff;z-index:2;padding:6px 0}
 .xmenu{display:grid;gap:10px}.xm-item{display:flex;align-items:center;gap:14px;width:100%;min-height:56px;text-align:left;padding:10px 14px;border-radius:14px;background:#fff;border:1px solid var(--line)}.xm-item span{display:grid;gap:2px}.xm-item small{color:var(--mute,#5c6b86);font-size:13px}
 @media(max-width:600px){button,.btn,select,input,textarea{min-height:44px;font-size:16px}.row{gap:10px}.row>button{flex:1 1 140px}table{font-size:14px}}
+
+/* ---- login tabs ---- */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0 4px}.tab{min-height:46px;border-radius:12px;font-weight:700;background:#fff;color:var(--navy);border:1px solid var(--line)}.tab.on{background:var(--navy,#12213f);color:#fff;border-color:var(--navy,#12213f)}
+.pinrow{display:flex;gap:8px;align-items:stretch}.pinrow input{flex:1;min-width:0}.ghost{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-weight:700;color:var(--navy)}
+#conn-status{margin:12px 0 0;text-align:center}.hint.warn{color:#9a3412}
