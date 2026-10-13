@@ -32,9 +32,9 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "new-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
       const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
@@ -61,7 +61,8 @@
       const go = () => attempt(async () => {
         /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted. SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
         const nm = fname.value.trim(), idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
-        let id, secret = pin.value.trim(), typed = idPart || nm;
+        /* the PIN box counts ONLY when the member opened it ("I have a PIN"): a hidden box can never carry a browser-saved password into a name sign-in */
+        let id, secret = pinRow.hidden ? "" : pin.value.trim(), typed = idPart || nm;
         if (idPart) { const m = /^(\S+)[\s,;:]+(.+)$/.exec(idPart); id = m ? m[1] : idPart; if (!secret) secret = nm || (m ? m[2].trim() : ""); }
         else { const m = /^(\S+)[\s,;:]+(.+)$/.exec(nm); id = nm; if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = nm; }
         if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });

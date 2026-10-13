@@ -40,6 +40,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok((await pg.locator("#panel-member input:visible").count()) === 2 && (await pg.locator("#fname").isVisible()) && (await pg.locator("#mid").isVisible()) && (await pg.locator("#pin").isHidden()), "Member login shows TWO boxes: First name and SOB ID");
   await pg.click("#pin-toggle"); ok(await pg.locator("#pin").isVisible(), "\"I have a PIN\" reveals the PIN box only for members who have one"); await pg.click("#pin-toggle"); ok(await pg.locator("#pin").isHidden(), "and hides it again");
   await pg.waitForFunction(() => /Connected/.test(document.getElementById("conn-status").textContent), null, { timeout: 8000 }); ok(true, "the login screen shows the server connection status");
+  /* regression: a browser may drop a saved password (here the ADMIN PIN) into the HIDDEN member PIN box; a name sign-in must still work */
+  await pg.evaluate(() => { document.getElementById("pin").value = "admin-pin-1"; });
+  await pg.fill("#fname", mem.name.split(/\s+/).find((w) => w.length >= 3)); await pg.fill("#mid", mem.id.toLowerCase().replace("-", " ")); await pg.click("#login-go"); await pg.waitForSelector("#kpis, [data-card=\"My Savings\"]", { timeout: 8000 }); ok(true, "a member signs in by first name + SOB ID even if the browser filled a saved password into the hidden PIN box");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go");
   await pg.click("#tab-officer"); ok((await pg.locator("#sid").isVisible()) && (await pg.locator("#spin").isVisible()) && (await pg.locator("#fname").isHidden()) && (await pg.locator("#mid").isHidden()), "Officer login asks only for Staff ID and PIN (no first name, no SOB ID)");
   ok((await pg.getAttribute("#spin", "autocomplete")) === "new-password", "the officer PIN box refuses browser auto-fill of old saved passwords");
   await pg.fill("#sid", "ADMIN"); await pg.fill("#spin", "wrong-pin-9"); await pg.click("#officer-go"); await pg.waitForSelector("#login-error"); ok(/Staff ID and PIN/.test(await pg.innerText("#login-error")), "officer wrong PIN: clear message, nothing revealed");
