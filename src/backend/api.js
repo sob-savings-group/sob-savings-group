@@ -15,7 +15,7 @@
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
     if (user.role !== "Member") {   // Super Admin, Chairperson, Treasurer, Committee: staff see the ledger (never credentials); only Admin sees users/outbox
       const full = Object.assign({}, base, db, { users: user.role === "Admin" ? (db.users || []).map(A.publicUser) : [] });
-      if (user.role !== "Admin") full.outbox = [];
+      if (user.role !== "Admin") { full.outbox = []; full.reminders = []; }   // loan-reminder history (message texts, follow-ups) is for the Super Admin only
       full.outboxSummary = user.role === "Admin" ? N.summary(db) : null;
       if (user.role !== "Admin") full.auditLog = G.can({ role: user.role }, "audit.view") ? db.auditLog : [];
       return full;   // KPIs are NOT precomputed here: the app derives every figure for the chosen date/period from this ledger (core/kpis), so there is one calculation

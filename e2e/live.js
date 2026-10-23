@@ -62,7 +62,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
   /* second approval in the real UI: the Super Admin's void only becomes a request; the Chairperson (a different sign-in) approves it */
   await pg.click('[data-nav="ledger"]'); await pg.click("#main tbody tr:first-child"); await pg.waitForSelector('.modal [data-act="void"]'); const txBefore = S.readAll(env.ss).transactions.filter((t) => !t.voided).length;
-  await pg.click('.modal [data-act="void"]'); await pg.fill('.modal input[name="reason"]', "e2e void"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)");
+  await pg.click('.modal [data-act="void"]'); await pg.fill('.modal input[name="reason"]', "e2e void"); await pg.click("[data-submit]"); await pg.waitForFunction(() => [...document.querySelectorAll(".toast:not(.bad)")].some((t) => /Chairperson/.test(t.textContent)));   /* wait for THIS toast, not an older one still on screen */
   ok(/Chairperson/.test(await pg.locator(".toast").last().innerText()) && S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore && (S.readAll(env.ss).approvalRequests || []).length === 1, "Super Admin's void is only a request; nothing changed");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "CHAIR", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");

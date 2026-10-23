@@ -1,6 +1,6 @@
 (function () {
   const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, Banner, Empty, Confirm, Chips } = window.SOBUI;
-  const S = window.SOB, CFG = window.SOB_CONFIG || {}, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports, FYM = S.fy, RSV = S.reserve, PRC = S.profitrec, HLN = S.histloans, FRP = S.finreports;
+  const S = window.SOB, CFG = window.SOB_CONFIG || {}, RMD = S.reminders, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports, FYM = S.fy, RSV = S.reserve, PRC = S.profitrec, HLN = S.histloans, FRP = S.finreports;
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
   const today = () => D.todayISO();
@@ -115,7 +115,7 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -563,6 +563,110 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     return h("div", null, top, h("h2", { class: "sec" }, staff ? "Airtime requests" : "My airtime requests"), Table(cols, list));
   }
 
+
+  /* ---------- loan reminders: WhatsApp, officer-sent (Super Admin) ----------
+     Every figure comes from the live ledger through the engine's own loan functions (core/reminders.js -> core/ledger.js); nothing is typed or stored in a template.
+     The server prepares and records each message at the moment you press the button; this screen only displays. Opening WhatsApp is NOT recorded as delivery. */
+  function remindersView() {
+    const RM = RMD, asOf = today(), rem = st.rem = st.rem || { level: "AUTO" };
+    if (st.live && rem.fresh !== true) {
+      if (!rem.loading) { rem.loading = true; st.store.load().then(() => { st.db = st.store.db; rem.fresh = true; rem.loading = false; rem.at = new Date().toISOString(); render(); }).catch((e) => { rem.loading = false; rem.err = friendly(e); rem.fresh = "failed"; render(); }); }
+      if (rem.fresh !== "failed") return State("loading");
+    }
+    if (st.live && rem.fresh === "failed") return h("div", null, h("div", { class: "blocked", id: "rem-unverified" }, "The live ledger could not be loaded (" + (rem.err || "no connection") + "), so no reminder can be prepared: figures that cannot be verified are never shown. "), h("button", { class: "primary", id: "rem-retry", onclick: () => { rem.fresh = false; render(); } }, "Try again"));
+    const cfg = RM.getConfig(st.db), cand = RM.candidates(st.db, asOf), rows = cand.rows, ready = rows.filter((r) => !r.problem), hist = (st.db.reminders || []).slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const lvlOpt = [{ value: "AUTO", label: "Automatic (recommended for each member)" }].concat(RM.LEVELS.map((l) => ({ value: l, label: RM.LEVEL_LABEL[l] })));
+    const lvl = () => rem.level || "AUTO";
+    const reload = async () => { await st.store.load(); st.db = st.store.db; rem.at = new Date().toISOString(); render(); };
+    const memberOf = (id) => st.db.members.find((m) => m.id === id) || {};
+    const whenTxt = (iso) => (iso ? D.toDisplay(String(iso).slice(0, 10)) + " " + RM.eatTime(iso) : "");
+    const tone = { PREPARED: "warn", OPENED: "warn", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    /* the message window: text + the private-chat link. The link is a real <a>, so the browser opens it from the officer's own tap. */
+    function messageModal(rec, text, phone, calcAt) {
+      const link = RM.waLink(phone, text);
+      const m = Modal((RM.LEVEL_LABEL[rec ? rec.level : lvl()] || "Reminder") + " — " + (rec ? rec.memberName : ""), h("div", null,
+        h("p", { class: "mute", id: "rem-calc" }, "Calculated from the live ledger on " + D.longDate(calcAt.slice(0, 10)) + " at " + RM.eatTime(calcAt) + ". Every figure was re-checked when this message was prepared."),
+        h("pre", { class: "wa-preview", id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:50vh;overflow:auto" }, text),
+        link ? h("div", { class: "row" },
+          h("a", { class: "btn primary", id: "rem-open-wa", href: link, target: "_blank", rel: "noopener", style: "text-decoration:none;display:inline-block;padding:10px 16px", onclick: () => { if (rec && st.live) { commit("markReminderOpened", { id: rec.id }).then(() => toast("WhatsApp opened — delivery is NOT confirmed yet. Tap “I sent it” after you press Send in WhatsApp.", "warn")).catch((e) => toast(friendly(e), true)); } } }, "Open WhatsApp chat (private)"),
+          rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
+          : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
+        h("p", { class: "mute" }, "This opens the member's private chat only. It is never posted to a group. “Opened” is not “delivered”: WhatsApp gives no receipt, so only your own confirmation marks a reminder as sent.")));
+      return m;
+    }
+    const doPreview = (r) => act(async () => {
+      if (st.live) await reload();
+      const cur = RM.candidates(st.db, today()).rows.find((x) => x.loan.id === r.loan.id); if (!cur) throw new Error("This loan no longer has a balance to remind.");
+      if (cur.problem) throw new Error(cur.problem.replace(/^[A-Z_]+:\s*/, ""));
+      const level = lvl() === "AUTO" ? cur.schedule.recommended : lvl(), nowISO = new Date().toISOString(), msg = RM.compose(st.db, cur.loan, level, today(), nowISO);
+      const m = Modal("Preview — " + RM.LEVEL_LABEL[level] + " — " + msg.member.name, h("div", null, h("p", { class: "mute", id: "rem-calc" }, "Preview only: nothing is saved or sent. Calculated from the live ledger on " + D.longDate(today()) + " at " + RM.eatTime(nowISO) + ". It is recalculated again when you prepare it."),
+        h("pre", { id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:55vh;overflow:auto" }, msg.text)));
+      void m;
+    })().catch(() => {});
+    const doPrepare = (r) => act(async () => {
+      if (!st.live) throw new Error("This is demo data, not the live ledger. Reminders are only prepared against the live ledger.");
+      const rec = await commit("prepareReminder", { loanId: r.loan.id, level: lvl() });
+      const mem = memberOf(rec.memberId); messageModal(rec, rec.body, mem.phone, rec.calcAt);
+    })().catch(() => {});
+    const doBulk = () => act(async () => {
+      if (!st.live) throw new Error("This is demo data, not the live ledger. Reminders are only prepared against the live ledger.");
+      const res = await commit("prepareReminders", { level: lvl() });
+      const ok = res.results.filter((x) => x.ok), skip = res.results.filter((x) => !x.ok);
+      Modal("Reminders prepared — " + ok.length + " ready, " + skip.length + " skipped", h("div", null,
+        h("p", { class: "mute", id: "rem-bulk-note" }, "Calculated from the live ledger on " + D.longDate(res.asOf) + " at " + RM.eatTime(res.calcAt) + ". Each message is individually addressed to that member's own WhatsApp; NOTHING has been sent. Open each one yourself, press Send in WhatsApp, then come back and tap “I sent it”."),
+        Table([{ label: "Member", render: (x) => nameOf(x.memberId) + " (" + x.memberId + ")" }, { label: "Result", render: (x) => x.ok ? badge(RM.LEVEL_LABEL[x.level], "ok") : h("span", { class: "mute" }, String(x.reason).replace(/^[A-Z_]+:\s*/, "")) },
+          { label: "", render: (x) => x.ok ? h("button", { class: "primary", "data-open-rem": x.reminderId, onclick: () => openStored(x.reminderId) }, "Open") : "" }], res.results, null, "Nothing to prepare")));
+    })().catch(() => {});
+    const openStored = (id) => act(async () => {
+      const v = await commit("revalidateReminder", { id }), rec = (st.db.reminders || []).find((x) => x.id === id);
+      messageModal(rec, v.text, v.phone, v.calcAt);
+    })().catch(() => {});
+    const followForm = (x) => Form("Follow-up — " + x.memberName, [{ name: "f", label: "Status", options: RM.FOLLOW.filter((k) => k !== "NONE").map((k) => ({ value: k, label: RM.FOLLOW_LABEL[k] })), value: x.followUp === "NONE" ? "AWAITING_REPLY" : x.followUp }, { name: "d", label: "Date promised (only for “Promised to pay”)", type: "date" }, { name: "n", label: "Note", value: x.followUpNote || "" },
+      { type: "note", text: "A promise to pay is only a note. It changes no balance: payments are recorded in the ledger by the Admin/Treasurer in the normal way." }],
+      act(async (f) => commit("setReminderFollowUp", { id: x.id, followUp: f.f, promiseDate: f.d, note: f.n }), "Follow-up recorded"));
+    const datesForm = () => Form("Share-out date and approved repayment deadline", [
+      { type: "note", text: "These two dates drive every reminder (days remaining and how firm the message is). They are not typed into any message. Changing them is sent to the Chairperson for approval; nothing changes until a different person approves." },
+      { name: "so", label: "Official share-out date (December)", type: "date", value: cfg.shareOutDate || "" }, { name: "dl", label: "Approved repayment deadline (on or before the share-out date)", type: "date", value: cfg.deadline || "" }, { name: "reason", label: "Reason / authority (e.g. committee decision and date)" }],
+      act(async (f) => commit("setReminderDates", { shareOutDate: f.so, deadline: f.dl, loanDeadlines: cfg.loanDeadlines, reason: f.reason })), "Send to the Chairperson");
+    const loanDeadlineForm = (r) => Form("Approved deadline for " + nameOf(r.loan.memberId), [{ type: "note", text: "Only for this loan, instead of the general deadline. Needs the Chairperson's approval. Leave blank to use the general deadline." },
+      { name: "dl", label: "Deadline for this loan", type: "date", value: cfg.loanDeadlines[r.loan.id] || "" }, { name: "reason", label: "Reason / authority" }],
+      act(async (f) => commit("setReminderDates", { shareOutDate: cfg.shareOutDate, deadline: cfg.deadline, loanDeadlines: Object.assign({}, cfg.loanDeadlines, { [r.loan.id]: f.dl }), reason: f.reason })), "Send to the Chairperson");
+    const timingForm = () => Form("Reminder timing", [{ name: "u", label: "“Urgent” starts when this many days or fewer remain to the deadline", type: "number", value: cfg.urgentDays, inputmode: "numeric" }, { name: "f", label: "“Final Notice” starts when this many days or fewer remain (or the deadline has passed)", type: "number", value: cfg.finalDays, inputmode: "numeric" },
+      { name: "mi", label: "Minimum days between two reminders at the same level for one loan", type: "number", value: cfg.minIntervalDays, inputmode: "numeric" }, { name: "reason", label: "Reason" }],
+      act(async (f) => commit("setReminderSettings", { urgentDays: f.u, finalDays: f.f, minIntervalDays: f.mi, reason: f.reason }), "Saved"));
+    const wordingForm = () => Form("Edit message wording — choose the level", [{ name: "lv", label: "Level", options: RM.LEVELS.map((l) => ({ value: l, label: RM.LEVEL_LABEL[l] })) }], async (f) => {
+      const T = cfg.templates[f.lv], nm = { intro: "Opening paragraph", request: "Request paragraph", stewardship: "Stewardship paragraph", scripture: "Scripture line", thanks: "Thank-you line", signature: "Signature" };
+      setTimeout(() => Form("Wording — " + RM.LEVEL_LABEL[f.lv], [{ type: "note", text: "Words only. Amounts, dates and balances are filled in automatically and cannot be typed here. You may use " + RM.PLACEHOLDERS.map((x) => "{" + x + "}").join(" ") + "." }]
+        .concat(RM.FIELDS.map((k) => ({ name: k, label: nm[k], type: "textarea", value: T[k] }))).concat([{ name: "reason", label: "Reason" }]),
+        act(async (g) => { const t = {}; RM.FIELDS.forEach((k) => { if (g[k] !== T[k]) t[k] = g[k]; }); await commit("setReminderSettings", { templates: { [f.lv]: t }, reason: g.reason }); }, "Wording saved"), "Save wording"), 50);
+    }, "Next");
+    const notSet = !cfg.shareOutDate || !cfg.deadline;
+    return h("div", null,
+      !st.live ? h("div", { class: "blocked", id: "rem-demo" }, "DEMO DATA: this is not the live ledger. You can look, but reminders can only be prepared and opened against the live ledger.") : null,
+      h("p", { class: "mute", id: "rem-asof" }, "Figures calculated from the " + (st.live ? "live ledger" : "demo data") + " for " + D.longDate(asOf) + (rem.at ? ", loaded at " + RM.eatTime(rem.at) : "") + ". Each reminder is recalculated again, on the server, at the moment it is prepared."),
+      notSet ? h("div", { class: "blocked", id: "rem-notset" }, "The official share-out date and approved repayment deadline are not set yet. No reminder can be prepared until they are (nothing is guessed). ") : null,
+      h("div", { class: "grid" }, Card("Share-out date", cfg.shareOutDate ? D.longDate(cfg.shareOutDate) : "Not set", cfg.shareOutDate ? RM.daysBetween(asOf, cfg.shareOutDate) + " days to go" : ""), Card("Approved deadline", cfg.deadline ? D.longDate(cfg.deadline) : "Not set", cfg.deadline ? RM.daysBetween(asOf, cfg.deadline) + " days to go" : ""),
+        Card("Loans with a balance", String(rows.length), cand.excluded.settled + " settled loans are left out automatically"), Card("Total still owed", ugx(rows.filter((r) => r.figures).reduce((a, r) => a + r.figures.totalOutstanding, 0)), "as at " + D.longDate(asOf))),
+      h("div", { class: "row" }, h("button", { class: "primary", id: "rem-dates", onclick: datesForm }, "Set share-out date & deadline"), h("button", { id: "rem-timing", onclick: timingForm }, "Timing"), h("button", { id: "rem-wording", onclick: wordingForm }, "Message wording"),
+        st.live ? h("button", { id: "rem-recalc", onclick: () => act(reload, "Recalculated from the live ledger")().catch(() => {}) }, "Recalculate now") : null),
+      h("h2", { class: "sec" }, "Members with an outstanding loan"),
+      h("div", { class: "row" }, h("div", null, h("label", null, "Reminder level"), h("select", { id: "rem-level", onchange: (e) => { rem.level = e.target.value; } }, lvlOpt.map((o) => h("option", Object.assign({ value: o.value }, lvl() === o.value ? { selected: "selected" } : {}), o.label)))),
+        h("button", { class: "primary", id: "rem-bulk", disabled: !ready.length || notSet, onclick: doBulk }, "Prepare reminders for all " + ready.length + " (private chats)")),
+      Table([{ label: "Member", render: (r) => h("span", null, nameOf(r.loan.memberId), h("br"), h("span", { class: "mute" }, r.loan.memberId + " · " + r.loan.id)) }, { label: "Total owed", num: 1, render: (r) => r.figures ? ugx(r.figures.totalOutstanding) : "—" },
+        { label: "Deadline", render: (r) => r.schedule ? D.toDisplay(r.schedule.deadline) + " (" + (r.schedule.daysToDeadline >= 0 ? r.schedule.daysToDeadline + " d" : Math.abs(r.schedule.daysToDeadline) + " d overdue") + ")" : "—" },
+        { label: "Recommended", render: (r) => r.schedule ? badge(RM.LEVEL_LABEL[r.schedule.recommended], r.schedule.recommended === "FINAL" ? "bad" : r.schedule.recommended === "URGENT" ? "warn" : "ok") : "—" },
+        { label: "Last reminder", render: (r) => r.last ? RM.LEVEL_LABEL[r.last.level] + " · " + D.toDisplay(r.last.asOf) + " · " + RM.DELIVERY_LABEL[r.last.delivery] : "None yet" },
+        { label: "", render: (r) => r.problem ? h("span", { class: "mute", "data-problem": r.loan.id }, r.problem.replace(/^[A-Z_]+:\s*/, "")) : h("div", { class: "row", style: "margin:0" }, h("button", { "data-preview": r.loan.id, onclick: () => doPreview(r) }, "Preview"), h("button", { class: "primary", "data-prepare": r.loan.id, onclick: () => doPrepare(r) }, "WhatsApp"), h("button", { "data-loan-deadline": r.loan.id, onclick: () => loanDeadlineForm(r) }, "Deadline")) }], rows, null, "No loans with a balance"),
+      h("h2", { class: "sec" }, "Reminder history and follow-up"),
+      Table([{ label: "Prepared", render: (x) => whenTxt(x.createdAt) }, { label: "Member", render: (x) => x.memberName + " (" + x.memberId + ")" }, { label: "Level", render: (x) => RM.LEVEL_LABEL[x.level] }, { label: "Owed then", num: 1, render: (x) => ugx(x.figures.totalOutstanding) },
+        { label: "Delivery", render: (x) => badge(RM.DELIVERY_LABEL[x.delivery], tone[x.delivery]) }, { label: "Follow-up", render: (x) => RM.FOLLOW_LABEL[x.followUp] + (x.promiseDate ? " (by " + D.toDisplay(x.promiseDate) + ")" : "") },
+        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
+          x.delivery === "OPENED" ? h("button", { "data-hist-sent": x.id, onclick: () => act(async () => commit("confirmReminderSent", { id: x.id, note: "" }), "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null,
+          x.delivery !== "PREPARED" ? h("button", { "data-hist-follow": x.id, onclick: () => followForm(x) }, "Follow-up") : null,
+          x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
+      h("p", { class: "mute" }, "Only live-book loans are covered here. Historical loan accounts have their own reconciliation and are not reminded from this screen. Reminders never change any loan, repayment or balance; repayments are recorded in the ledger in the normal way and the next reminder then reflects them automatically."));
+  }
+
   /* ---------- messages / outbox (Admin) ---------- */
   function messages() {
     if (st.live && !st.gw) { st.gw = { SMS: false, WHATSAPP: false, loading: true }; st.store.call({ action: "gatewayStatus" }).then((r) => { st.gw = r.live; render(); }).catch(() => { st.gw = { SMS: false, WHATSAPP: false }; render(); }); }
@@ -678,7 +782,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };

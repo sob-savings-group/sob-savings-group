@@ -29,7 +29,8 @@
     outbox: { sheet: "Outbox", cols: ["id","createdAt","memberId","to","channel","template","body","status","reason","attempts","lastAttemptAt","mode","providerRef","dedupeKey","createdBy"] },
     reconciliations: { sheet: "Reconciliations", cols: [] },
     smsFailures: { sheet: "SmsFailures", cols: [] },
-    legacyAdministration: { sheet: "LegacyAdministration", cols: [] }
+    legacyAdministration: { sheet: "LegacyAdministration", cols: [] },
+    reminders: { sheet: "Reminders", cols: [] }
   };
   /* GOOGLE SHEETS CONVERTS TEXT THAT LOOKS LIKE A DATE / DATE-TIME / NUMBER into a real date or number when a script writes it, and getValues then returns a Date.
      Two defences: (1) text columns are formatted as plain text, so Sheets stores exactly what was written; (2) any Date that still comes back is turned into the text it must have been

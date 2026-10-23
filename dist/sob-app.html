@@ -28,11 +28,11 @@ header.top .brand img{width:42px;height:40px;object-fit:contain;background:#fff;
 header.top .bt1{font:700 16.5px/1.15 Georgia,"Times New Roman",serif;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header.top .bt2{font-size:12px;color:var(--mute)}
 .avatar{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;background:var(--navy);color:#fff;font-weight:700;font-size:14px}
-.pill{font-size:11.5px;padding:3px 10px;border-radius:99px;background:var(--gold-soft);color:var(--gold2);border:1px solid #ecd9a6;font-weight:650}
+.pill{font-size:12px;padding:3px 10px;border-radius:99px;background:var(--gold-soft);color:var(--gold2);border:1px solid #ecd9a6;font-weight:650}
 .menu-btn{background:transparent;border:0;padding:0;min-height:0;border-radius:50%;box-shadow:none}
 main#main{padding:16px 14px calc(var(--nav-h) + 28px);max-width:1040px;margin:0 auto;min-width:0;width:100%}
 nav.nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;background:rgba(255,255,255,.97);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:5px 6px calc(5px + env(safe-area-inset-bottom));box-shadow:0 -4px 18px rgba(18,33,63,.06)}
-nav.nav button{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:1;background:transparent;border:0;box-shadow:none;border-radius:10px;padding:5px 2px;min-height:50px;color:var(--mute);font-size:11.5px;font-weight:650}
+nav.nav button{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:1;background:transparent;border:0;box-shadow:none;border-radius:10px;padding:5px 2px;min-height:50px;color:var(--mute);font-size:12px;font-weight:650}
 nav.nav button:hover{background:var(--surface2)}
 nav.nav button.active{color:var(--navy);background:var(--navy-soft)}
 nav.nav .badge-n{position:absolute;top:2px;right:14%;background:var(--bad);color:#fff;border-radius:99px;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;padding:0 4px}
@@ -148,19 +148,19 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 /* ---- reporting period selector ---- */
 .search{margin:0 0 12px}
 .periodbar{background:#fff;border:1px solid var(--line2);border-radius:var(--r);padding:12px 14px 10px;margin:0 0 16px;box-shadow:var(--shadow-s)}
-.pb-t{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute2);font-weight:750;margin-bottom:7px}
+.pb-t{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute2);font-weight:750;margin-bottom:7px}
 .pb-custom{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:2px 0 10px}.pb-custom label{display:flex;flex-direction:column;font-size:12px;color:var(--mute);gap:4px;flex:1 1 140px;margin:0}.pb-custom input{min-height:44px}
 .pb-note{font-size:13px;color:var(--mute);display:flex;flex-wrap:wrap;gap:2px 0;padding-top:6px;border-top:1px dashed var(--line2)}.pb-note b{color:var(--navy)}
-.periodbar .chips{flex-wrap:wrap;overflow:visible;margin:0 0 6px}.periodbar .chip{min-height:36px;padding:6px 13px;font-size:13.5px}
+.periodbar .chips{flex-wrap:wrap;overflow:visible;margin:0 0 6px}.periodbar .chip{min-height:40px;padding:6px 13px;font-size:13.5px}
 .pb-note span+span{margin-left:.45em}
 .grid.two{grid-template-columns:1fr 1fr}.grid.two .card{padding:12px}.grid.two .card .val{font-size:18px}
 
 /* ---- tablets and phones ---- */
 @media(max-width:699px){
-  .periodbar .chip{padding:5px 11px;min-height:34px;font-size:13px}
+  .periodbar .chip{padding:6px 12px;min-height:40px;font-size:13.5px}
   .pb-note{font-size:12.5px}
   .grid{grid-template-columns:1fr 1fr;gap:10px}
-  .card{padding:13px 12px 11px}.card .lbl{font-size:12.5px}.card .val{font-size:clamp(15px,4.4vw,19px)}.card .sub{font-size:11.5px}
+  .card{padding:13px 12px 11px}.card .lbl{font-size:12.5px}.card .val{font-size:clamp(15px,4.4vw,19px)}.card .sub{font-size:12px}
   .hero-card{padding:18px 16px}
   th,td{padding:10px 10px;font-size:13.5px}
   header.top .bt2{display:none}
@@ -194,10 +194,24 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 @media(min-width:700px){#stmt-view .grid.two{grid-template-columns:repeat(3,1fr)}}
 @media(min-width:1000px){.modal:has(#stmt-view){max-width:1000px}}
 .pdfpair{display:inline-flex;gap:10px;flex-wrap:wrap}
+.pv-toggle{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:14px;cursor:pointer}.pv-toggle input{width:18px;height:18px;margin:0}
+
+/* ---- Back / Close, Export menu ---- */
+.backbtn{display:inline-flex;align-items:center;gap:6px;min-height:44px;margin:0 0 10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 14px;font-weight:700;color:var(--navy)}.backbtn .ic{transform:rotate(180deg)}
+.closebtn{display:inline-flex;align-items:center;gap:6px;min-height:44px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 12px;font-weight:700;color:var(--navy);flex:none}
+.modal .mhead{position:sticky;top:-8px;background:#fff;z-index:2;padding:6px 0}
+.xmenu{display:grid;gap:10px}.xm-item{display:flex;align-items:center;gap:14px;width:100%;min-height:56px;text-align:left;padding:10px 14px;border-radius:14px;background:#fff;border:1px solid var(--line)}.xm-item span{display:grid;gap:2px}.xm-item small{color:var(--mute,#5c6b86);font-size:13px}
+@media(max-width:600px){button,.btn,select,input,textarea{min-height:44px;font-size:16px}.row{gap:10px}.row>button{flex:1 1 140px}table{font-size:14px}}
+
+/* ---- login tabs ---- */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0 4px}.tab{min-height:46px;border-radius:12px;font-weight:700;background:#fff;color:var(--navy);border:1px solid var(--line)}.tab.on{background:var(--navy,#12213f);color:#fff;border-color:var(--navy,#12213f)}
+.pinrow{display:flex;gap:8px;align-items:stretch}.pinrow input{flex:1;min-width:0}.ghost{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-weight:700;color:var(--navy)}
+#conn-status{margin:12px 0 0;text-align:center}.hint.warn{color:#9a3412}
+.linkbtn{background:none;border:0;box-shadow:none;color:var(--navy);text-decoration:underline;min-height:44px;padding:0 4px;font-weight:600;margin:6px 0 0}
 </style></head><body><div id="app"></div><script>(function(){var u="";try{var d=new URLSearchParams(location.search).get("dev");if(d&&/^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$|^http:\/\/localhost(:\d+)?\//.test(d))u=d;}catch(e){}
 try{localStorage.removeItem("sobUrl");}catch(e){}
 window.SOB_DEMO_NAMES=["Demo Member 001","Demo Member 002","Demo Member 003","Demo Member 004","Demo Member 005","Demo Member 006","Demo Member 007","Demo Member 008","Demo Member 009","Demo Member 010","Demo Member 011","Demo Member 012","Demo Member 013","Demo Member 014","Demo Member 015","Demo Member 016","Demo Member 017","Demo Member 018","Demo Member 019","Demo Member 020","Demo Member 021","Demo Member 022","Demo Member 023","Demo Member 024","Demo Member 025","Demo Member 026","Demo Member 027","Demo Member 028","Demo Member 029","Demo Member 030","Demo Member 031","Demo Member 032","Demo Member 033","Demo Member 034","Demo Member 035","Demo Member 036","Demo Member 037","Demo Member 038","Demo Member 039","Demo Member 040","Demo Member 041","Demo Member 042","Demo Member 043","Demo Member 044","Demo Member 045","Demo Member 046","Demo Member 047","Demo Member 048","Demo Member 049","Demo Member 050","Demo Member 051","Demo Member 052","Demo Member 053","Demo Member 054","Demo Member 055"];
-window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</script><script>/* SOB web client - generated by build/make-site.js */
+window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"f8c5f70cc7"};})();</script><script>/* SOB web client - generated by build/make-site.js */
 
 /* ../src/core/dates.js */
 /* SOB core/dates — EAT (UTC+3, no DST). Internal format YYYY-MM-DD; display DD/MM/YYYY.
@@ -495,13 +509,15 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.gov = api; }
 })(typeof self !== "undefined" ? self : this, function (dates, ledger) {
   /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
-     (reviews/approves, never inputs). The Treasurer reviews (read-only on figures). "Committee" is the generic read-only reviewer. */
+     (reviews/approves, never inputs). The Treasurer records routine transactions (see TREASURER_WRITE). The Secretary is view-only. "Committee" is the generic read-only reviewer. */
   const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
     "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "reserve.manage", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
   const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
-  const READ = ["report.view", "audit.view", "shareout.preview"];
+  const READ = ["report.view", "audit.view", "shareout.preview", "report.export"];   // report.export = the Export / Share menu (PDF, print, WhatsApp, CSV); officers only
   const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones
-  const ROLES = ["Admin", "Chairperson", "Treasurer", "Committee", "Member"];
+  const ROLES = ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"];
+  /* Treasurer: routine money entries only (savings/other ledger entries, loan repayments, subscriptions). Voids, loan approval/payout, interest changes, reconciliation, members, security, policy, share-out and system stay with the Super Admin; gated actions still need the Chairperson. */
+  const TREASURER_WRITE = ["ledger.create", "loan.repay", "subscription.record"];
 
   // Committee permissions are an OPEN SOB DECISION (Q5). Safe default = read-only. Set via config.committeePermissions (never write permissions).
   const config = {
@@ -512,7 +528,8 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
   const PERMS = {
     Admin: () => ALL,
     Chairperson: () => READ.concat(APPROVE, ["self.view"]),
-    Treasurer: () => READ.concat(["self.view"]),
+    Treasurer: () => READ.concat(TREASURER_WRITE, ["self.view"]),
+    Secretary: () => ["report.view", "self.view"],   // records and permitted reports, view-only; no export menu
     Committee: () => (config.committeePermissions || ["report.view", "shareout.preview"]).filter((p) => !WRITE.includes(p) && !APPROVE.includes(p)),
     Member: () => ["self.view", "loan.apply", "report.self", "airtime.request", "guarantee.accept"]
   };
@@ -2257,14 +2274,278 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
 });
 
 
+/* ../src/core/reminders.js */
+/* SOB core/reminders — LOAN REMINDER AND RECOVERY (WhatsApp, officer-sent).
+   READ-ONLY with respect to money: this module never creates, changes or removes a loan, a repayment, an interest figure, a balance or an approval.
+   It only (a) READS the live ledger through the engine's own functions (ledger.loanInterestPosition / loanOutstanding / loanMonthsAfterGrace — the same ones the
+   Loans screen, statements and reports use), (b) writes a message from those figures, and (c) records, in its own history (db.reminders), what was prepared and what the
+   officer says happened to it.  No figure, date, rate or deadline is typed into a template: figures come from the ledger at the moment of preparation; the share-out date and
+   the approved deadlines come from the configuration (db.policy "reminders"), and the reminder is REFUSED if they are not set or the figures cannot be verified.
+   "Opened WhatsApp" is NOT delivery: wa.me gives no receipt. Delivery states are PREPARED -> OPENED -> SENT_CONFIRMED (the officer's own confirmation). */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./notify.js") : root.SOB.notify);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reminders = api; }
+})(typeof self !== "undefined" ? self : this, function (D, L, G, N) {
+  const KEY = "reminders";
+  const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
+  const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
+  const DELIVERY = ["PREPARED", "OPENED", "SENT_CONFIRMED", "CANCELLED"];
+  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
+  const FOLLOW = ["NONE", "AWAITING_REPLY", "REPLIED", "PROMISE_TO_PAY", "NO_RESPONSE", "CLOSED"];
+  const FOLLOW_LABEL = { NONE: "No follow-up yet", AWAITING_REPLY: "Awaiting reply", REPLIED: "Member replied", PROMISE_TO_PAY: "Promised to pay", NO_RESPONSE: "No response", CLOSED: "Closed" };
+  const PLACEHOLDERS = ["name", "id", "deadline", "daysToDeadline", "shareOutDate", "daysToShareOut"];
+  const FIELDS = ["intro", "request", "stewardship", "scripture", "thanks", "signature"];
+  /* Wording only. NO amounts, dates or rates appear here: those are filled from the ledger and the configuration. The scripture is configurable; the signature too. */
+  const DEFAULT_TEMPLATES = {
+    FRIENDLY: { intro: "As we approach the annual SOB Savings Group share-out, we respectfully remind you of your outstanding loan obligation.",
+      request: "We kindly request you to prioritize settlement within the approved period to facilitate timely reconciliation and a smooth share-out for all members.",
+      stewardship: "These funds represent the savings of fellow members who have entrusted them to our collective stewardship.", scripture: "1 Corinthians 4:2 — Faithfulness in stewardship.", thanks: "Thank you for your cooperation and commitment.", signature: "SOB Savings Group Administration." },
+    URGENT: { intro: "The annual SOB Savings Group share-out is now close, and your loan obligation remains outstanding. We humbly and respectfully urge you to settle without further delay.",
+      request: "Please arrange your payment by {deadline}. Delayed repayment affects fellow members who are expecting their savings at the share-out.",
+      stewardship: "These funds are the savings of our fellow members, entrusted to our collective stewardship. We must be found faithful with them.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", thanks: "Thank you for giving this your prompt attention.", signature: "SOB Savings Group Administration." },
+    FINAL: { intro: "This is a final notice regarding your outstanding loan, ahead of the annual SOB Savings Group share-out.",
+      request: "We ask that you settle in full by {deadline}, or contact the Administration immediately. Delayed repayment directly affects fellow members who are expecting their savings at the share-out, and unpaid balances will be dealt with in line with the group's approved policies.",
+      stewardship: "SOB is a serious financial institution holding the hard-earned savings of its members; we are accountable for every shilling entrusted to us.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", thanks: "We trust you will respond with the same faithfulness you expect for your own savings.", signature: "SOB Savings Group Administration." }
+  };
+  const DEFAULTS = { shareOutDate: null, deadline: null, loanDeadlines: {}, urgentDays: 30, finalDays: 7, minIntervalDays: 7 };
+
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
+  const daysBetween = (a, b) => Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)) - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000);
+  const hash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
+  const eatTime = (nowISO) => { const t = Date.parse(nowISO); return isNaN(t) ? "" : new Date(t + 3 * 3600000).toISOString().slice(11, 16) + " EAT"; };
+  const eatDate = (nowISO) => { const t = Date.parse(nowISO); return isNaN(t) ? "" : new Date(t + 3 * 3600000).toISOString().slice(0, 10); };
+
+  /* ---------- configuration (stored in db.policy, id "reminders"; audited) ---------- */
+  function getConfig(db) {
+    const rec = ((db && db.policy) || []).find((p) => p.id === KEY) || {};
+    const t = {}; LEVELS.forEach((lv) => { t[lv] = Object.assign({}, DEFAULT_TEMPLATES[lv], (rec.templates || {})[lv] || {}); });
+    return { shareOutDate: rec.shareOutDate || null, deadline: rec.deadline || null, loanDeadlines: Object.assign({}, rec.loanDeadlines || {}),
+      urgentDays: rec.urgentDays !== undefined ? Number(rec.urgentDays) : DEFAULTS.urgentDays, finalDays: rec.finalDays !== undefined ? Number(rec.finalDays) : DEFAULTS.finalDays,
+      minIntervalDays: rec.minIntervalDays !== undefined ? Number(rec.minIntervalDays) : DEFAULTS.minIntervalDays, templates: t,
+      datesSetBy: rec.datesSetBy || "", datesSetDate: rec.datesSetDate || "", updatedBy: rec.updatedBy || "", updatedDate: rec.updatedDate || "" };
+  }
+  const isReal = (s) => typeof s === "string" && D.isISO(s) && D.isRealDate(s);
+  function validateTemplateText(level, field, v) {
+    if (typeof v !== "string" || !v.trim()) throw new Error("INVALID: the " + LEVEL_LABEL[level] + " '" + field + "' wording cannot be empty");
+    if (v.length > 600) throw new Error("INVALID: the " + LEVEL_LABEL[level] + " '" + field + "' wording is too long (600 characters at most)");
+    const bad = (v.match(/\{([^}]*)\}/g) || []).map((x) => x.slice(1, -1)).filter((x) => !PLACEHOLDERS.includes(x));
+    if (bad.length) throw new Error("INVALID: unknown placeholder {" + bad[0] + "} in the " + LEVEL_LABEL[level] + " '" + field + "' wording. Allowed: " + PLACEHOLDERS.map((x) => "{" + x + "}").join(" "));
+    if (/\d[\d,.\s]{3,}\d|\d{4,}/.test(v.replace(/\{[^}]*\}/g, ""))) throw new Error("INVALID: wording must not contain amounts or other long numbers; figures are filled in automatically from the ledger (" + LEVEL_LABEL[level] + " '" + field + "')");
+    return v.trim();
+  }
+  /* Wording, urgency thresholds and spacing: Super Admin, no Chairperson step (no money, no date is involved). */
+  function setSettings(db, ctx, a) {
+    G.require(ctx, "notify.manage"); G.need(a && a.reason, "reason"); a = a || {};
+    const cur = getConfig(db), next = {};
+    ["urgentDays", "finalDays", "minIntervalDays"].forEach((k) => { if (a[k] !== undefined && a[k] !== "") { const n = Number(a[k]); if (!Number.isInteger(n)) throw new Error("INVALID: " + k + " must be a whole number of days"); next[k] = n; } });
+    const u = next.urgentDays !== undefined ? next.urgentDays : cur.urgentDays, f = next.finalDays !== undefined ? next.finalDays : cur.finalDays, mi = next.minIntervalDays !== undefined ? next.minIntervalDays : cur.minIntervalDays;
+    if (!(f >= 0 && f < u && u <= 120)) throw new Error("INVALID: the Final Notice window must be shorter than the Urgent window (0 <= final < urgent <= 120 days)");
+    if (!(mi >= 1 && mi <= 60)) throw new Error("INVALID: the minimum days between reminders must be 1 to 60");
+    let templates = clone((((db.policy || []).find((p) => p.id === KEY) || {}).templates) || {});
+    if (a.templates !== undefined) {
+      if (typeof a.templates !== "object" || a.templates === null) throw new Error("INVALID: templates");
+      Object.keys(a.templates).forEach((lv) => {
+        if (!LEVELS.includes(lv)) throw new Error("INVALID: unknown level " + lv);
+        Object.keys(a.templates[lv] || {}).forEach((f2) => { if (!FIELDS.includes(f2)) throw new Error("INVALID: unknown wording field " + f2); (templates[lv] = templates[lv] || {})[f2] = validateTemplateText(lv, f2, a.templates[lv][f2]); });
+      });
+    }
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(rec);
+    Object.assign(rec, { urgentDays: u, finalDays: f, minIntervalDays: mi, templates, updatedBy: ctx.by, updatedDate: ctx.today });
+    G.audit(db, ctx, "ReminderSettings", KEY, "Changed", before, clone(rec), a.reason);
+    return getConfig(db);
+  }
+  /* The share-out date and the approved repayment deadlines. GATED in commands.js: the Super Admin asks, the Chairperson approves. */
+  function setDates(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason");
+    const cur = getConfig(db);
+    const so = a.shareOutDate !== undefined ? String(a.shareOutDate).trim() : cur.shareOutDate, dl = a.deadline !== undefined ? String(a.deadline).trim() : cur.deadline;
+    if (!isReal(so)) throw new Error("INVALID: the share-out date must be a real day written YYYY-MM-DD");
+    if (so.slice(5, 7) !== "12") throw new Error("INVALID: the SOB share-out is held in December; " + so + " is not in December");
+    if (so < ctx.today) throw new Error("INVALID: the share-out date " + so + " has already passed");
+    if (!isReal(dl)) throw new Error("INVALID: the approved repayment deadline must be a real day written YYYY-MM-DD");
+    if (dl > so) throw new Error("INVALID: the repayment deadline cannot be after the share-out date");
+    const per = {}; const src = a.loanDeadlines !== undefined ? (a.loanDeadlines || {}) : cur.loanDeadlines;
+    Object.keys(src).forEach((id) => { const v = src[id]; if (v === "" || v === null) return; if (!(db.loans || []).some((l) => l.id === id)) throw new Error("NOT_FOUND: loan " + id); if (!isReal(v) || v > so) throw new Error("INVALID: deadline for " + id + " must be a real day on or before the share-out date"); per[id] = v; });
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(rec);
+    Object.assign(rec, { shareOutDate: so, deadline: dl, loanDeadlines: per, datesSetBy: ctx.by, datesSetDate: ctx.today });
+    G.audit(db, ctx, "ReminderDates", KEY, "Changed", { shareOutDate: before.shareOutDate || null, deadline: before.deadline || null, loanDeadlines: before.loanDeadlines || {} }, { shareOutDate: so, deadline: dl, loanDeadlines: per }, a.reason);
+    return getConfig(db);
+  }
+
+  /* ---------- the figures: ONLY engine functions, as at a date ---------- */
+  function figures(db, loan, asOf) {
+    const pos = L.loanInterestPosition(loan, db, asOf), outstanding = L.loanOutstanding(loan, db, asOf);
+    const sum = pos.principalOutstanding + pos.unpaidInterest + pos.unpaidPenalties;
+    if (!isFinite(outstanding) || Math.abs(sum - outstanding) > 0.5) return { error: "the loan figures do not reconcile (principal + interest + penalties = " + Math.round(sum) + " but the outstanding balance is " + Math.round(outstanding) + ")" };
+    const months = L.loanMonthsAfterGrace(loan, asOf), grace = L.loanGraceMonths(loan);
+    return { principal: Number(loan.loanAmount), disbursed: loan.date, monthlyInterest: Number(loan.assignedMonthlyInterest) || 0, interestMonths: months, graceMonths: grace, accruedInterest: pos.accruedInterest, unpaidInterest: pos.unpaidInterest,
+      unpaidPenalties: pos.unpaidPenalties, repaid: pos.totalRepaid, outstandingPrincipal: pos.principalOutstanding, totalOutstanding: outstanding, asOf };
+  }
+  function problemOf(db, loan, asOf) {
+    if (!D.isISO(loan.date)) return "the loan has no disbursement date";
+    if (loan.dateUnknown || loan.placeholderDate) return "the loan's start date is not established in the records (resolve it under Reconciliation first)";
+    if (!(Number(loan.loanAmount) > 0)) return "the loan amount is not valid";
+    const f = figures(db, loan, asOf); return f.error || null;
+  }
+  const effectiveDeadline = (cfg, loan) => (cfg.loanDeadlines && cfg.loanDeadlines[loan.id]) || cfg.deadline;
+  function recommendedLevel(cfg, daysToDeadline) { return daysToDeadline <= cfg.finalDays ? "FINAL" : daysToDeadline <= cfg.urgentDays ? "URGENT" : "FRIENDLY"; }
+  function schedule(db, cfg, loan, asOf) {
+    const dl = effectiveDeadline(cfg, loan);
+    if (!isReal(cfg.shareOutDate) || !isReal(dl)) return { error: "NOT_CONFIGURED: set the official share-out date and the approved repayment deadline first (Reminders > Dates; the Chairperson approves them)" };
+    if (cfg.shareOutDate < asOf) return { error: "NOT_CONFIGURED: the configured share-out date (" + D.longDate(cfg.shareOutDate) + ") has passed; set the date for the next share-out" };
+    const daysToDeadline = daysBetween(asOf, dl);
+    return { deadline: dl, shareOutDate: cfg.shareOutDate, daysToDeadline, daysToShareOut: daysBetween(asOf, cfg.shareOutDate), recommended: recommendedLevel(cfg, daysToDeadline) };
+  }
+
+  /* ---------- who can be reminded ---------- */
+  function candidates(db, asOf) {
+    const cfg = getConfig(db), out = [], excluded = { settled: 0 };
+    L.activeLoans(db).forEach((loan) => {
+      if (loan.status === "Cleared") { excluded.settled++; return; }
+      const member = (db.members || []).find((m) => m.id === loan.memberId) || null;
+      const prob = problemOf(db, loan, asOf);
+      if (prob) { out.push({ loan, member, problem: "CANNOT_VERIFY: " + prob }); return; }
+      const f = figures(db, loan, asOf);
+      if (f.totalOutstanding <= 0) { excluded.settled++; return; }
+      const sch = schedule(db, cfg, loan, asOf), phone = member ? N.normalizePhone(member.phone) : null;
+      const last = (db.reminders || []).filter((r) => r.loanId === loan.id && r.delivery !== "CANCELLED").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0] || null;
+      let problem = sch.error || null; if (!problem && !member) problem = "NO_MEMBER: the loan's member record was not found";
+      if (!problem && !phone) problem = "NO_VALID_PHONE: the member has no valid Uganda WhatsApp number on record";
+      if (!problem && member && !/^Active$/i.test(String(member.status || "Active"))) problem = "MEMBER_NOT_ACTIVE: member status is " + member.status;
+      out.push({ loan, member, figures: f, schedule: sch.error ? null : sch, phone, optedOut: !!(member && member.notifyOptOut), last, problem });
+    });
+    out.sort((a, b) => (a.loan.date < b.loan.date ? -1 : 1));
+    return { rows: out, excluded, asOf, config: cfg };
+  }
+
+  /* ---------- the message ---------- */
+  const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v[k] === undefined ? m : v[k]));
+  function compose(db, loan, level, asOf, nowISO) {
+    if (!LEVELS.includes(level)) throw new Error("INVALID: level must be one of " + LEVELS.join(", "));
+    const cfg = getConfig(db), member = (db.members || []).find((m) => m.id === loan.memberId);
+    if (!member) throw new Error("NOT_FOUND: member " + loan.memberId);
+    const prob = problemOf(db, loan, asOf); if (prob) throw new Error("CANNOT_VERIFY: " + prob + ". No reminder was prepared.");
+    const f = figures(db, loan, asOf); if (f.totalOutstanding <= 0) throw new Error("SETTLED: this loan has no balance outstanding; no reminder is needed");
+    const sch = schedule(db, cfg, loan, asOf); if (sch.error) throw new Error(sch.error);
+    const T = cfg.templates[level], vars = { name: member.name, id: member.id, deadline: D.longDate(sch.deadline), daysToDeadline: String(Math.abs(sch.daysToDeadline)), shareOutDate: D.longDate(sch.shareOutDate), daysToShareOut: String(sch.daysToShareOut) };
+    const L1 = [];
+    const days = sch.daysToDeadline > 0 ? sch.daysToDeadline + " day" + (sch.daysToDeadline === 1 ? "" : "s") : sch.daysToDeadline === 0 ? "Due today" : "Deadline passed " + Math.abs(sch.daysToDeadline) + " day" + (Math.abs(sch.daysToDeadline) === 1 ? "" : "s") + " ago";
+    const period = f.interestMonths + " calendar month" + (f.interestMonths === 1 ? "" : "s") + " (" + D.longDate(f.disbursed) + " to " + D.longDate(asOf) + ")" + (f.graceMonths ? ", after " + f.graceMonths + " month(s) of authorised grace" : "");
+    L1.push("Dear " + member.name + ",", "", "Praise the Lord.", "", fill(T.intro, vars), "", "*Your Loan Summary*", "Member: " + member.name + " (" + member.id + ")",
+      "Loan Principal: " + money(f.principal), "Disbursement Date: " + D.longDate(f.disbursed), "Monthly Interest: " + money(f.monthlyInterest), "Interest Period: " + period, "Accrued Interest: " + money(f.accruedInterest),
+      "Repayments Received: " + money(f.repaid), "Outstanding Principal: " + money(f.outstandingPrincipal), "Unpaid Interest: " + money(f.unpaidInterest));
+    if (f.unpaidPenalties > 0) L1.push("Unpaid Penalties: " + money(f.unpaidPenalties));
+    L1.push("*Total Outstanding: " + money(f.totalOutstanding) + "*", "_Figures as at " + D.longDate(asOf) + ", " + eatTime(nowISO) + ". Interest is added for each calendar month the loan remains unsettled._", "",
+      "Repayment Deadline: " + D.longDate(sch.deadline), "Days Remaining: " + days, "Annual Share-Out: " + D.longDate(sch.shareOutDate) + " (" + sch.daysToShareOut + " day" + (sch.daysToShareOut === 1 ? "" : "s") + " to go)", "",
+      fill(T.request, vars), "", fill(T.stewardship, vars), "", "_" + fill(T.scripture, vars) + "_", "", fill(T.thanks, vars), "", fill(T.signature, vars));
+    return { text: L1.join("\n"), figures: f, schedule: sch, level, member: { id: member.id, name: member.name } };
+  }
+  /* Private chat only: wa.me/<number>?text=... Never a group, never a number the member did not register. */
+  function waLink(phone, text) { const n = N.normalizePhone(phone); if (!n) return null; return "https://wa.me/" + n.slice(1) + "?text=" + encodeURIComponent(text); }
+  const sameFigures = (a, b) => ["principal", "disbursed", "monthlyInterest", "interestMonths", "accruedInterest", "unpaidInterest", "unpaidPenalties", "repaid", "outstandingPrincipal", "totalOutstanding"].every((k) => a[k] === b[k]);
+
+  /* ---------- history ---------- */
+  const rank = (lv) => RANK[lv] || 0;
+  function event(rec, ctx, name, note) { (rec.events = rec.events || []).push({ at: ctx.now, by: ctx.by, event: name, note: note || "" }); }
+  /* Prepare ONE reminder from the live ledger. Re-validates everything now; refuses duplicates; records exactly the text produced. */
+  function prepare(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; G.need(a.loanId, "loanId");
+    const asOf = ctx.today, loan = (db.loans || []).find((l) => l.id === a.loanId); if (!loan) throw new Error("NOT_FOUND: loan " + a.loanId);
+    if (loan.voided || !L.activeLoans(db).includes(loan)) throw new Error("INVALID: loan " + loan.id + " is not an active loan");
+    const cfg = getConfig(db), sch = schedule(db, cfg, loan, asOf); if (sch.error) throw new Error(sch.error);
+    const level = a.level && a.level !== "AUTO" ? a.level : sch.recommended, member = (db.members || []).find((m) => m.id === loan.memberId);
+    if (!member) throw new Error("NOT_FOUND: member " + loan.memberId);
+    if (!N.normalizePhone(member.phone)) throw new Error("NO_VALID_PHONE: " + member.name + " has no valid Uganda WhatsApp number on record; update the member's phone first");
+    if (!/^Active$/i.test(String(member.status || "Active"))) throw new Error("MEMBER_NOT_ACTIVE: member status is " + member.status);
+    const msg = compose(db, loan, level, asOf, ctx.now), bodyHash = hash(msg.text.replace(/_Figures as at [^\n]*\n/, ""));
+    const prior = (db.reminders || []).filter((r) => r.loanId === loan.id && r.delivery !== "CANCELLED");
+    const dup = prior.find((r) => r.bodyHash === bodyHash && r.asOf === asOf) || prior.find((r) => rank(r.level) >= rank(level) && daysBetween(r.asOf, asOf) < cfg.minIntervalDays);
+    if (dup) throw new Error("DUPLICATE_REMINDER: a " + LEVEL_LABEL[dup.level] + " for this loan was already prepared on " + D.longDate(dup.asOf) + " (" + dup.id + "). The next reminder at this level is allowed " + D.longDate(D.addDays(dup.asOf, cfg.minIntervalDays)) + ", or choose a firmer level. To send the same one again, use 'Open WhatsApp' on that history line.");
+    const rec = { id: G.uid("REM"), loanId: loan.id, memberId: member.id, memberName: member.name, level, recommendedLevel: sch.recommended, delivery: "PREPARED", followUp: "NONE", body: msg.text, bodyHash,
+      figures: msg.figures, asOf, calcAt: ctx.now, deadline: sch.deadline, shareOutDate: sch.shareOutDate, createdAt: ctx.now, createdBy: ctx.by, createdDate: ctx.today, events: [] };
+    event(rec, ctx, "PREPARED", LEVEL_LABEL[level] + (a.level && a.level !== "AUTO" && a.level !== sch.recommended ? " (chosen by officer; system recommended " + LEVEL_LABEL[sch.recommended] + ")" : " (system recommended)"));
+    (db.reminders = db.reminders || []).push(rec);
+    G.audit(db, ctx, "Reminder", rec.id, "Prepared", null, { loanId: loan.id, memberId: member.id, level, totalOutstanding: msg.figures.totalOutstanding, asOf }, "WhatsApp loan reminder prepared (not sent)");
+    return rec;
+  }
+  /* Bulk: one reminder per member's loan, each individually addressed; skips (with the reason) whatever cannot be prepared safely. Nothing is sent anywhere. */
+  function prepareMany(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {};
+    const c = candidates(db, ctx.today), want = Array.isArray(a.loanIds) && a.loanIds.length ? new Set(a.loanIds) : null, results = [];
+    c.rows.forEach((r) => {
+      if (want && !want.has(r.loan.id)) return;
+      if (r.problem) { results.push({ loanId: r.loan.id, memberId: r.loan.memberId, ok: false, reason: r.problem }); return; }
+      if (r.optedOut) { results.push({ loanId: r.loan.id, memberId: r.loan.memberId, ok: false, reason: "OPTED_OUT: the member switched notifications off; prepare this one individually if the officers decide to" }); return; }
+      try { const rec = prepare(db, ctx, { loanId: r.loan.id, level: a.level }); results.push({ loanId: r.loan.id, memberId: rec.memberId, ok: true, reminderId: rec.id, level: rec.level }); }
+      catch (e) { results.push({ loanId: r.loan.id, memberId: r.loan.memberId, ok: false, reason: String(e.message || e) }); }
+    });
+    G.audit(db, ctx, "Reminder", "bulk", "Bulk prepared", null, { prepared: results.filter((x) => x.ok).length, skipped: results.filter((x) => !x.ok).length }, "Bulk WhatsApp loan reminders prepared (individually addressed, not sent)");
+    return { asOf: ctx.today, calcAt: ctx.now, results };
+  }
+  /* Re-validate a stored reminder against the ledger right now. Returns the text ONLY if every figure is unchanged; otherwise the reminder is stale and a new one must be prepared. */
+  function revalidate(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const rec = (db.reminders || []).find((r) => r.id === (a && a.id)); if (!rec) throw new Error("NOT_FOUND: reminder " + (a && a.id));
+    if (rec.delivery === "CANCELLED") throw new Error("BAD_STATE: this reminder was cancelled");
+    const loan = (db.loans || []).find((l) => l.id === rec.loanId), member = (db.members || []).find((m) => m.id === rec.memberId);
+    if (!loan || !member) throw new Error("NOT_FOUND: loan or member");
+    if (rec.asOf !== ctx.today) throw new Error("STALE_REMINDER: this reminder was prepared on " + D.longDate(rec.asOf) + "; interest and days remaining have moved on. Prepare a new reminder.");
+    const f = figures(db, loan, ctx.today); if (f.error) throw new Error("CANNOT_VERIFY: " + f.error);
+    if (f.totalOutstanding <= 0) throw new Error("SETTLED: the loan has since been settled; no reminder is needed");
+    if (!sameFigures(rec.figures, f)) throw new Error("STALE_REMINDER: the loan balance has changed since this reminder was prepared (a repayment or adjustment was recorded). Prepare a new reminder; the old one must not be sent.");
+    if (!N.normalizePhone(member.phone)) throw new Error("NO_VALID_PHONE: the member's WhatsApp number is no longer valid");
+    return { id: rec.id, text: rec.body, phone: member.phone, calcAt: rec.calcAt, verifiedAt: ctx.now };
+  }
+  const byId = (db, id) => { const r = (db.reminders || []).find((x) => x.id === id); if (!r) throw new Error("NOT_FOUND: reminder " + id); return r; };
+  /* The officer's browser opened WhatsApp. That is all it means. */
+  function markOpened(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); if (r.delivery === "CANCELLED") throw new Error("BAD_STATE: cancelled");
+    if (r.delivery === "PREPARED") { r.delivery = "OPENED"; r.openedAt = ctx.now; }
+    event(r, ctx, "WHATSAPP_OPENED", "WhatsApp was opened with this message. This does not confirm that it was sent or delivered.");
+    G.audit(db, ctx, "Reminder", r.id, "WhatsApp opened", null, { delivery: r.delivery }, "Opening WhatsApp is not delivery");
+    return r;
+  }
+  function confirmSent(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); if (r.delivery === "CANCELLED") throw new Error("BAD_STATE: cancelled");
+    if (r.delivery === "PREPARED") throw new Error("BAD_STATE: open WhatsApp first; you cannot confirm sending a message that was never opened");
+    if (r.delivery === "SENT_CONFIRMED") return r;
+    r.delivery = "SENT_CONFIRMED"; r.sentConfirmedAt = ctx.now; r.sentConfirmedBy = ctx.by; if (r.followUp === "NONE") r.followUp = "AWAITING_REPLY";
+    event(r, ctx, "SENT_CONFIRMED", (a.note || "") + " (officer's confirmation; WhatsApp provides no delivery receipt)");
+    G.audit(db, ctx, "Reminder", r.id, "Sent confirmed by officer", null, { delivery: r.delivery }, a.note || "");
+    return r;
+  }
+  function setFollowUp(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
+    if (!FOLLOW.includes(a.followUp)) throw new Error("INVALID: follow-up must be one of " + FOLLOW.join(", "));
+    if (r.delivery === "PREPARED" || r.delivery === "CANCELLED") throw new Error("BAD_STATE: record follow-up only after WhatsApp has been opened for this reminder");
+    if (a.followUp === "PROMISE_TO_PAY") { if (!isReal(a.promiseDate)) throw new Error("INVALID: a promise to pay needs the date the member promised (YYYY-MM-DD)"); r.promiseDate = a.promiseDate; }
+    const prev = r.followUp; r.followUp = a.followUp; if (a.note) r.followUpNote = String(a.note).slice(0, 300);
+    event(r, ctx, "FOLLOW_UP:" + a.followUp, (a.note || "") + (a.promiseDate ? " promised by " + a.promiseDate : ""));
+    G.audit(db, ctx, "Reminder", r.id, "Follow-up", prev, a.followUp, a.note || "");
+    return r;
+  }
+  function cancel(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); G.need(a.reason, "reason");
+    if (r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: a reminder confirmed as sent cannot be cancelled; record a follow-up instead");
+    if (r.delivery === "CANCELLED") return r;
+    const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
+    G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
+  }
+  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+});
+
+
 /* ../src/core/commands.js */
 /* SOB core/commands — the ONLY ways to change the ledger. A closed whitelist: the server (and the demo UI) run exactly these,
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./ledger.js") : root.SOB.ledger);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, L) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
     splitRepayment: (db, ctx, a) => {
@@ -2379,7 +2660,17 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
     openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     utilizeReserve: (db, ctx, a) => RSV.utilizeReserve(db, ctx, { date: a.date, amount: a.amount, purpose: a.purpose, evidence: a.evidence, reason: a.reason }),
-    setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason)
+    setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason),
+    /* Loan reminders (WhatsApp, officer-sent). They never touch loans, repayments, interest or balances: see core/reminders.js. */
+    prepareReminder: (db, ctx, a) => RM.prepare(db, ctx, { loanId: a.loanId, level: a.level }),
+    prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
+    revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
+    markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
+    setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
+    cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),
+    setReminderSettings: (db, ctx, a) => RM.setSettings(db, ctx, { urgentDays: a.urgentDays, finalDays: a.finalDays, minIntervalDays: a.minIntervalDays, templates: a.templates, reason: a.reason }),
+    setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
      (New loan approval and exceptional security have their own two-step flows in loans.js / security.js; ledger entry types the Chairperson must also approve are
@@ -2400,6 +2691,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
     transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
+    setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
   const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -2417,6 +2709,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");
     return a.id || "";
   };
   function requestApproval(db, ctx, name, args) {
@@ -3536,6 +3829,42 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
 });
 
 
+/* ../src/client/privacy.js */
+/* SOB client/privacy — a DISPLAY-ONLY switch that shows SOB IDs instead of member names in reports, previews, PDFs, prints and WhatsApp text.
+   It only rewrites the text that is about to be shown; the member register, transactions, balances and audit trail are never touched.
+   The officers' footer on the letterhead is left as it is (it is the group's signature, not a member listing). */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.privacy = api; }
+})(typeof self !== "undefined" ? self : this, function () {
+  const HONORIFIC = /^(?:(?:mr|mrs|miss|ms|min|minister|elder|pastor|bishop|rev|dr|eng|hon|prof)\.?\s+)+/i;
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+
+  function build(members) {
+    const byName = new Map();   // lower-case variant -> [ids]
+    const add = (name, id) => { const n = norm(name); if (n.length < 5) return; const k = n.toLowerCase(); if (!byName.has(k)) byName.set(k, { text: n, ids: [] }); const e = byName.get(k); if (!e.ids.includes(id)) e.ids.push(id); };
+    (members || []).forEach((m) => { [m.name, m.originalName].forEach((n) => { if (!n) return; add(n, m.id); const s = norm(n).replace(HONORIFIC, ""); if (s !== norm(n)) add(s, m.id); }); });
+    const entries = Array.from(byName.values()).sort((a, b) => b.text.length - a.text.length);
+    const idsOf = new Map(); entries.forEach((e) => idsOf.set(e.text.toLowerCase(), e.ids.slice().sort().join("/")));
+    const pat = (list) => list.length ? new RegExp("(?<![A-Za-z0-9\\u00c0-\\u024f])(?:" + list.join("|") + ")(?![A-Za-z0-9\\u00c0-\\u024f])", "gi") : null;
+    const plain = pat(entries.map((e) => escRe(e.text).replace(/ /g, "\\s+"))), html = pat(entries.map((e) => escRe(escHtml(e.text)).replace(/ /g, "\\s+")));
+    const tidy = (s) => s.replace(/(SOB-\d+)\s*[(\[]\s*\1\s*[)\]]/g, "$1").replace(/(SOB-\d+)(\s*[·—–|:,-]\s*)\1(?!\d)/g, "$1");
+    const lookup = (m) => idsOf.get(norm(m).toLowerCase().replace(/&amp;/g, "&").replace(/&#39;/g, "'")) || "";
+    const hideText = (s) => (typeof s === "string" && plain ? tidy(s.replace(plain, (m) => lookup(m) || m)) : s);
+    /* a whole printable page: letterhead + body are rewritten, the officers' footer (tfoot) and every HTML tag are left alone */
+    const hideHTML = (h) => !html ? h : String(h).split(/(<tfoot>[\s\S]*?<\/tfoot>)/).map((part, i) => i % 2 ? part : part.split(/(<[^>]*>)/).map((p, j) => j % 2 ? p : tidy(p.replace(html, (m) => lookup(m) || m))).join("")).join("");
+    const hideReport = (rep) => {
+      const walk = (v) => Array.isArray(v) ? v.map(walk) : v && typeof v === "object" ? Object.keys(v).reduce((o, k) => { o[k] = typeof v[k] === "function" ? v[k] : walk(v[k]); return o; }, {}) : hideText(v);
+      const out = walk(rep); if (typeof rep.printHTML === "function") out.printHTML = (meta) => hideHTML(rep.printHTML(meta)); return out;
+    };
+    return { hideText, hideHTML, hideReport, active: !!plain };
+  }
+  return { build };
+});
+
+
 /* ui.js */
 /* Shared UI components. All text goes through textContent (no innerHTML with data) so ledger content can never inject markup. */
 (function () {
@@ -3557,14 +3886,14 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
     h("tbody", null, rows.length ? rows.map((r) => h("tr", Object.assign({ class: onRow ? "click" : "" }, onRow ? { onclick: () => onRow(r) } : {}),
       cols.map((c) => h("td", { class: c.num ? "n" : "", "data-label": c.label || "" }, c.render ? c.render(r) : r[c.key])))) : [h("tr", { class: "empty-row" }, h("td", { colspan: cols.length, class: "wrap" }, Empty({ icon: "book", title: emptyText || "Nothing to show yet", text: emptyText ? "" : "Entries will appear here as they are recorded." })))])));
   const State = (kind, msg, retry) => kind === "loading" ? Skeleton() : h("div", { class: "state err" }, Icon("alert", 28), h("div", null, msg), retry ? h("button", { class: "primary", onclick: retry }, "Try again") : null);
-  function Modal(title, body) {
-    const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg) close(); } });
+  function Modal(title, body, opts) {
+    const bg = h("div", { class: "modal-bg", role: "dialog", "aria-modal": "true", "aria-label": title, onclick: (e) => { if (e.target === bg && !(opts && opts.sticky)) close(); } });   // a form is never dismissed by a stray tap outside it
     const onKey = (e) => { if (e.key === "Escape") close(); };
     /* the phone/browser Back button closes the top window instead of leaving the app */
     let pushed = false; try { history.pushState({ sobModal: 1 }, ""); pushed = true; } catch (e) {}
-    const close = () => { document.removeEventListener("keydown", onKey); const was = bg.isConnected; bg.remove(); if (was && pushed && history.state && history.state.sobModal) { try { history.back(); } catch (e) {} } };
+    const close = () => { document.removeEventListener("keydown", onKey); const was = bg.isConnected; bg.remove(); if (was && pushed && history.state && history.state.sobModal) { try { window.SOBUI.ignorePop = (window.SOBUI.ignorePop || 0) + 1; history.back(); } catch (e) { window.SOBUI.ignorePop = Math.max(0, (window.SOBUI.ignorePop || 1) - 1); } } };
     document.addEventListener("keydown", onKey);
-    bg.append(h("div", { class: "modal" }, h("div", { class: "grab" }), h("div", { class: "mhead" }, h("h2", null, title), h("button", { class: "iconbtn", "data-close": "1", "aria-label": "Close", onclick: close }, Icon("x"))), body));
+    bg.append(h("div", { class: "modal" }, h("div", { class: "grab" }), h("div", { class: "mhead" }, h("h2", null, title), h("button", { class: "closebtn", "data-close": "1", "aria-label": "Close", onclick: close }, Icon("x", 18), " Close")), body));
     document.body.append(bg); return { close, el: bg };
   }
   /* Busy: one global "working" indicator (spinner + message + progress bar) used for sign-in, loading, saving and report generation. */
@@ -3593,7 +3922,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"4be689dfc9"};})();</scrip
       const v = {}; fields.forEach((f) => { if (f.type !== "note") v[f.name] = inputs[f.name].value; });
       const btn = m.el.querySelector("[data-submit]"); if (btn.disabled) return; btn.disabled = true; err.textContent = "";
       try { await onSubmit(v); m.close(); } catch (e) { err.textContent = friendly(e); btn.disabled = false; }
-    } }, submitLabel || "Save"))));
+    } }, submitLabel || "Save"), h("button", { "data-cancel": "1", onclick: () => m.close() }, "Cancel"))), { sticky: true });
     return m;
   }
   const friendly = (e) => {
@@ -3681,7 +4010,7 @@ window.SOBMember = function (E) {
     return ["*Sons of Bethel (SOB) Savings Group*", "Statement for " + myName() + " (" + me() + ")", "As at " + fdate(today()), "", "Total savings: " + ugx(p.savings), "Held for guarantees: " + ugx(p.committed), "Available: " + ugx(p.available), "", "Latest activity:"]
       .concat(last.map((t) => "• " + fdate(t.date) + " " + typeInfo(t.type)[0] + " " + num(t.amount))).concat(["", "Issued from the SOB platform."]).join("\n");
   }
-  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "print-statement", "data-print": 1, onclick: () => { const p = stmtPeriod(); printAccount(me(), { from: p.from, to: p.to }, false); } }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "download-statement", "data-dlpdf": 1, onclick: () => { const p = stmtPeriod(); printAccount(me(), { from: p.from, to: p.to }, false, "", true); } }, Icon("download", 18), " Download PDF"), h("button", { id: "open-statement", onclick: () => openStatement(me(), false) }, Icon("book", 18), " Full statement"), h("button", { id: "share-statement", onclick: () => waShare(statementText()) }, Icon("share", 18), " Share on WhatsApp"));
+  const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "open-statement", onclick: () => openStatement(me(), false) }, Icon("book", 18), " View full statement"));
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
   const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name, so you can view your balances and statements. To request a loan, accept a guarantee or change your PIN, sign in with your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
@@ -3712,7 +4041,7 @@ window.SOBMember = function (E) {
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
     if (given.length) el.append(Section("Loans I guarantee"), List([Row({ icon: "shield", tone: "commit", title: given.length + (given.length === 1 ? " active guarantee" : " active guarantees"), sub: "Held until the borrowers repay", right: ugx(pos.committed), onOpen: () => go("myguar") })]));
     /* Shortcuts */
-    el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("print", "Statement (PDF)", "Print or save", () => printAccount(me(), {}, false)), quick("download", "Download PDF", "Save to your phone", () => printAccount(me(), {}, false, "", true)), quick("share", "Share on WhatsApp", "Send your balance", () => waShare(statementText())), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
+    el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("book", "My statement", "See every transaction", () => openStatement(me(), false)), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
     /* Recent activity */
     const recent = history().slice(0, 5);
     el.append(Section("Recent activity", h("button", { class: "iconbtn", "aria-label": "See all", onclick: () => go("savings") }, Icon("chevron"))), recent.length ? List(recent.map((t) => txnRow(t, txnDetail))) : Empty({ icon: "wallet", title: "No activity yet", text: "Your savings and payments will appear here as they are recorded." }));
@@ -3770,7 +4099,6 @@ window.SOBMember = function (E) {
       b.append(Section("Repayments"), steps.length ? List(steps.map((x) => Row({ icon: "loan", tone: "interest", title: ugx(x.amount), sub: fdate(x.date) + " · " + (x.interest ? ugx(x.interest) + " interest" : "no interest") + (x.principal ? " · " + ugx(x.principal) + " off the loan" : ""), right: x.principal ? "−" + num(x.principal) : "", rightSub: x.principal ? "off the loan" : "" }))) : Empty({ icon: "loan", title: "No repayments yet", text: "Repayments you make will show here, split into interest and loan." }));
     } else b.append(h("div", { class: "card" }, Field("Amount requested", ugx(loan.loanAmount)), Field("Applied on", fdate(loan.applicationDate)), h("p", { class: "mute" }, nextStep(loan))));
     if (gs.length) b.append(Section("Guarantors"), List(gs.map((g) => Row({ icon: "shield", tone: g.status === "Active" ? "commit" : "", title: (st.db.members.find((m) => m.id === g.guarantorId) || {}).name || g.guarantorId, sub: g.status === "Requested" ? "Asked — waiting for their answer" : g.status === "Active" ? "Backing " + ugx(L.guaranteeRemaining(g)) + " now" : "Released", right: ugx(g.amount), rightSub: g.releasedAmount ? "released " + num(g.releasedAmount) : "" }))));
-    if (live) b.append(h("div", { class: "row" }, h("button", { class: "primary", "data-print": 1, onclick: () => printAccount(me(), {}, false, id) }, Icon("print", 18), " Loan statement (PDF)"), h("button", { class: "primary", "data-dlpdf": 1, onclick: () => printAccount(me(), {}, false, id, true) }, Icon("download", 18), " Download PDF")));
     Modal("Loan " + ugx(loan.loanAmount), b);
   }
 
@@ -3821,7 +4149,7 @@ window.SOBMember = function (E) {
 /* app.js */
 (function () {
   const { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, Banner, Empty, Confirm, Chips } = window.SOBUI;
-  const S = window.SOB, CFG = window.SOB_CONFIG || {}, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports, FYM = S.fy, RSV = S.reserve, PRC = S.profitrec, HLN = S.histloans, FRP = S.finreports;
+  const S = window.SOB, CFG = window.SOB_CONFIG || {}, RMD = S.reminders, D = S.dates, L = S.ledger, G = S.gov, LN = S.loans, N = S.notify, AT = S.airtime, C = S.cycle, K = S.kpis, R = S.reports, FYM = S.fy, RSV = S.reserve, PRC = S.profitrec, HLN = S.histloans, FRP = S.finreports;
   const app = document.getElementById("app");
   const st = { store: null, db: null, user: null, view: null, live: !!CFG.ledgerUrl, memberView: null };
   const today = () => D.todayISO();
@@ -3846,26 +4174,24 @@ window.SOBMember = function (E) {
     const box = h("div", { class: "card", style: "max-width:420px;margin:40px auto" }, h("h2", { class: "sec", style: "margin-top:0" }, "Sons of Bethel Savings Group"),
       h("div", { class: "mute" }, st.live ? "Sign in" : "DEV preview — demo data, nothing is saved or sent anywhere."));
     if (!st.live) {
-      const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
+      const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
       const mem = h("select", { id: "demo-member" }, st.db.members.map((m) => h("option", { value: m.id }, m.id + " — " + m.name)));
       box.append(h("label", null, "Role"), role, h("label", null, "Member (for Member role)"), mem,
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB ID, e.g. SOB-005 or sob5", autocapitalize: "characters", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "new-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
-      const go = async () => {
+      const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
+      const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
+      /* ONE place that runs a sign-in and shows the outcome; "produce" returns the store.login() promise (or throws a format message). */
+      const attempt = async (produce, kind, typedId) => {
         if (working) return; working = true; problem.replaceChildren();
         try {
-          /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted */
-          /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-          const typed = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), m = /^(\S+)[\s,;:]+(.+)$/.exec(typed);
-          let id = typed, secret = pin.value.trim();
-          if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = typed;
-          if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
-          const u = await st.store.login(id, secret);
+          const u = await produce();
           st.user = u; st.view = null;
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
@@ -3873,20 +4199,54 @@ window.SOBMember = function (E) {
           const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || "");
           problem.replaceChildren();
           if (conn) connBanner(problem, e);   /* a connection/deployment problem is never hidden in a disappearing toast: it stays on screen with the exact cause and who to call */
-          else { const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
-            if (MSG[e.code]) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code])); } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true); }
+          else if (e.code === "BAD_CREDENTIALS" && kind === "officer") problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Access denied. Check your Staff ID and PIN. If you are a member, use the Member login instead."));
+          else if (MSG[e.code]) {
+            problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code]));
+            if (e.code === "BAD_CREDENTIALS" && kind === "member" && OFFICER_ID.test(String(typedId || "").trim())) problem.append(h("div", { class: "hint", id: "login-officer-hint" }, "Officers (ADMIN, CHAIR, TREASURER, SECRETARY): please use the Officer login tab."));
+          } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true);
         }
         finally { working = false; }
       };
-      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      const go = () => attempt(async () => {
+        /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted. SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
+        const nm = fname.value.trim(), idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
+        /* the PIN box counts ONLY when the member opened it ("I have a PIN"): a hidden box can never carry a browser-saved password into a name sign-in */
+        let id, secret = pinRow.hidden ? "" : pin.value.trim(), typed = idPart || nm;
+        if (idPart) { const m = /^(\S+)[\s,;:]+(.+)$/.exec(idPart); id = m ? m[1] : idPart; if (!secret) secret = nm || (m ? m[2].trim() : ""); }
+        else { const m = /^(\S+)[\s,;:]+(.+)$/.exec(nm); id = nm; if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = nm; }
+        if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        return st.store.login(id, secret);
+      }, "member", mid.value || fname.value);
+      /* Officer login: Staff ID + PIN only (no first name, no member SOB ID). The PIN box has no browser auto-fill and a Show button, so a wrong or old saved PIN can never go in unseen. */
+      const sid = h("input", { id: "sid", placeholder: "ADMIN, CHAIR, TREAS or SECRETARY", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const spin = h("input", { type: "password", id: "spin", placeholder: "Your officer PIN", autocomplete: "new-password", autocorrect: "off", autocapitalize: "off", spellcheck: "false", enterkeyhint: "go" });
+      const showPin = h("button", { type: "button", id: "spin-show", class: "ghost", "aria-label": "Show or hide PIN", onclick: () => { const on = spin.type === "password"; spin.type = on ? "text" : "password"; showPin.textContent = on ? "Hide" : "Show"; } }, "Show");
+      const officerGo = () => attempt(async () => {
+        const id = sid.value.trim(), secret = spin.value.trim();
+        if (!id) throw Object.assign(new Error("Enter your Staff ID"), { code: "FORMAT" });
+        if (!secret) throw Object.assign(new Error("Enter your PIN"), { code: "FORMAT" });
+        return st.store.login(id, secret);
+      }, "officer", sid.value);
+      [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
+      /* Two boxes for a member: First name + SOB ID. A PIN is only asked for when the member has one ("I have a PIN"); the choice is remembered on this device. */
+      let hasPin = false; try { hasPin = localStorage.getItem("sob.hasPin") === "1"; } catch (e) {}
+      const pinRow = h("div", { id: "pin-row", hidden: !hasPin }, h("label", { for: "pin" }, "PIN"), pin);
+      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { pinRow.hidden = !pinRow.hidden; pinToggle.textContent = pinRow.hidden ? "I have a PIN" : "I do not have a PIN"; try { localStorage.setItem("sob.hasPin", pinRow.hidden ? "0" : "1"); } catch (e) {} if (pinRow.hidden) pin.value = ""; else pin.focus(); } }, hasPin ? "I do not have a PIN" : "I have a PIN");
+      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, pinRow, pinToggle,
+        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
+        h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));
+      const tabM = h("button", { type: "button", id: "tab-member", class: "tab on", role: "tab", onclick: () => setMode("member") }, "Member login"), tabO = h("button", { type: "button", id: "tab-officer", class: "tab", role: "tab", onclick: () => setMode("officer") }, "Officer login");
+      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? fname : sid).focus(); };
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
-        h("label", { for: "mid" }, "SOB ID"), mid, h("div", { class: "hint", id: "id-hint" }, "Type it any way you like: SOB-005, sob5 or SOB005 all work."),
-        h("label", { for: "pin" }, "PIN"), pin, h("div", { class: "hint", id: "pin-hint" }, "Enter your PIN. No PIN yet? Leave it empty and type your SOB ID followed by your first name in the first box, for example: SOB-005 Aaron (view only)."),
-        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"), problem,
+        h("div", { class: "tabs", role: "tablist" }, tabM, tabO), memberPanel, officerPanel, problem,
+        h("div", { id: "conn-status", class: "hint", role: "status" }, "Checking connection…"),
         h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
     }
+    if (st.conn) setTimeout(() => paintConn(st.conn), 0);
     return box;
   }
 
@@ -3904,7 +4264,7 @@ window.SOBMember = function (E) {
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -3912,12 +4272,18 @@ window.SOBMember = function (E) {
     try { await st.store.load(); st.db = st.store.db; st.lastLoad = Date.now(); if (!document.querySelector(".modal-bg")) render(); if (!quiet) toast("Up to date"); } catch (e) { if (!quiet) toast(friendly(e), true); } finally { st.refreshing = false; }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden && st.live && st.user && Date.now() - (st.lastLoad || 0) > 60000) refresh(true); });
-  const go = (v, fromBack) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); if (!fromBack && st.user) { try { history.pushState({ sobView: v }, ""); } catch (e) {} } };
+  const go = (v, fromBack) => { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); if (v !== st.view) st.prevView = st.view; st.view = v; st.memberView = null; render(); window.scrollTo(0, 0); if (!fromBack && st.user) { try { history.pushState({ sobView: v }, ""); } catch (e) {} } };
   /* Back button / swipe-back: closes the open window first, then returns to the previous screen */
   window.addEventListener("popstate", (e) => {
+    const U = window.SOBUI;
+    if (U.ignorePop > 0) { U.ignorePop--; return; }                       // the Back we issued ourselves when a window was closed
     const m = document.querySelectorAll(".modal-bg"); if (m.length) { m[m.length - 1].remove(); return; }
-    const sv = e.state && e.state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
+    const state = e.state || {};
+    if (st.user && state.sobModal) { try { history.back(); } catch (x) {} return; }   // a leftover window entry: step over it
+    if (st.user && !state.sobView) { try { history.pushState({ sobView: st.view }, ""); } catch (x) {} toast("You are still signed in. Use the sign-out button (top right) to leave."); return; }   // Back never drops a signed-in user out of the app
+    const sv = state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
   });
+  window.addEventListener("beforeunload", (e) => { if (document.querySelector(".modal-bg form, .modal-bg input[name]")) { e.preventDefault(); e.returnValue = ""; } });
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
   function navBadge(k) {
     if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.awaiting(st.db) : 0;
@@ -3938,6 +4304,8 @@ window.SOBMember = function (E) {
     shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, nav.map(([k, l, , ic, cls]) => { const n = navBadge(k);
       return h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null); })));
     const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
+    if (!st.guarded) { st.guarded = true; try { history.replaceState({ sobBase: 1 }, ""); history.pushState({ sobView: st.view }, ""); } catch (e) {} }
+    if (st.view !== nav[0][0]) main.append(h("button", { class: "backbtn", id: "back-btn", "aria-label": "Back", onclick: () => go(st.prevView && st.prevView !== st.view && nav.some((n) => n[0] === st.prevView) ? st.prevView : nav[0][0]) }, Icon("chevron", 18), " Back"));
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
     try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
@@ -3945,7 +4313,7 @@ window.SOBMember = function (E) {
   /* ---------- drill-down helpers ---------- */
   const loanRows = (filter) => K.loanBook(st.db, today()).filter(filter || (() => true));
   const loanCols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Principal", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "Status", render: (v) => badge(v.status, v.balance > 0 ? "warn" : "ok") }];
-  function drill(title, definition, body) { Modal(title, h("div", null, definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); }
+  function drill(title, definition, body) { const dm = Modal(title, h("div", null, privacyToggle(), definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); dm.el.setAttribute("data-rep", "1"); }
 
   /* ---------- Admin: dashboard ---------- */
   /* What needs a human today — the first thing staff see. */
@@ -3976,17 +4344,18 @@ window.SOBMember = function (E) {
   /* a report on screen: friendly headings, numbers right-aligned with thousands separators, rows open the record behind them */
   const tableFromReport = (rep, onRow) => {
     const numCol = (c) => rep.rows.length > 0 && rep.rows.every((r) => r[c] === "" || r[c] == null || typeof r[c] === "number");
-    return Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+    const tbl = Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+    tbl.setAttribute("data-rep", "1"); return tbl;
   };
   function openRow(o, asAt) { if (!o || !o.id) return; if (o.kind === "member") openMember(o.id, asAt); else if (o.kind === "loan") openLoan(o.id, asAt); else if (o.kind === "entry") openEntry(o.id); }
   /* KPI -> drill-down -> entries -> PDF: the table, the totals and the PDF are all the same K.report() for the chosen period. */
   function openKpi(key) {
     const p = periodNow(), rep = K.report(st.db, key, p, { open: true }), k = rep.kpi, shown = k.unit === "UGX" ? ugx(k.value) : k.unit === "%" ? (k.value == null ? "—" : k.value + "%") : String(k.value);
     const tie = k.tied ? h("p", { class: "ok", "data-tie": "ok" }, "✓ The entries below add up to the figure on the dashboard: " + shown) : h("div", { class: "blocked", "data-tie": "bad" }, "The entries below do not add up to the dashboard figure. Please tell the Super Admin before relying on it.");
-    Modal(rep.title, h("div", null, h("p", { class: "mute" }, rep.definition),
+    const km = Modal(rep.title, h("div", null, privacyToggle(), h("p", { class: "mute" }, rep.definition),
       rep.summary.length ? h("div", { class: "grid two" }, rep.summary.map(([l, v]) => Card(l, typeof v === "number" ? (/%/.test(l) ? v + "%" : ugx(v)) : String(v)))) : null,
-      h("div", { class: "row" }, printButton(rep, rep.period), h("button", { "data-csv": 1, onclick: () => download(key + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV")),
-      tableFromReport(rep, (r) => openRow(r._open, p.to)), tie));
+      h("div", { class: "row" }, printButton(rep, rep.period, key + ".csv")),
+      tableFromReport(rep, (r) => openRow(r._open, p.to)), tie)); km.el.setAttribute("data-rep", "1");
   }
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
   function dashboard() {
@@ -4020,10 +4389,25 @@ window.SOBMember = function (E) {
   const printAccount = (memberId, period, internal, loanId, download) => { const a = SX.memberAccount(st.db, memberId, period || {}, { internal: !!internal, loanId: loanId || "" }); return (download ? downloadReport : printReport)(accountRep(a), a.period.text); };
   const statementText = (a) => ["*Sons of Bethel (SOB) Savings Group*", "Statement " + a.ref, a.member.name + " (" + a.member.id + ")", a.period.text, "", "Opening savings: " + ugx(a.savings.opening), "Deposits: " + ugx(a.savings.deposits), "Profit credited: " + ugx(a.savings.profit), "Withdrawals: " + ugx(a.savings.withdrawals), "Share-outs: " + ugx(a.savings.shareOuts), "*Closing savings: " + ugx(a.savings.closing) + "*"]
     .concat(a.loans.length ? ["", "Loans owed: " + ugx(a.loanTotals.owed) + " (loan " + ugx(a.loanTotals.principalLeft) + " + interest " + ugx(a.loanTotals.interestDue) + ")"] : []).concat(["", "CONFIDENTIAL: for the named member only. Full PDF statement available from the Treasurer."]).join("\n");
+  /* ---------- privacy switch: show SOB IDs instead of member names in reports (display only; nothing stored is changed) ---------- */
+  try { st.hideNames = sessionStorage.getItem("sob.hideNames") === "1"; } catch (e) { st.hideNames = false; }
+  const PV = () => window.SOB.privacy.build(st.db.members);
+  const shownRep = (rep) => (st.hideNames ? PV().hideReport(rep) : rep);
+  const shownText = (t) => (st.hideNames ? PV().hideText(t) : t);
+  const shownHTML = (h2) => (st.hideNames ? PV().hideHTML(h2) : h2);
+  const originals = new WeakMap();
+  /* report areas are marked data-rep; names in them are swapped for IDs (and back) in place, so every open preview follows the switch at once */
+  function applyPrivacy() {
+    const pv = st.hideNames ? PV() : null;
+    document.querySelectorAll("[data-rep]").forEach((box) => { const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) { if (pv) { if (!originals.has(n)) originals.set(n, n.data); const t = pv.hideText(originals.get(n)); if (n.data !== t) n.data = t; } else if (originals.has(n)) { n.data = originals.get(n); originals.delete(n); } } });
+  }
+  let pvTimer = null; new MutationObserver(() => { if (pvTimer) return; pvTimer = setTimeout(() => { pvTimer = null; applyPrivacy(); }, 0); }).observe(document.body, { childList: true, subtree: true });
+  const setHideNames = (v) => { st.hideNames = !!v; try { sessionStorage.setItem("sob.hideNames", v ? "1" : "0"); } catch (e) {} document.querySelectorAll("[data-hide-names]").forEach((c) => { c.checked = !!v; }); applyPrivacy(); };
+  const privacyToggle = () => (isStaff() ? h("label", { class: "pv-toggle" }, h("input", { type: "checkbox", "data-hide-names": 1, checked: st.hideNames, onchange: (e) => setHideNames(e.target.checked) }), " Hide member names (show SOB IDs only)") : null);
   /* WhatsApp: always opens WhatsApp itself (the app on a phone, WhatsApp Web on a computer) with the message ready; never the Windows/OS share list */
-  const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(text); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
+  const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(shownText(text)); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   function statementView(memberId, internal, toDate) {
-    const box = h("div", { id: "stmt-view" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
+    const box = h("div", { id: "stmt-view", "data-rep": "1" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
     let key = "all", cust = null; const maxTo = toDate || today();
     const periodOf = () => (key === "custom" && cust ? cust : (() => { const p = D.presetPeriod(key, maxTo, FYM.table(st.db)); return p; })());
     const lines = (rows) => h("div", { class: "panel kvs" }, rows.map(([l, v, cls]) => h("div", { class: "kv" + (cls ? " " + cls : "") }, h("span", null, l), h("b", null, typeof v === "number" ? ugx(v) : v))));
@@ -4037,8 +4421,7 @@ window.SOBMember = function (E) {
         h("p", { class: "mute", id: "stm-period" }, h("b", null, a.member.name + " · " + a.member.id), " · " + a.period.text + (p.fy ? " · " + p.fyLabel + " (share-out to share-out)" : "")),
         h("div", { class: "grid two", id: "stm-summary" }, cards.map(([l, v, tone, open]) => Card(l, ugx(v), null, open, tone))),
         s.checks.movementsAddUp ? Banner("ok", "Opening " + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + ". Agrees with the ledger.") : Banner("bad", "These figures do not add up to the ledger. Please tell the Treasurer before relying on this statement."),
-        h("div", { class: "row" }, h("button", { class: "primary", id: "stm-pdf", "data-print": 1, onclick: () => printReport(accountRep(a), a.period.text) }, Icon("print", 18), " Statement (PDF)"), h("button", { class: "primary", id: "stm-dl", "data-dlpdf": 1, onclick: () => downloadReport(accountRep(a), a.period.text) }, Icon("download", 18), " Download PDF"), h("button", { id: "stm-wa", onclick: () => waSend(statementText(a)) }, Icon("share", 18), " Share on WhatsApp"),
-          h("button", { id: "stm-csv", "data-csv": 1, onclick: () => download("statement_" + a.member.id + ".csv", "text/csv", R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref })) }, "Download CSV")),
+        privacyToggle(), h("div", { class: "row" }, exportMenu({ id: "stm-export", rep: () => accountRep(a), period: a.period.text, wa: () => statementText(a), csv: { name: "statement_" + a.member.id + ".csv", get: () => R.toCSV({ columns: ["date", "ref", "type", "details", "amount", "effect", "balance"], rows: a.transactions, totals: {}, title: a.ref }) } })),
         h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
         h("p", { class: "mute rg-blurb" }, a.reserve.text),
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
@@ -4062,7 +4445,7 @@ window.SOBMember = function (E) {
     return Busy.run("Preparing your PDF…", () => new Promise((res) => {
       const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
       /* Opens the branded statement in its own tab: desktop prints straight away; on a phone use "Print / Save as PDF" there (then share the PDF on WhatsApp). */
-      const render = (m) => (rep.printHTML ? rep.printHTML(m) : R.toPrintHTML(rep, m));
+      const render = (m) => shownHTML(rep.printHTML ? rep.printHTML(m) : R.toPrintHTML(rep, m));
       const w = window.open(URL.createObjectURL(new Blob([render(Object.assign({ toolbar: true }, meta))], { type: "text/html" })), "_blank");
       if (w) { setTimeout(res, 300); return; }
       toast("Please allow pop-ups for this page to open the PDF.", "warn");
@@ -4076,7 +4459,7 @@ window.SOBMember = function (E) {
     return Busy.run("Building your PDF…", () => new Promise((res) => setTimeout(() => {
       try {
         const meta = { generated: D.toDisplay(today()), period: period || rep.period || "As at " + D.toDisplay(today()) };
-        const html = rep.printHTML ? rep.printHTML(meta) : R.toPrintHTML(rep, meta);
+        const html = shownHTML(rep.printHTML ? rep.printHTML(meta) : R.toPrintHTML(rep, meta));
         const bytes = window.SOB.pdf.fromHTML(html);
         window.SOB.pdf.save(bytes, window.SOB.pdf.fileName(rep.title || "SOB_report", today()));
         toast("PDF saved to your device.");
@@ -4084,7 +4467,22 @@ window.SOBMember = function (E) {
       res();
     }, 30)));
   }
-  const printButton = (rep, period) => h("span", { class: "pdfpair" }, h("button", { "data-print": 1, onclick: () => printReport(rep, period) }, "Print / PDF"), h("button", { "data-dlpdf": 1, onclick: () => downloadReport(rep, period) }, Icon("download", 18), " Download PDF"));
+  /* ONE "Export / Share" button for authorised officers (Super Admin, Chairperson, Treasurer): PDF, print, WhatsApp and CSV live inside it. Members and view-only roles never see it; the permission is report.export. */
+  const canExport = () => !!st.user && isStaff() && G.can(ctx(), "report.export");
+  function exportMenu(o) {
+    if (!canExport()) return null;
+    const get = () => (typeof o.rep === "function" ? o.rep() : o.rep);
+    const item = (id, ic, title, sub, attr, fn) => h("button", Object.assign({ class: "xm-item", id }, attr, { onclick: () => { m.close(); setTimeout(fn, 60); } }), Icon(ic, 22), h("span", null, h("b", null, title), h("small", null, sub)));
+    let m;
+    return h("button", { class: "primary", id: o.id || "export-menu", "data-export": 1, onclick: () => {
+      m = Modal("Export / Share", h("div", { class: "xmenu" }, privacyToggle(),
+        item("xm-dl", "download", "Download PDF", "Save a PDF to this device", { "data-dlpdf": 1 }, () => downloadReport(get(), o.period)),
+        item("xm-print", "print", "Print / Save as PDF", "Opens the print page", { "data-print": 1 }, () => printReport(get(), o.period)),
+        o.wa ? item("xm-wa", "share", "Share on WhatsApp", "Opens WhatsApp with the message ready", { "data-wa": 1 }, () => waSend(o.wa())) : null,
+        o.csv ? item("xm-csv", "download", "Download CSV", "A spreadsheet file", { "data-csv": 1 }, () => download(o.csv.name, "text/csv", o.csv.get ? o.csv.get() : R.toCSV(shownRep(get())))) : null));
+    } }, Icon("share", 18), " Export / Share");
+  }
+  const printButton = (rep, period, csvName) => exportMenu({ rep, period, csv: csvName ? { name: csvName } : null });
 
   /* ---------- members ---------- */
   function openMember(id, asAt0) {
@@ -4120,8 +4518,9 @@ window.SOBMember = function (E) {
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
     /* every action sits at the TOP of the loan, next to the statement buttons, so nothing is hidden below a long page */
-    const row = h("div", { class: "row", id: "loan-actions" }, h("button", { "data-print": 1, id: "loan-statement-pdf", onclick: () => printAccount(loan.memberId, {}, true, id) }, Icon("print", 18), " Loan statement (PDF)"), h("button", { "data-dlpdf": 1, id: "loan-statement-dl", onclick: () => printAccount(loan.memberId, {}, true, id, true) }, Icon("download", 18), " Download PDF"));
-    const b = h("div", null, row,
+    const loanAcct = () => SX.memberAccount(st.db, loan.memberId, {}, { internal: true, loanId: id });
+    const row = h("div", { class: "row", id: "loan-actions" }, exportMenu({ id: "loan-export", rep: () => accountRep(loanAcct()), period: loanAcct().period.text, wa: () => statementText(loanAcct()) }));
+    const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
@@ -4249,14 +4648,14 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     ["Governance and records", "Approvals, reconciliation and the notices that were sent.", ["Awaiting approval", "Reconciliation register", "Notification log", "Airtime requests"]]];
   function openReport(n) {
     const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
-    drill(rep.title, null, h("div", null, h("div", { class: "row" }, h("button", { "data-csv": 1, onclick: () => download(n.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(rep)) }, "Download CSV"), printButton(rep, rep.period)), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
+    drill(rep.title, null, h("div", null, h("div", { class: "row" }, printButton(rep, rep.period, n.replace(/\W+/g, "_") + ".csv")), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
   }
   function reports() {
     const extra = FYM.table(st.db).map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; });
     const groups = REPORT_GROUPS.map((g) => (g[0] === "General Reserve Fund" ? [g[0], g[1], g[2].concat(extra)] : g));
     const p = periodNow(), ov = K.overview(st.db, p), grouped = groups.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
     const rcard = (n) => { const c = Card(n, PERIOD_AWARE.includes(n) ? "Follows the period" : "As at today", "Open · print / PDF · CSV", () => openReport(n)); c.classList.add("rpt"); return c; };
-    return h("div", null, periodBar(),
+    return h("div", null, periodBar(), privacyToggle(),
       h("h2", { class: "sec" }, "Key figures · tap one to see the transactions behind it"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, kpiShow(ov[k]), d.period, () => openKpi(k)); })),
       groups.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
         h("div", { class: "grid" }, names.filter((n) => REPORTS[n]).map(rcard)))),
@@ -4313,6 +4712,110 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     return h("div", null, top, h("h2", { class: "sec" }, staff ? "Airtime requests" : "My airtime requests"), Table(cols, list));
   }
 
+
+  /* ---------- loan reminders: WhatsApp, officer-sent (Super Admin) ----------
+     Every figure comes from the live ledger through the engine's own loan functions (core/reminders.js -> core/ledger.js); nothing is typed or stored in a template.
+     The server prepares and records each message at the moment you press the button; this screen only displays. Opening WhatsApp is NOT recorded as delivery. */
+  function remindersView() {
+    const RM = RMD, asOf = today(), rem = st.rem = st.rem || { level: "AUTO" };
+    if (st.live && rem.fresh !== true) {
+      if (!rem.loading) { rem.loading = true; st.store.load().then(() => { st.db = st.store.db; rem.fresh = true; rem.loading = false; rem.at = new Date().toISOString(); render(); }).catch((e) => { rem.loading = false; rem.err = friendly(e); rem.fresh = "failed"; render(); }); }
+      if (rem.fresh !== "failed") return State("loading");
+    }
+    if (st.live && rem.fresh === "failed") return h("div", null, h("div", { class: "blocked", id: "rem-unverified" }, "The live ledger could not be loaded (" + (rem.err || "no connection") + "), so no reminder can be prepared: figures that cannot be verified are never shown. "), h("button", { class: "primary", id: "rem-retry", onclick: () => { rem.fresh = false; render(); } }, "Try again"));
+    const cfg = RM.getConfig(st.db), cand = RM.candidates(st.db, asOf), rows = cand.rows, ready = rows.filter((r) => !r.problem), hist = (st.db.reminders || []).slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const lvlOpt = [{ value: "AUTO", label: "Automatic (recommended for each member)" }].concat(RM.LEVELS.map((l) => ({ value: l, label: RM.LEVEL_LABEL[l] })));
+    const lvl = () => rem.level || "AUTO";
+    const reload = async () => { await st.store.load(); st.db = st.store.db; rem.at = new Date().toISOString(); render(); };
+    const memberOf = (id) => st.db.members.find((m) => m.id === id) || {};
+    const whenTxt = (iso) => (iso ? D.toDisplay(String(iso).slice(0, 10)) + " " + RM.eatTime(iso) : "");
+    const tone = { PREPARED: "warn", OPENED: "warn", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    /* the message window: text + the private-chat link. The link is a real <a>, so the browser opens it from the officer's own tap. */
+    function messageModal(rec, text, phone, calcAt) {
+      const link = RM.waLink(phone, text);
+      const m = Modal((RM.LEVEL_LABEL[rec ? rec.level : lvl()] || "Reminder") + " — " + (rec ? rec.memberName : ""), h("div", null,
+        h("p", { class: "mute", id: "rem-calc" }, "Calculated from the live ledger on " + D.longDate(calcAt.slice(0, 10)) + " at " + RM.eatTime(calcAt) + ". Every figure was re-checked when this message was prepared."),
+        h("pre", { class: "wa-preview", id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:50vh;overflow:auto" }, text),
+        link ? h("div", { class: "row" },
+          h("a", { class: "btn primary", id: "rem-open-wa", href: link, target: "_blank", rel: "noopener", style: "text-decoration:none;display:inline-block;padding:10px 16px", onclick: () => { if (rec && st.live) { commit("markReminderOpened", { id: rec.id }).then(() => toast("WhatsApp opened — delivery is NOT confirmed yet. Tap “I sent it” after you press Send in WhatsApp.", "warn")).catch((e) => toast(friendly(e), true)); } } }, "Open WhatsApp chat (private)"),
+          rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
+          : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
+        h("p", { class: "mute" }, "This opens the member's private chat only. It is never posted to a group. “Opened” is not “delivered”: WhatsApp gives no receipt, so only your own confirmation marks a reminder as sent.")));
+      return m;
+    }
+    const doPreview = (r) => act(async () => {
+      if (st.live) await reload();
+      const cur = RM.candidates(st.db, today()).rows.find((x) => x.loan.id === r.loan.id); if (!cur) throw new Error("This loan no longer has a balance to remind.");
+      if (cur.problem) throw new Error(cur.problem.replace(/^[A-Z_]+:\s*/, ""));
+      const level = lvl() === "AUTO" ? cur.schedule.recommended : lvl(), nowISO = new Date().toISOString(), msg = RM.compose(st.db, cur.loan, level, today(), nowISO);
+      const m = Modal("Preview — " + RM.LEVEL_LABEL[level] + " — " + msg.member.name, h("div", null, h("p", { class: "mute", id: "rem-calc" }, "Preview only: nothing is saved or sent. Calculated from the live ledger on " + D.longDate(today()) + " at " + RM.eatTime(nowISO) + ". It is recalculated again when you prepare it."),
+        h("pre", { id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:55vh;overflow:auto" }, msg.text)));
+      void m;
+    })().catch(() => {});
+    const doPrepare = (r) => act(async () => {
+      if (!st.live) throw new Error("This is demo data, not the live ledger. Reminders are only prepared against the live ledger.");
+      const rec = await commit("prepareReminder", { loanId: r.loan.id, level: lvl() });
+      const mem = memberOf(rec.memberId); messageModal(rec, rec.body, mem.phone, rec.calcAt);
+    })().catch(() => {});
+    const doBulk = () => act(async () => {
+      if (!st.live) throw new Error("This is demo data, not the live ledger. Reminders are only prepared against the live ledger.");
+      const res = await commit("prepareReminders", { level: lvl() });
+      const ok = res.results.filter((x) => x.ok), skip = res.results.filter((x) => !x.ok);
+      Modal("Reminders prepared — " + ok.length + " ready, " + skip.length + " skipped", h("div", null,
+        h("p", { class: "mute", id: "rem-bulk-note" }, "Calculated from the live ledger on " + D.longDate(res.asOf) + " at " + RM.eatTime(res.calcAt) + ". Each message is individually addressed to that member's own WhatsApp; NOTHING has been sent. Open each one yourself, press Send in WhatsApp, then come back and tap “I sent it”."),
+        Table([{ label: "Member", render: (x) => nameOf(x.memberId) + " (" + x.memberId + ")" }, { label: "Result", render: (x) => x.ok ? badge(RM.LEVEL_LABEL[x.level], "ok") : h("span", { class: "mute" }, String(x.reason).replace(/^[A-Z_]+:\s*/, "")) },
+          { label: "", render: (x) => x.ok ? h("button", { class: "primary", "data-open-rem": x.reminderId, onclick: () => openStored(x.reminderId) }, "Open") : "" }], res.results, null, "Nothing to prepare")));
+    })().catch(() => {});
+    const openStored = (id) => act(async () => {
+      const v = await commit("revalidateReminder", { id }), rec = (st.db.reminders || []).find((x) => x.id === id);
+      messageModal(rec, v.text, v.phone, v.calcAt);
+    })().catch(() => {});
+    const followForm = (x) => Form("Follow-up — " + x.memberName, [{ name: "f", label: "Status", options: RM.FOLLOW.filter((k) => k !== "NONE").map((k) => ({ value: k, label: RM.FOLLOW_LABEL[k] })), value: x.followUp === "NONE" ? "AWAITING_REPLY" : x.followUp }, { name: "d", label: "Date promised (only for “Promised to pay”)", type: "date" }, { name: "n", label: "Note", value: x.followUpNote || "" },
+      { type: "note", text: "A promise to pay is only a note. It changes no balance: payments are recorded in the ledger by the Admin/Treasurer in the normal way." }],
+      act(async (f) => commit("setReminderFollowUp", { id: x.id, followUp: f.f, promiseDate: f.d, note: f.n }), "Follow-up recorded"));
+    const datesForm = () => Form("Share-out date and approved repayment deadline", [
+      { type: "note", text: "These two dates drive every reminder (days remaining and how firm the message is). They are not typed into any message. Changing them is sent to the Chairperson for approval; nothing changes until a different person approves." },
+      { name: "so", label: "Official share-out date (December)", type: "date", value: cfg.shareOutDate || "" }, { name: "dl", label: "Approved repayment deadline (on or before the share-out date)", type: "date", value: cfg.deadline || "" }, { name: "reason", label: "Reason / authority (e.g. committee decision and date)" }],
+      act(async (f) => commit("setReminderDates", { shareOutDate: f.so, deadline: f.dl, loanDeadlines: cfg.loanDeadlines, reason: f.reason })), "Send to the Chairperson");
+    const loanDeadlineForm = (r) => Form("Approved deadline for " + nameOf(r.loan.memberId), [{ type: "note", text: "Only for this loan, instead of the general deadline. Needs the Chairperson's approval. Leave blank to use the general deadline." },
+      { name: "dl", label: "Deadline for this loan", type: "date", value: cfg.loanDeadlines[r.loan.id] || "" }, { name: "reason", label: "Reason / authority" }],
+      act(async (f) => commit("setReminderDates", { shareOutDate: cfg.shareOutDate, deadline: cfg.deadline, loanDeadlines: Object.assign({}, cfg.loanDeadlines, { [r.loan.id]: f.dl }), reason: f.reason })), "Send to the Chairperson");
+    const timingForm = () => Form("Reminder timing", [{ name: "u", label: "“Urgent” starts when this many days or fewer remain to the deadline", type: "number", value: cfg.urgentDays, inputmode: "numeric" }, { name: "f", label: "“Final Notice” starts when this many days or fewer remain (or the deadline has passed)", type: "number", value: cfg.finalDays, inputmode: "numeric" },
+      { name: "mi", label: "Minimum days between two reminders at the same level for one loan", type: "number", value: cfg.minIntervalDays, inputmode: "numeric" }, { name: "reason", label: "Reason" }],
+      act(async (f) => commit("setReminderSettings", { urgentDays: f.u, finalDays: f.f, minIntervalDays: f.mi, reason: f.reason }), "Saved"));
+    const wordingForm = () => Form("Edit message wording — choose the level", [{ name: "lv", label: "Level", options: RM.LEVELS.map((l) => ({ value: l, label: RM.LEVEL_LABEL[l] })) }], async (f) => {
+      const T = cfg.templates[f.lv], nm = { intro: "Opening paragraph", request: "Request paragraph", stewardship: "Stewardship paragraph", scripture: "Scripture line", thanks: "Thank-you line", signature: "Signature" };
+      setTimeout(() => Form("Wording — " + RM.LEVEL_LABEL[f.lv], [{ type: "note", text: "Words only. Amounts, dates and balances are filled in automatically and cannot be typed here. You may use " + RM.PLACEHOLDERS.map((x) => "{" + x + "}").join(" ") + "." }]
+        .concat(RM.FIELDS.map((k) => ({ name: k, label: nm[k], type: "textarea", value: T[k] }))).concat([{ name: "reason", label: "Reason" }]),
+        act(async (g) => { const t = {}; RM.FIELDS.forEach((k) => { if (g[k] !== T[k]) t[k] = g[k]; }); await commit("setReminderSettings", { templates: { [f.lv]: t }, reason: g.reason }); }, "Wording saved"), "Save wording"), 50);
+    }, "Next");
+    const notSet = !cfg.shareOutDate || !cfg.deadline;
+    return h("div", null,
+      !st.live ? h("div", { class: "blocked", id: "rem-demo" }, "DEMO DATA: this is not the live ledger. You can look, but reminders can only be prepared and opened against the live ledger.") : null,
+      h("p", { class: "mute", id: "rem-asof" }, "Figures calculated from the " + (st.live ? "live ledger" : "demo data") + " for " + D.longDate(asOf) + (rem.at ? ", loaded at " + RM.eatTime(rem.at) : "") + ". Each reminder is recalculated again, on the server, at the moment it is prepared."),
+      notSet ? h("div", { class: "blocked", id: "rem-notset" }, "The official share-out date and approved repayment deadline are not set yet. No reminder can be prepared until they are (nothing is guessed). ") : null,
+      h("div", { class: "grid" }, Card("Share-out date", cfg.shareOutDate ? D.longDate(cfg.shareOutDate) : "Not set", cfg.shareOutDate ? RM.daysBetween(asOf, cfg.shareOutDate) + " days to go" : ""), Card("Approved deadline", cfg.deadline ? D.longDate(cfg.deadline) : "Not set", cfg.deadline ? RM.daysBetween(asOf, cfg.deadline) + " days to go" : ""),
+        Card("Loans with a balance", String(rows.length), cand.excluded.settled + " settled loans are left out automatically"), Card("Total still owed", ugx(rows.filter((r) => r.figures).reduce((a, r) => a + r.figures.totalOutstanding, 0)), "as at " + D.longDate(asOf))),
+      h("div", { class: "row" }, h("button", { class: "primary", id: "rem-dates", onclick: datesForm }, "Set share-out date & deadline"), h("button", { id: "rem-timing", onclick: timingForm }, "Timing"), h("button", { id: "rem-wording", onclick: wordingForm }, "Message wording"),
+        st.live ? h("button", { id: "rem-recalc", onclick: () => act(reload, "Recalculated from the live ledger")().catch(() => {}) }, "Recalculate now") : null),
+      h("h2", { class: "sec" }, "Members with an outstanding loan"),
+      h("div", { class: "row" }, h("div", null, h("label", null, "Reminder level"), h("select", { id: "rem-level", onchange: (e) => { rem.level = e.target.value; } }, lvlOpt.map((o) => h("option", Object.assign({ value: o.value }, lvl() === o.value ? { selected: "selected" } : {}), o.label)))),
+        h("button", { class: "primary", id: "rem-bulk", disabled: !ready.length || notSet, onclick: doBulk }, "Prepare reminders for all " + ready.length + " (private chats)")),
+      Table([{ label: "Member", render: (r) => h("span", null, nameOf(r.loan.memberId), h("br"), h("span", { class: "mute" }, r.loan.memberId + " · " + r.loan.id)) }, { label: "Total owed", num: 1, render: (r) => r.figures ? ugx(r.figures.totalOutstanding) : "—" },
+        { label: "Deadline", render: (r) => r.schedule ? D.toDisplay(r.schedule.deadline) + " (" + (r.schedule.daysToDeadline >= 0 ? r.schedule.daysToDeadline + " d" : Math.abs(r.schedule.daysToDeadline) + " d overdue") + ")" : "—" },
+        { label: "Recommended", render: (r) => r.schedule ? badge(RM.LEVEL_LABEL[r.schedule.recommended], r.schedule.recommended === "FINAL" ? "bad" : r.schedule.recommended === "URGENT" ? "warn" : "ok") : "—" },
+        { label: "Last reminder", render: (r) => r.last ? RM.LEVEL_LABEL[r.last.level] + " · " + D.toDisplay(r.last.asOf) + " · " + RM.DELIVERY_LABEL[r.last.delivery] : "None yet" },
+        { label: "", render: (r) => r.problem ? h("span", { class: "mute", "data-problem": r.loan.id }, r.problem.replace(/^[A-Z_]+:\s*/, "")) : h("div", { class: "row", style: "margin:0" }, h("button", { "data-preview": r.loan.id, onclick: () => doPreview(r) }, "Preview"), h("button", { class: "primary", "data-prepare": r.loan.id, onclick: () => doPrepare(r) }, "WhatsApp"), h("button", { "data-loan-deadline": r.loan.id, onclick: () => loanDeadlineForm(r) }, "Deadline")) }], rows, null, "No loans with a balance"),
+      h("h2", { class: "sec" }, "Reminder history and follow-up"),
+      Table([{ label: "Prepared", render: (x) => whenTxt(x.createdAt) }, { label: "Member", render: (x) => x.memberName + " (" + x.memberId + ")" }, { label: "Level", render: (x) => RM.LEVEL_LABEL[x.level] }, { label: "Owed then", num: 1, render: (x) => ugx(x.figures.totalOutstanding) },
+        { label: "Delivery", render: (x) => badge(RM.DELIVERY_LABEL[x.delivery], tone[x.delivery]) }, { label: "Follow-up", render: (x) => RM.FOLLOW_LABEL[x.followUp] + (x.promiseDate ? " (by " + D.toDisplay(x.promiseDate) + ")" : "") },
+        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
+          x.delivery === "OPENED" ? h("button", { "data-hist-sent": x.id, onclick: () => act(async () => commit("confirmReminderSent", { id: x.id, note: "" }), "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null,
+          x.delivery !== "PREPARED" ? h("button", { "data-hist-follow": x.id, onclick: () => followForm(x) }, "Follow-up") : null,
+          x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
+      h("p", { class: "mute" }, "Only live-book loans are covered here. Historical loan accounts have their own reconciliation and are not reminded from this screen. Reminders never change any loan, repayment or balance; repayments are recorded in the ledger in the normal way and the next reminder then reflects them automatically."));
+  }
+
   /* ---------- messages / outbox (Admin) ---------- */
   function messages() {
     if (st.live && !st.gw) { st.gw = { SMS: false, WHATSAPP: false, loading: true }; st.store.call({ action: "gatewayStatus" }).then((r) => { st.gw = r.live; render(); }).catch(() => { st.gw = { SMS: false, WHATSAPP: false }; render(); }); }
@@ -4363,7 +4866,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
           const slips = []; for (const m of need) { const pin = randPin(); await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin }); slips.push([m.id, m.name, pin]); }
           download("SOB-PIN-slips-" + today() + ".csv", "text/csv", "id,name,pin\n" + slips.map((x) => [x[0], '"' + x[1].replace(/"/g, '""') + '"', x[2]].join(",")).join("\n")); await refresh();
         }, "Sign-ins created; PIN slips downloaded") }, "Create member sign-ins + download PIN slips"),
-        h("button", { id: "make-staff", onclick: () => Form("Staff sign-in", [{ name: "id", label: "Sign-in ID (e.g. CHAIR)" }, { name: "name", label: "Name" }, { name: "role", label: "Role", options: ["Chairperson", "Treasurer", "Committee"] }],
+        h("button", { id: "make-staff", onclick: () => Form("Staff sign-in", [{ name: "id", label: "Sign-in ID (e.g. CHAIR)" }, { name: "name", label: "Name" }, { name: "role", label: "Role", options: ["Chairperson", "Treasurer", "Secretary", "Committee"] }],
           act(async (f) => { const pin = randPin8(); await st.store.createUser({ id: f.id.trim().toUpperCase(), name: f.name, role: f.role, pin }); download("SOB-staff-PIN-" + f.id.trim().toUpperCase() + ".csv", "text/csv", "id,name,role,pin\n" + [f.id.trim().toUpperCase(), '"' + f.name + '"', f.role, pin].join(",")); await refresh(); }, "Sign-in created; PIN downloaded")) }, "Add staff sign-in")));
     };
     return h("div", { id: "records-panel" }, h("h2", { class: "sec", style: "margin-top:0" }, "Load SOB records"),
@@ -4380,7 +4883,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       rep ? h("div", { id: "records-report" }, h("h2", { class: "sec" }, "Reconciliation report"),
         h("div", { class: "grid" }, Card("Actual savings", ugx(rep.totals.savings), "After withdrawals and share-outs"), Card("Available savings", ugx(rep.totals.available)), Card("Loan principal outstanding", ugx(rep.totals.loanPrincipal)), Card("Unpaid interest", ugx(rep.totals.unpaidInterest)), Card("Profit credited", ugx(rep.totals.profitCredited)), Card("Open register items", String(rep.register.filter((x) => x.status === "Open").length))),
         h("p", { class: "mute" }, "Actual savings = deposits + profit − withdrawals − share-outs. Loans never reduce savings. Available savings = actual savings less guarantee commitments (guarantors begin 2027). The last column of the member table is a memo only."),
-        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf)), h("button", { onclick: () => download(r.title.replace(/\W+/g, "_") + ".csv", "text/csv", R.toCSV(r)) }, "Download CSV")), tableFromReport(r))),
+        reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf), r.title.replace(/\W+/g, "_") + ".csv")), tableFromReport(r))),
         rep.missing.length ? h("div", null, h("h3", null, "Information genuinely missing"), h("ul", null, rep.missing.map((x) => h("li", null, x)))) : null,
         rep.decisions.length ? h("div", null, h("h3", null, "SOB decisions still needed"), h("ul", null, rep.decisions.map((x) => h("li", null, x)))) : null) : null,
       sign());
@@ -4428,9 +4931,10 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
+  const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };
   const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or PIN."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
     if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
@@ -4440,7 +4944,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });
         st.store.onChange((e) => { Busy.set(e.busy ? e.busyLabel : null); if (e.status === "synced") st.lastLoad = Date.now(); if (e.status === "signed-out" && st.user) { st.user = null; st.view = null; render(); toast("Your session ended. Please sign in again.", "warn"); } });
         st.db = { members: [], transactions: [], loans: [] };
-        st.store.check().then((r) => { st.conn = r; const host = document.getElementById("login-problem"); if (host && !r.ok && !host.children.length) connBanner(host, r.error); });   // tell people BEFORE they type if the endpoint is unreachable/misconfigured
+        st.store.check().then((r) => { st.conn = r; const host = document.getElementById("login-problem"); if (host && !r.ok && !host.children.length) connBanner(host, r.error); paintConn(r); });   // tell people BEFORE they type if the endpoint is unreachable/misconfigured
         if (await st.store.resume()) { st.user = st.store.user; if (!st.user.mustChangePin) { await st.store.load(); st.db = st.store.db; } }
       }
       else { const raw = await (await fetch("demo-seed.json")).json(); st.db = S.migrate.migrateLegacy(raw, today()); }
