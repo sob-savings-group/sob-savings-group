@@ -22,11 +22,11 @@ LN.repayLoan(db0, ctxA("Admin"), l4.id, L.loanOutstanding(l4, db0, today), today
 S.writeCollection(env.ss, "users", [A.makeUser(env, { id: "ADMIN", role: "Admin", pin: "admin-pin-1" }), A.makeUser(env, { id: "CHAIR", role: "Chairperson", pin: "chair-pin-1" }), A.makeUser(env, { id: "TREAS", role: "Treasurer", pin: "treas-pin-1" }), A.makeUser(env, { id: M1.id, role: "Member", memberId: M1.id, pin: "1234" })]);
 const tok = (id, pin) => API.handle(env, { action: "login", id, pin }).token, adminTok = tok("ADMIN", "admin-pin-1"); API.handle(env, { action: "importSnapshot", token: adminTok, db: db0 });
 const cmd = (t, name, args) => API.handle(env, { action: "command", token: t, name, args });
-const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" }; let down = false;
+const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" }; let down = false, oldBackend = false;   // oldBackend: reproduces a Google deployment still running an earlier version (does not know the reminder commands)
 const srv = http.createServer((q, r) => {
   const u = decodeURIComponent(q.url.split("?")[0]);
-  if (u === "/api") { if (down) { q.destroy(); return; } let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); r.end(JSON.stringify(q.method === "GET" ? { ok: true, service: "SOB Ledger" } : API.handle(env, JSON.parse(b)))); }); return; }
-  if (u === "/app/config.js") { r.writeHead(200, { "Content-Type": "text/javascript" }); return r.end('window.SOB_CONFIG={ledgerUrl:"/api"};'); }
+  if (u === "/api") { if (down) { q.destroy(); return; } let b = ""; q.on("data", (c) => (b += c)); q.on("end", () => { r.writeHead(200, { "Content-Type": "application/json" }); let out; if (q.method === "GET") out = { ok: true, service: "SOB Ledger" }; else { const req = JSON.parse(b); out = oldBackend && req.action === "command" && /Reminder/.test(req.name) ? { ok: false, error: "UNKNOWN_COMMAND: " + req.name } : API.handle(env, req); if (oldBackend) out.build = "OLDBUILD001"; } r.end(JSON.stringify(out)); }); return; }
+  if (u === "/app/config.js") { r.writeHead(200, { "Content-Type": "text/javascript" }); return r.end('window.SOB_CONFIG={ledgerUrl:"/api"' + (oldBackend ? ',build:"NEWBUILD002"' : '') + '};'); }
   const f = path.join(root, u); if (!f.startsWith(root) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); return r.end("no"); }
   r.writeHead(200, { "Content-Type": mime[path.extname(f)] || "text/plain" }); r.end(fs.readFileSync(f));
 });
@@ -98,6 +98,15 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   ok(g(chair).db.reminders.length === 0 && g(treas).db.reminders.length === 0, "Chairperson and Treasurer never receive reminder history or message texts");
   const mv = g(memT).db; ok(!(mv.reminders && mv.reminders.length) && !JSON.stringify(mv).includes("Praise the Lord"), "a member's view contains no reminder text");
   ok(cmd(treas, "prepareReminder", { loanId: l1.id }).error && /FORBIDDEN/.test(cmd(treas, "prepareReminder", { loanId: l1.id }).error), "the server refuses reminders from the Treasurer even if the browser is tampered with");
+  /* A Google deployment still on an earlier version: the exact live symptom ("setReminderDates" in red). It must be explained, and nothing may change. */
+  { oldBackend = true; const before = JSON.stringify(g(adminTok).db.policy), opg = await (await b.newContext({ viewport: { width: 1100, height: 900 } })).newPage(); await opg.context().route("https://wa.me/**", (r) => r.abort());
+    await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.click("#tab-officer"); await opg.fill("#sid", "ADMIN"); await opg.fill("#spin", "admin-pin-1"); await opg.click("#officer-go"); await opg.waitForSelector("#kpis");
+    await opg.click('[data-nav="reminders"]'); await opg.waitForSelector("#rem-asof");
+    ok(/OLDBUILD001/.test(await opg.locator("#rem-backend-old").innerText()) && /NEWBUILD002/.test(await opg.locator("#rem-backend-old").innerText()), "an older Google backend is announced on the Reminders screen with both version ids");
+    await opg.click("#rem-dates"); await opg.fill('.modal input[name="so"]', soYear + "-12-26"); await opg.fill('.modal input[name="dl"]', soYear + "-12-12"); await opg.fill('.modal input[name="reason"]', "test"); await opg.click("[data-submit]");
+    await opg.waitForSelector(".modal .err, .toast.bad"); const msg = await opg.locator(".modal .err, .toast.bad").first().innerText();
+    ok(/older version/i.test(msg) && /New version/i.test(msg) && msg.trim() !== "setReminderDates", "the error explains the cause and the remedy instead of showing the bare command name (" + msg.slice(0, 60) + "...)");
+    ok(JSON.stringify(g(adminTok).db.policy) === before, "nothing was changed by the refused request"); oldBackend = false; }
   ok(errs.length === 0, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close(); srv.close(); console.log(fails ? "RESULT: FAIL" : "RESULT: PASS"); if (fails) process.exit(1); else console.log("reminders e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });

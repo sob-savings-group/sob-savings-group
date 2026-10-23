@@ -641,7 +641,9 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         act(async (g) => { const t = {}; RM.FIELDS.forEach((k) => { if (g[k] !== T[k]) t[k] = g[k]; }); await commit("setReminderSettings", { templates: { [f.lv]: t }, reason: g.reason }); }, "Wording saved"), "Save wording"), 50);
     }, "Next");
     const notSet = !cfg.shareOutDate || !cfg.deadline;
+    const oldBackend = st.live && CFG.build && st.store.serverBuild && st.store.serverBuild !== CFG.build;
     return h("div", null,
+      oldBackend ? h("div", { class: "blocked", id: "rem-backend-old" }, "The Google backend is version " + st.store.serverBuild + " but this site needs " + CFG.build + ". Reminder actions (including setting the dates) will be refused until the latest Code_Ledger.gs is deployed as a NEW VERSION (Apps Script > Deploy > Manage deployments > Edit > New version). Nothing has been changed.") : null,
       !st.live ? h("div", { class: "blocked", id: "rem-demo" }, "DEMO DATA: this is not the live ledger. You can look, but reminders can only be prepared and opened against the live ledger.") : null,
       h("p", { class: "mute", id: "rem-asof" }, "Figures calculated from the " + (st.live ? "live ledger" : "demo data") + " for " + D.longDate(asOf) + (rem.at ? ", loaded at " + RM.eatTime(rem.at) : "") + ". Each reminder is recalculated again, on the server, at the moment it is prepared."),
       notSet ? h("div", { class: "blocked", id: "rem-notset" }, "The official share-out date and approved repayment deadline are not set yet. No reminder can be prepared until they are (nothing is guessed). ") : null,
