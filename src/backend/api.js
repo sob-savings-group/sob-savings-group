@@ -11,6 +11,14 @@
   const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
   /* What a signed-in user is allowed to SEE. Staff: the ledger (never credentials). Member: only their own records. */
+  /* A member's own login must never receive officers' working data. These fields are REMOVED on the server (not hidden by the page); none of them is used to calculate a balance.
+     Amounts, dates, types, statuses, the voided flag and everything the engine needs stay. Member statements and the PDF are built only from what is left. */
+  const TX_INTERNAL = ["receivedBy", "bankedBy", "createdBy", "approvedBy", "voidReason", "voidedBy", "voidedAt", "sourceRef", "correctionNote", "originalType", "originalDate", "evidence", "baseId", "note"];
+  const LOAN_INTERNAL = ["reviewedBy", "approvedBy", "declinedBy", "declineReason", "disbursedBy", "appliedBy", "voidReason", "voidedBy", "interestHistory", "evidence", "note", "registerRef", "createdBy"];
+  const GUAR_INTERNAL = ["committedBy", "releaseReason"], YEAR_INTERNAL = ["basis", "evidence", "definedBy", "definedAt", "note"];
+  const INTERNAL_TEXT = /correct|void|restor|reclass|adjust|audit|reconcil|reserve|write.?off|offset|error|mistake|duplicate|evidence|register|legacy|migrat|import|placeholder|not established|SOB-\d|\bLN-|\bTX-|\bAPR-|\bAUD-/i;
+  const without = (o, keys) => { const c = Object.assign({}, o); keys.forEach((k) => { delete c[k]; }); return c; };
+  const memberTx = (t) => { const c = without(t, TX_INTERNAL); const p = String(c.purpose || ""); if (p && (INTERNAL_TEXT.test(p) || p.length > 80) && !/^Part \d+ of \d+ of one loan/.test(p)) c.purpose = ""; return c; };
   function viewFor(db, user, asOf) {
     const base = { schemaVersion: db.schemaVersion, revision: db.revision };
     if (user.role !== "Member") {   // Super Admin, Chairperson, Treasurer, Committee: staff see the ledger (never credentials); only Admin sees users/outbox
@@ -24,12 +32,12 @@
     const mine = (db.loans || []).filter((l) => l.memberId === me);
     const guaranteed = (db.guarantees || []).filter((g) => g.guarantorId === me);
     const guaranteedLoans = (db.loans || []).filter((l) => guaranteed.some((g) => g.loanId === l.id) && l.memberId !== me);
-    const loans = mine.concat(guaranteedLoans);
+    const loans = mine.concat(guaranteedLoans).filter((l) => !l.voided);
     return Object.assign({}, base, {
       members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
-      transactions: (db.transactions || []).filter((t) => t.memberId === me || mine.some((l) => l.id === t.loanId)),
-      loans, guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
-      yearCycles: db.yearCycles || [], shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
+      loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
+      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
 
