@@ -98,13 +98,28 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   ok(g(chair).db.reminders.length === 0 && g(treas).db.reminders.length === 0, "Chairperson and Treasurer never receive reminder history or message texts");
   const mv = g(memT).db; ok(!(mv.reminders && mv.reminders.length) && !JSON.stringify(mv).includes("Praise the Lord"), "a member's view contains no reminder text");
   ok(cmd(treas, "prepareReminder", { loanId: l1.id }).error && /FORBIDDEN/.test(cmd(treas, "prepareReminder", { loanId: l1.id }).error), "the server refuses reminders from the Treasurer even if the browser is tampered with");
+  /* Edit contact details in the real UI: a member without a number becomes reminder-ready; only contact fields change; audited; refused for everyone but the Super Admin */
+  { const mem3 = () => g(adminTok).db.members.find((m) => m.id === M3.id), moneyNow = () => JSON.stringify(g(adminTok).db.transactions) + JSON.stringify(g(adminTok).db.loans), beforeMoney = moneyNow(), nAud = () => g(adminTok).db.auditLog.filter((x) => x.action === "ContactUpdated").length;
+    await pg.click('[data-nav="reminders"]'); await pg.waitForSelector("#rem-asof"); ok((await pg.locator('[data-problem="' + l3.id + '"]').innerText()).toLowerCase().includes("whatsapp number"), "before: Ruth Charlie has no number, so the Reminders screen cannot offer WhatsApp for her");
+    await pg.click('[data-nav="members"]'); await pg.fill("input.search", "Ruth"); await pg.click("#main tbody tr"); await pg.waitForSelector('.modal [data-act="edit-contact"]');
+    ok(/not recorded/.test(await pg.locator("#member-contact").innerText()), "the member profile shows the contact details (none recorded yet)");
+    await pg.click('.modal [data-act="edit-contact"]'); await pg.fill('.modal input[name="phone"]', "12345"); await pg.click("[data-submit]"); await pg.waitForFunction(() => document.querySelector(".modal .err") && /Uganda number/.test(document.querySelector(".modal .err").textContent));
+    ok(!mem3().phone && nAud() === 0, "a wrong number is refused with a clear message; nothing was saved");
+    await pg.fill('.modal input[name="phone"]', "+256 772 555 123"); await pg.fill('.modal input[name="email"]', "ruth@example.org"); await pg.fill('.modal input[name="location"]', "Jinja"); await pg.fill('.modal input[name="reason"]', "gave new number"); await pg.click("[data-submit]");
+    await pg.waitForFunction(() => /0772555123/.test((document.getElementById("member-contact") || {}).textContent || ""));
+    ok(mem3().phone === "0772555123" && mem3().email === "ruth@example.org" && mem3().location === "Jinja" && mem3().id === M3.id && mem3().name === "Ruth Charlie", "saved on the server; Member ID and name unchanged");
+    ok(nAud() === 1 && moneyNow() === beforeMoney, "exactly one audit entry; no transaction or loan changed");
+    await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click('[data-nav="reminders"]'); await pg.waitForSelector("#rem-asof");
+    ok((await pg.locator('[data-problem="' + l3.id + '"]').count()) === 0 && (await pg.locator('[data-preview="' + l3.id + '"]').count()) === 1, "after: the Reminders screen now offers Ruth Charlie a reminder (the new number is used)");
+    ok(/NOT_FOUND|FORBIDDEN/.test(cmd(treas, "updateMemberContact", { memberId: M3.id, phone: "0772000001" }).error) && mem3().phone === "0772555123", "the server refuses the Treasurer even from a tampered browser");
+    const mv2 = g(memT).db; ok(!JSON.stringify(mv2).includes("0772555123") && !JSON.stringify(mv2).includes("ruth@example.org"), "another member's contact details never reach a member's own view"); }
   /* A Google deployment still on an earlier version: the exact live symptom ("setReminderDates" in red). It must be explained, and nothing may change. */
   { oldBackend = true; const before = JSON.stringify(g(adminTok).db.policy), opg = await (await b.newContext({ viewport: { width: 1100, height: 900 } })).newPage(); await opg.context().route("https://wa.me/**", (r) => r.abort());
     await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.click("#tab-officer"); await opg.fill("#sid", "ADMIN"); await opg.fill("#spin", "admin-pin-1"); await opg.click("#officer-go"); await opg.waitForSelector("#kpis");
     await opg.click('[data-nav="reminders"]'); await opg.waitForSelector("#rem-asof");
     ok(/OLDBUILD001/.test(await opg.locator("#rem-backend-old").innerText()) && /NEWBUILD002/.test(await opg.locator("#rem-backend-old").innerText()), "an older Google backend is announced on the Reminders screen with both version ids");
     await opg.click("#rem-dates"); await opg.fill('.modal input[name="so"]', soYear + "-12-26"); await opg.fill('.modal input[name="dl"]', soYear + "-12-12"); await opg.fill('.modal input[name="reason"]', "test"); await opg.click("[data-submit]");
-    await opg.waitForSelector(".modal .err, .toast.bad"); const msg = await opg.locator(".modal .err, .toast.bad").first().innerText();
+    await opg.waitForFunction(() => [...document.querySelectorAll(".modal .err, .toast.bad")].some((e) => e.textContent.trim().length > 0)); const msg = await opg.evaluate(() => [...document.querySelectorAll(".modal .err, .toast.bad")].map((e) => e.textContent.trim()).find((x) => x) || "");
     ok(/older version/i.test(msg) && /New version/i.test(msg) && msg.trim() !== "setReminderDates", "the error explains the cause and the remedy instead of showing the bare command name (" + msg.slice(0, 60) + "...)");
     ok(JSON.stringify(g(adminTok).db.policy) === before, "nothing was changed by the refused request"); oldBackend = false; }
   ok(errs.length === 0, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
