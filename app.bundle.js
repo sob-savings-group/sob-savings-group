@@ -411,6 +411,35 @@
     return member;
   }
 
+  /* Contact details of an EXISTING member (WhatsApp/phone, e-mail, location). Super Admin only (member.manage). Changes ONLY these three fields: never the id, name,
+     registration date, status, savings, loans or any financial record. Every change is audited with the previous and the new values. */
+  const CONTACT_FIELDS = ["phone", "email", "location"];
+  function cleanPhone(v) {
+    const s = String(v == null ? "" : v).trim(); if (s === "") return "";
+    const t = s.replace(/[\s\-().]/g, ""); let m;
+    if ((m = /^\+?256(\d{9})$/.exec(t))) return "0" + m[1];      // stored in the local form the members sheet already uses: 0772000000
+    if ((m = /^0(\d{9})$/.exec(t))) return "0" + m[1];
+    throw new Error("INVALID: the phone number must be a Uganda number such as 0772 123 456 or +256 772 123 456");
+  }
+  function updateMemberContact(db, ctx, a) {
+    require_(ctx, "member.manage"); a = a || {};
+    const id = need(a.memberId, "memberId"), member = (db.members || []).find((x) => x.id === id); if (!member) throw new Error("NOT_FOUND: member " + id);
+    const next = {}; CONTACT_FIELDS.forEach((k) => { if (a[k] !== undefined && a[k] !== null) next[k] = String(a[k]).trim(); });
+    if (!Object.keys(next).length) throw new Error("INVALID: give at least one of phone, email or location");
+    if (next.phone !== undefined) next.phone = cleanPhone(next.phone);
+    if (next.email !== undefined && next.email !== "" && !(next.email.length <= 120 && /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/.test(next.email))) throw new Error("INVALID: that e-mail address does not look right");
+    if (next.location !== undefined && (next.location.length > 100 || /[\u0000-\u001f\u007f]/.test(next.location))) throw new Error("INVALID: the location must be plain text of at most 100 characters");
+    if (next.phone) {
+      const other = db.members.find((x) => x.id !== id && x.phone && (() => { try { return cleanPhone(x.phone) === next.phone; } catch (e) { return false; } })());
+      if (other && !a.allowShared) throw new Error("DUPLICATE_PHONE: " + next.phone + " is already the number of " + other.id + ". Reminders would go to the same WhatsApp for both members. If the two members really share one number, tick that option.");
+    }
+    const before = {}, after = {}; CONTACT_FIELDS.forEach((k) => { before[k] = member[k] || ""; after[k] = next[k] !== undefined ? next[k] : (member[k] || ""); });
+    if (CONTACT_FIELDS.every((k) => before[k] === after[k])) throw new Error("NO_CHANGE: those details are already recorded");
+    CONTACT_FIELDS.forEach((k) => { if (next[k] !== undefined) member[k] = next[k]; });
+    audit(db, ctx, "Member", id, "ContactUpdated", before, after, a.reason || "Contact details updated");
+    return { id, name: member.name, phone: member.phone || "", email: member.email || "", location: member.location || "" };
+  }
+
   /* SOB-approved settings, stored in the ledger itself (db.policy) and audited. Only validated, known settings can be changed; every change needs a reason. */
   const ENTRY_TYPES = ["Savings", "Withdraw", "Profit", "Loan Disbursement", "Loan Repayment", "Subscription", "Income", "Expense", "Share-Out", "Bank Charge", "Interest", "Penalty"];
   /* FINAL SOB rules are fixed in code (3x guideline, shortfall backing, interest-first repayment, savings-proportional profit with the loan-holder exclusion, the list of
@@ -433,7 +462,7 @@
     audit(db, ctx, "Policy", key, "Changed", cur, next, reason);
     return rec;
   }
-  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember };
+  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
 });
 
 
@@ -2367,6 +2396,7 @@
     restoreEntry: (db, ctx, a) => { const t = G.restoreEntry(db, ctx, a.id, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     approveEntry: (db, ctx, a) => { const t = G.approveEntry(db, ctx, a.id, a.decision, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
+    updateMemberContact: (db, ctx, a) => G.updateMemberContact(db, ctx, { memberId: a.memberId, phone: a.phone, email: a.email, location: a.location, allowShared: !!a.allowShared, reason: a.reason }),
     applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
     acceptGuarantee: (db, ctx, a) => LN.acceptGuarantee(db, ctx, a.id, { evidence: a.evidence }),
@@ -4279,7 +4309,15 @@ window.SOBMember = function (E) {
     const loans = L.activeLoansAsAt(dd, asAt).filter((l) => l.memberId === id), owed = loans.reduce((a, l) => a + Math.max(0, L.loanOutstanding(l, dd, asAt)), 0);
     drill(m.id + " — " + m.name, null, h("div", null, hist ? Banner("info", "Showing this member as at " + D.longDate(asAt) + ". Open them from the Members page for today's position.") : null,
       h("div", { class: "grid" }, Card("Savings" + (hist ? " (as at " + D.longDate(asAt) + ")" : ""), ugx(pos.savings), "From the ledger"), Card("Guarantee committed", ugx(pos.committed)), Card("Available", ugx(pos.available)), Card("Outstanding loan", ugx(owed))),
-      st.live && st.user.role === "Admin" && !hist ? h("div", { class: "row" }, (st.db.users || []).some((u) => u.id === m.id)
+      h("p", { class: "mute", id: "member-contact" }, "WhatsApp / phone: " + (m.phone || "not recorded") + "  ·  E-mail: " + (m.email || "not recorded") + "  ·  Location: " + (m.location || "not recorded")),
+      st.live && st.user.role === "Admin" && !hist ? h("div", { class: "row" }, h("button", { "data-act": "edit-contact", onclick: () => Form("Edit contact details — " + m.name + " (" + m.id + ")", [
+          { name: "phone", label: "WhatsApp / phone number (Uganda, e.g. 0772 123 456 or +256 772 123 456)", value: m.phone || "", type: "tel", inputmode: "tel" },
+          { name: "email", label: "E-mail address (optional)", value: m.email || "", type: "email" },
+          { name: "location", label: "Location (optional)", value: m.location || "" },
+          { name: "allowShared", label: "If another member already has this number", options: [{ value: "", label: "Refuse (recommended)" }, { value: "yes", label: "Allow: these members really share one number" }] },
+          { name: "reason", label: "Reason (optional) — e.g. member gave a new number", value: "" },
+          { name: "note", type: "note", text: "Only contact details change. The Member ID, name, savings, loans and every financial record stay exactly as they are. The change is recorded in the audit trail." }],
+          act(async (f) => { await commit("updateMemberContact", { memberId: m.id, phone: f.phone, email: f.email, location: f.location, allowShared: f.allowShared === "yes", reason: f.reason }); document.querySelectorAll(".modal-bg").forEach((e) => e.remove()); openMember(m.id); }, "Contact details saved")) }, "Edit contact details"), (st.db.users || []).some((u) => u.id === m.id)
         ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset PIN for " + m.name, [{ name: "n", label: "New PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
         : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
       h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(dd, asAt).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id, asAt)),
