@@ -120,7 +120,7 @@ t("MEMBER sees only their own records: no other members' transactions, loans, au
   assert.ok(v.transactions.length > 0 && v.transactions.every((x) => x.memberId === memberWith.id));
   assert.ok(v.loans.every((l) => l.memberId === memberWith.id));
   assert.equal(v.auditLog.length + v.users.length + v.legacyAdministration.length + v.shareOutEvents.length, 0); assert.equal(v.kpis, undefined);
-  const other = v.members.find((m) => m.id === otherMember.id); assert.deepEqual(Object.keys(other).sort(), ["id", "name", "status"], "other members: id/name only (no phone/email)");
+  assert.equal(v.members.find((m) => m.id === otherMember.id), undefined, "an unrelated member is not disclosed at all"); assert.ok(v.members.some((m) => m.id === memberWith.id));
   assert.equal(L.memberSavings(v, memberWith.id), L.memberSavings(db0, memberWith.id), "own figures still correct");
   assert.ok(!JSON.stringify(v).includes(otherMember.phone || "\u0000never"));
 });

@@ -20,6 +20,8 @@
     historicalLoans: { sheet: "HistoricalLoans", cols: [] },
     loanInterestRecords: { sheet: "LoanInterestRecords", cols: [] },
     reserveFund: { sheet: "GeneralReserveFund", cols: [] },
+    listItems: { sheet: "ConfigLists", cols: [] },
+    yearOpenings: { sheet: "BalanceBroughtForward", cols: [] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
     discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },

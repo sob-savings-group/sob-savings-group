@@ -7,7 +7,7 @@ test("This / Last financial year use the share-out dates", () => {
   const y = D.presetPeriod("year", TODAY, YRS), l = D.presetPeriod("lastYear", TODAY, YRS);
   assert.deepEqual([y.fy, y.from, y.to], [2026, "2025-12-21", TODAY]);
   assert.deepEqual([l.fy, l.from, l.to], [2025, "2024-12-01", "2025-12-21"]);
-  assert.match(l.label, /Last financial year \(FY2025\)/); assert.match(l.text, /1 Dec 2024 – 21 Dec 2025/);
+  assert.match(l.label, /^Financial Year 2025$/); assert.match(l.text, /1 Dec 2024 – 21 Dec 2025/);
   assert.ok(!/31 Dec 2025/.test(l.text));
 });
 test("a share-out day is counted once, in the year it belongs to", () => {

@@ -73,4 +73,11 @@ t("who can open the Administrative statement: officers who may read the audit tr
   const { db, a } = world(), before = JSON.stringify(db); ST.toPrintHTML(ST.memberAccount(db, a.id, {}, { today: DAY, audience: "admin" })); ST.toPrintHTML(ST.memberAccount(db, a.id, {}, { today: DAY, audience: "member" })); API.viewFor(db, { role: "Member", memberId: a.id }, DAY);
   assert.equal(JSON.stringify(db), before, "producing statements and member views changes no record, no audit entry");
 });
+t("SERVER: a member is not told who the other members are, except people tied to their own loans and guarantees; Balance Brought Forward shows only their own", () => {
+  const { db, a, g } = world(); const stranger = G.addMember(db, ctx("Admin", "2026-01-03"), { name: "Unrelated Person Zed", regDate: "2026-01-03", phone: "0700000000" });
+  db.yearOpenings = [{ id: "BBF-1", year: 2026, memberId: a.id, amount: 5, date: DAY, evidence: "SECRET-EVIDENCE" }, { id: "BBF-2", year: 2026, memberId: stranger.id, amount: 9, date: DAY, evidence: "SECRET-EVIDENCE" }];
+  const v = API.viewFor(db, { role: "Member", memberId: a.id }, DAY), json = JSON.stringify(v);
+  assert.ok(!v.members.some((m) => m.id === stranger.id) && v.members.some((m) => m.id === a.id) && v.members.some((m) => m.id === g.id), "own record and the guarantor only"); assert.ok(!/Unrelated Person Zed/.test(json));
+  assert.deepEqual(v.yearOpenings.map((o) => o.memberId), [a.id]); assert.ok(!/SECRET-EVIDENCE/.test(json));
+});
 console.log(n + " statement-audience tests passed");

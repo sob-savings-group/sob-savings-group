@@ -42,11 +42,11 @@ let fails = 0; const ok = (c, m) => { if (c) console.log("  ok  " + m); else { f
     ok(/\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === "%PDF-" && buf.length > 2000, "Download PDF saves a real PDF file (" + dl.suggestedFilename() + ")"); }
   /* the selection survives navigation */
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await pg.click('[data-chip="lastYear"]'); await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#kpi-reports");
-  ok(/Last financial year|FY\d{4}|31 Dec/.test(await pg.innerText("#period-note")), "the Reports page uses the same period"); ok((await pg.locator("#kpi-reports .card").count()) === K.KEYS.length, "every dashboard figure is also a report");
+  ok(/Financial Year \d{4}|FY\d{4}|31 Dec/.test(await pg.innerText("#period-note")), "the Reports page uses the same period"); ok((await pg.locator("#kpi-reports .card").count()) === K.KEYS.length, "every dashboard figure is also a report");
   /* member statement period: list, brought-forward/closing line and PDF follow the chosen range */
   await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Member"); await pg.click("#demo-go"); await pg.waitForSelector('[data-card="My Savings"]'); await pg.click('[data-nav="savings"]'); await pg.waitForSelector("#stmt-period");
   const mid = await pg.evaluate(() => window.__SOB.user.memberId), lp = D.presetPeriod("lastYear", today, YRS);
-  await pg.click('#stmt-period [data-chip="lastYear"]'); await pg.waitForFunction(() => /brought forward/.test(document.getElementById("stmt-note").innerText));
+  await pg.click('#stmt-period [data-chip="lastYear"]'); await pg.waitForFunction(() => /brought forward|balance at start/i.test(document.getElementById("stmt-note").innerText));
   const note = await pg.innerText("#stmt-note"), closeLY = L.memberSavingsAsOf(live, mid, lp.to);
   ok(note.includes(Math.round(closeLY).toLocaleString("en-US")) && /31 Dec 2025/.test(note), "member statement: last-year closing balance on screen equals the ledger as at 31 Dec 2025 (" + closeLY.toLocaleString("en-US") + ")");
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs[0] : "")); await br.close(); srv.close(); if (fails) process.exit(1); console.log("kpi period e2e passed");

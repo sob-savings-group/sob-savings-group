@@ -45,6 +45,13 @@
     const inputs = {};
     const body = h("div", null, fields.map((f) => {
       if (f.type === "note") return h("p", { class: "mute" }, f.text);
+      if (f.other && f.options) {   // a list with an "Other (Specify)" facility: choosing it reveals a text box and the typed text is what is recorded
+        const OTHER = "__other__", sel = h("select", { name: f.name + "__sel" }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o)).concat([h("option", { value: OTHER }, "Other (Specify)")]));
+        const txt = h("input", { type: "text", name: f.name + "__other", placeholder: "Please specify", maxlength: "60", "aria-label": f.label + " (specify)" }); txt.hidden = true;
+        sel.addEventListener("change", () => { txt.hidden = sel.value !== OTHER; if (!txt.hidden) txt.focus(); });
+        const el0 = { get value() { return sel.value === OTHER ? txt.value.trim() : sel.value; }, set value(v) { sel.value = v; }, setAttribute() {} };
+        if (f.value != null) sel.value = f.value; inputs[f.name] = el0; return h("div", null, h("label", null, f.label), sel, txt);
+      }
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
       if (f.max) el.setAttribute("max", f.max); if (f.min != null) el.setAttribute("min", f.min); if (f.inputmode) el.setAttribute("inputmode", f.inputmode); if (f.type === "number" && !f.inputmode) el.setAttribute("inputmode", "decimal"); if (f.type === "date") el.required = true;
       if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);

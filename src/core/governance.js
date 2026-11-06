@@ -173,5 +173,37 @@
     audit(db, ctx, "Policy", key, "Changed", cur, next, reason);
     return rec;
   }
-  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
+  /* CONFIGURABLE LISTS: the choices offered in forms (e.g. the purpose of an entry). Standard options ship with the software; authorised administrators add more
+     (or retire them) without any redevelopment. Every form also offers "Other (Specify)". Lists are only labels: no calculation depends on them, and what was
+     recorded in the past is never rewritten when a list changes. */
+  const LIST_DEFAULTS = {
+    "purpose.Savings": ["Regular savings deposit", "Additional savings deposit", "Savings brought in by a new member"],
+    "purpose.Withdraw": ["Member withdrawal", "Annual share-out payment", "Emergency withdrawal"],
+    "purpose.Expense": ["Administration", "Transport", "Stationery", "Meeting costs", "Bank charges"],
+    "purpose.Income": ["Loan interest", "Annual subscription", "Donation"],
+    "purpose.Profit": ["Profit share"],
+    "purpose.Bank Charge": ["Bank charge"]
+  };
+  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges" };
+  const listItems = (db, key) => (db.listItems || []).filter((i) => i && i.list === key);
+  function listOptions(db, key) {
+    const retired = {}, added = []; listItems(db, key).forEach((i) => { if (i.active === false) retired[i.label.toLowerCase()] = 1; else added.push(i.label); });
+    const seen = {}; return (LIST_DEFAULTS[key] || []).concat(added).filter((x) => { const k = x.toLowerCase(); if (seen[k] || retired[k]) return false; seen[k] = 1; return true; });
+  }
+  function addListItem(db, ctx, a) {
+    require_(ctx, "policy.manage"); a = a || {}; if (!LIST_DEFAULTS[a.list]) throw new Error("INVALID: unknown list '" + a.list + "'");
+    const label = need(a.label, "name of the new option"); if (label.length > 60) throw new Error("INVALID: keep the option under 60 characters"); if (/^other\b/i.test(label)) throw new Error("INVALID: 'Other (Specify)' is always offered automatically");
+    const reason = need(a.reason, "reason"); db.listItems = db.listItems || [];
+    const hit = db.listItems.find((i) => i.list === a.list && i.label.toLowerCase() === label.toLowerCase());
+    if (hit) { if (hit.active !== false) throw new Error("ALREADY_EXISTS: '" + hit.label + "' is already in this list"); hit.active = true; audit(db, ctx, "List", hit.id, "Option restored", { active: false }, { active: true }, reason); return hit; }
+    if (listOptions(db, a.list).some((x) => x.toLowerCase() === label.toLowerCase())) throw new Error("ALREADY_EXISTS: '" + label + "' is already in this list");
+    const it = { id: uid("LST"), list: a.list, label, active: true, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); audit(db, ctx, "List", it.id, "Option added", null, { list: a.list, label }, reason); return it;
+  }
+  function retireListItem(db, ctx, a) {
+    require_(ctx, "policy.manage"); a = a || {}; const reason = need(a.reason, "reason"), label = need(a.label, "option"); if (!LIST_DEFAULTS[a.list]) throw new Error("INVALID: unknown list '" + a.list + "'");
+    db.listItems = db.listItems || []; let it = db.listItems.find((i) => i.list === a.list && i.label.toLowerCase() === label.toLowerCase());
+    if (!it) { it = { id: uid("LST"), list: a.list, label, active: false, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); } else it.active = false;
+    audit(db, ctx, "List", it.id, "Option retired", { active: true }, { active: false }, reason); return it;
+  }
+  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
 });
