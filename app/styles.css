@@ -216,3 +216,7 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 #lists-panel .chip .linkbtn:hover{color:var(--bad)}
 #lists-panel .panel{margin:0 0 12px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+.chips+.mute,.chips+p{margin-top:6px}
+#main .grid:not(:last-child){margin-bottom:16px}
+.blocked+.chips{margin-top:14px}
+.fy4{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))!important}

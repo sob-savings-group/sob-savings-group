@@ -216,13 +216,13 @@
     const wrap = h("div", null, periodBar(),
       h("h2", { class: "sec" }, "Where the group stands · as at " + D.longDate(p.to)),
       h("div", { class: "grid", id: "kpis" },
-        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Opening " + num(o.availableCash.opening) + " → closing"),
-        c("outstandingLoans", "Outstanding Loans", "loan", o.outstandingLoans.count + " loans owed"), c("interestReceivable", "Interest Receivable", "interest", o.interestReceivable.loans + " loans · unpaid interest"),
+        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Cash at the start of the period: " + num(o.availableCash.opening)),
+        c("outstandingLoans", "Outstanding Loans", "loan", pl(o.outstandingLoans.count, "loan") + " owed"), c("interestReceivable", "Interest Receivable", "interest", pl(o.interestReceivable.loans, "loan") + " · unpaid interest"),
         c("loanExposure", "Loan Exposure", null, "Guaranteed " + ugx(o.loanExposure.guaranteed)), c("members", "Members", null, "Active")),
       h("h2", { class: "sec" }, "What happened · " + (p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to))),
       h("div", { class: "grid", id: "activity" },
-        c("savingsReceived", "Savings Received", "avail", o.savingsReceived.count + " deposits"), c("withdrawals", "Withdrawals & Share-Out", null, o.withdrawals.count + " payments"), c("loansDisbursed", "Loans Paid Out", "loan", o.loansDisbursed.count + " loans"),
-        c("repaymentsReceived", "Loan Repayments", "loan", o.repaymentsReceived.count + " payments"), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
+        c("savingsReceived", "Savings Received", "avail", pl(o.savingsReceived.count, "deposit")), c("withdrawals", "Withdrawals & Share-Out", null, pl(o.withdrawals.count, "payment")), c("loansDisbursed", "Loans Paid Out", "loan", pl(o.loansDisbursed.count, "loan")),
+        c("repaymentsReceived", "Loan Repayments", "loan", pl(o.repaymentsReceived.count, "payment")), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
         c("otherIncome", "Other Income", null, o.otherIncome.count + " entries"), c("profit", "Profit Recorded", "profit", "Profit entries in the period"), c("expenses", "Expenses", null, o.expenses.count + " entries")),
       h("h2", { class: "sec" }, "General Reserve Fund and older loans"),
       h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => { st.view = "reserve"; render(); }, "profit"),
@@ -260,6 +260,7 @@
   /* Two statements: the MEMBER statement (own savings, loans, balances, history) and the ADMINISTRATIVE statement (references, corrections, reserve, audit notes). Only officers who may read the audit trail can open the second; a member can never receive its data (the server removes it). */
   /* the purposes offered in the entry form: the standard list plus whatever the Super Admin added (G.listOptions), always with Other (Specify) */
   const purposeChoices = () => { const seen = {}; return Object.keys(G.LIST_DEFAULTS).filter((k) => k.indexOf("purpose.") === 0).reduce((o, k) => o.concat(G.listOptions(st.db, k)), []).filter((x) => !seen[x] && (seen[x] = 1)); };
+  const pl = (n, w) => n + " " + w + (Number(n) === 1 ? "" : "s");   // 1 loan, 2 loans
   const canAdminStatement = () => st.user && st.user.role !== "Member" && G.can(ctx(), "audit.view");
   function statementView(memberId, internal, toDate) {
     const maxTo0 = () => toDate || today();
@@ -473,7 +474,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("div", { class: "blocked" }, "Each financial year runs from one approved share-out to the next and stands on its own. Nothing is carried into a new year automatically: savings remaining after a share-out stay in the club's consolidated position unless an authorised officer records them as a Balance Brought Forward."),
       Chips(tb.map((c) => [String(c.year), c.label.replace("FY", "Financial Year ")]), String(sel), (k) => { st.fySel = Number(k); render(); }),
       h("p", { class: "mute", id: "fy-span" }, "Financial Year " + pos.year + ": " + D.longDate(pos.openedDate) + " – " + (pos.closedDate ? D.longDate(pos.closedDate) + " (closed by the approved share-out)" : "open")),
-      h("div", { class: "grid" }, hasPrev ? Card("Previous year closing position", ugx(pos.totals.previousClosing), "For information") : null, hasPrev ? Card("Held in the club consolidated position", ugx(pos.totals.notBroughtForward), "Not brought forward") : null, Card("Authorised Balance Brought Forward", ugx(pos.totals.opening), "Recorded by officers"), Card("New-year transactions", ugx(pos.totals.deposits + pos.totals.profit - pos.totals.withdrawals - pos.totals.shareOuts + pos.totals.other), "Deposits, profit, withdrawals")),
+      h("div", { class: "grid fy4" }, hasPrev ? Card("Previous year closing position", ugx(pos.totals.previousClosing), "For information") : null, hasPrev ? Card("Held in the club consolidated position", ugx(pos.totals.notBroughtForward), "Not brought forward") : null, Card("Authorised Balance Brought Forward", ugx(pos.totals.opening), "Recorded by officers"), Card("New-year transactions", ugx(pos.totals.deposits + pos.totals.profit - pos.totals.withdrawals - pos.totals.shareOuts + pos.totals.other), "Deposits, profit, withdrawals")),
       Table([{ label: "Member", render: (r) => r.name }, { label: "Previous closing", num: 1, render: (r) => num(r.previousClosing) }, { label: "Brought forward", num: 1, render: (r) => num(r.opening) }, { label: "Deposits", num: 1, render: (r) => num(r.deposits) }, { label: "Profit", num: 1, render: (r) => num(r.profit) }, { label: "Withdrawn", num: 1, render: (r) => num(r.withdrawals) }, { label: "Share-out", num: 1, render: (r) => num(r.shareOuts) }, { label: "Closing", num: 1, render: (r) => num(r.closing) }], pos.rows),
       h("h2", { class: "sec" }, "Recorded Balance Brought Forward"),
       canW ? h("div", { class: "row" }, h("button", { class: "primary", id: "bbf-add", onclick: record }, "Record a Balance Brought Forward")) : null,
