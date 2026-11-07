@@ -40,7 +40,7 @@ window.SOBMember = function (E) {
   }
   const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "open-statement", onclick: () => openStatement(me(), false) }, Icon("book", 18), " View full statement"));
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
-  const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name, so you can view your balances and statements. To request a loan, accept a guarantee or change your PIN, sign in with your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
+  const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name: you can view balances and statements. Sign in with your PIN to request a loan or change your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
   /* ---------- HOME ---------- */
   function home() {
@@ -101,7 +101,7 @@ window.SOBMember = function (E) {
   /* ---------- LOANS ---------- */
   function applyForm() {
     const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
-    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). If you ask for more, guarantors who have savings can back the difference — the Admin will arrange this with you." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }],
+    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }],
       act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt) }); }, "Application sent. We will update you here."), "Send application");
   }
   function loans() {
@@ -114,7 +114,7 @@ window.SOBMember = function (E) {
         h("div", { class: "row", style: "justify-content:space-between;align-items:center;margin:0" }, h("div", { class: "lbl" }, ugx(l.loanAmount) + " loan"), badge(lbl, kind)),
         live ? h("div", null, h("div", { class: "val t-loan" }, ugx(s.v.balance)), h("div", { class: "sub" }, l.status === "Cleared" ? "Fully repaid" : "You owe"), Progress(s.paid, "c-avail", "Principal repaid"), h("div", { class: "sub" }, s.paid + "% of the loan repaid")) : h("div", { class: "sub", style: "margin-top:8px" }, nextStep(l))));
     });
-    el.append(h("p", { class: "mute", style: "font-size:13px" }, "Interest is set per loan by the Admin and grows monthly until the loan is repaid. Each repayment first clears interest owed, then reduces the loan."));
+    el.append(h("p", { class: "mute", style: "font-size:13px" }, "Interest is set per loan and grows monthly. Each repayment clears interest first, then the loan."));
     return el;
   }
   const nextStep = (l) => ({ Pending: "The Admin is reviewing your application and any guarantors.", AwaitingApproval: "Reviewed. Waiting for the Chairperson's approval.", Approved: "Approved. The payout will be recorded by the Admin.", Declined: "This application was declined." + (l.declineReason ? " Reason: " + l.declineReason : "") }[l.status] || "");
@@ -138,7 +138,7 @@ window.SOBMember = function (E) {
     const loanOf = (g) => (st.db.loans || []).find((l) => l.id === g.loanId) || {}, who = (m) => (st.db.members.find((x) => x.id === m) || {}).name || m;
     const el = h("div", null, signInfo());
     if (reqs.length) {
-      el.append(h("div", { id: "guarantee-requests" }, Section("Waiting for your answer"), h("p", { class: "mute" }, "If you accept, the amount is set aside from your savings straight away and cannot be withdrawn while the loan is unpaid. It comes back as the borrower repays the loan itself.")));
+      el.append(h("div", { id: "guarantee-requests" }, Section("Waiting for your answer"), h("p", { class: "mute" }, "If you accept, the amount is held from your savings until the loan is repaid.")));
       reqs.forEach((g) => el.lastChild.append(h("div", { class: "card", style: "margin-bottom:12px" }, h("div", { class: "lbl" }, who(loanOf(g).memberId) + " asks you to guarantee"), h("div", { class: "val t-commit" }, ugx(g.amount)), h("div", { class: "sub" }, "On a loan of " + ugx(loanOf(g).loanAmount || 0) + " · you have " + ugx(pos.available) + " available"),
         viewOnly() ? h("p", { class: "mute" }, "Sign in with your PIN to answer.") : h("div", { class: "row" }, h("button", { class: "primary", "data-accept-guarantee": g.id, onclick: () => Confirm("Accept this guarantee?", ugx(g.amount) + " of your savings will be set aside until the loan is repaid.", "Yes, accept", act(async () => commit("acceptGuarantee", { id: g.id, evidence: "Accepted by the guarantor in the member portal" }), "Accepted — " + ugx(g.amount) + " is now set aside")) }, "Accept"),
           h("button", { class: "danger", "data-decline-guarantee": g.id, onclick: () => Form("Decline guarantee", [{ name: "reason", label: "Reason (optional)" }], act(async (f) => commit("declineGuarantee", { id: g.id, reason: f.reason }), "Declined"), "Decline") }, "Decline")))));
@@ -168,7 +168,7 @@ window.SOBMember = function (E) {
   function share() {
     const pos = L.memberPosition(st.db, me()), profits = history().filter((t) => t.type === "Profit"), outs = history().filter((t) => t.type === "Share-Out");
     return h("div", null, Hero({ label: "If the share-out were today", value: ugx(pos.available), sub: "This is what you would receive", children: h("div", null, StackBar([{ label: "You receive", value: pos.available, cls: "c-avail" }, { label: "Stays held for guarantees", value: pos.committed, cls: "c-commit" }]), h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "Total savings"), h("div", { class: "mv" }, ugx(pos.savings))), h("div", { class: "mini" }, h("div", { class: "ml" }, "Held"), h("div", { class: "mv t-commit" }, ugx(pos.committed))))) }),
-      Banner("info", "Every member withdraws their savings in December, including members with a loan. Only the available part is paid; money held for guarantees stays until it is released."),
+      Banner("info", "Only your available savings are paid in December. Money held for guarantees stays until released."),
       Section("Profit I received"), profits.length ? List(profits.map((t) => txnRow(t, txnDetail))) : Empty({ icon: "gift", title: "No profit shared yet", text: "Profit is shared according to each member's eligible savings, once approved by the Chairperson." }),
       outs.length ? [Section("Past share-outs"), List(outs.map((t) => txnRow(t, txnDetail)))] : null);
   }

@@ -70,7 +70,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await pg.locator('[data-prepare="' + l1.id + '"]').click(); await pg.waitForSelector(".toast.bad"); ok(/already prepared|DUPLICATE/i.test(await pg.innerText(".toast")) && rems().length === 1, "preparing the same reminder again is refused (no duplicate)");
   /* bulk */
   await pg.click("#rem-bulk"); await pg.waitForSelector("#rem-bulk-note"); const bulk = await pg.innerText(".modal");
-  ok(/NOTHING has been sent/.test(bulk) && (await pg.locator("[data-open-rem]").count()) === 1 && /already prepared|DUPLICATE/i.test(bulk), "bulk: only members not reminded recently are prepared; the one just reminded is skipped; nothing is sent");
+  ok(/Nothing has been sent/.test(bulk) && (await pg.locator("[data-open-rem]").count()) === 1 && /already prepared|DUPLICATE/i.test(bulk), "bulk: only members not reminded recently are prepared; the one just reminded is skipped; nothing is sent");
   ok(rems().length === 2 && rems().every((r) => r.memberId !== M3.id), "one record per member; the member without a WhatsApp number is skipped, never guessed");
   await pg.click(".modal [data-close]");
   /* LIVE: a repayment recorded now is reflected by the next preview */
@@ -120,7 +120,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
     ok(/OLDBUILD001/.test(await opg.locator("#rem-backend-old").innerText()) && /NEWBUILD002/.test(await opg.locator("#rem-backend-old").innerText()), "an older Google backend is announced on the Reminders screen with both version ids");
     await opg.click("#rem-dates"); await opg.fill('.modal input[name="so"]', soYear + "-12-26"); await opg.fill('.modal input[name="dl"]', soYear + "-12-12"); await opg.fill('.modal input[name="reason"]', "test"); await opg.click("[data-submit]");
     await opg.waitForFunction(() => [...document.querySelectorAll(".modal .err, .toast.bad")].some((e) => e.textContent.trim().length > 0)); const msg = await opg.evaluate(() => [...document.querySelectorAll(".modal .err, .toast.bad")].map((e) => e.textContent.trim()).find((x) => x) || "");
-    ok(/older version/i.test(msg) && /New version/i.test(msg) && msg.trim() !== "setReminderDates", "the error explains the cause and the remedy instead of showing the bare command name (" + msg.slice(0, 60) + "...)");
+    ok(/out of date/i.test(msg) && /New version/i.test(msg) && msg.trim() !== "setReminderDates", "the error explains the cause and the remedy instead of showing the bare command name (" + msg.slice(0, 60) + "...)");
     ok(JSON.stringify(g(adminTok).db.policy) === before, "nothing was changed by the refused request"); oldBackend = false; }
   ok(errs.length === 0, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close(); srv.close(); console.log(fails ? "RESULT: FAIL" : "RESULT: PASS"); if (fails) process.exit(1); else console.log("reminders e2e passed");
