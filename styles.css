@@ -208,3 +208,15 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 .pinrow{display:flex;gap:8px;align-items:stretch}.pinrow input{flex:1;min-width:0}.ghost{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-weight:700;color:var(--navy)}
 #conn-status{margin:12px 0 0;text-align:center}.hint.warn{color:#9a3412}
 .linkbtn{background:none;border:0;box-shadow:none;color:var(--navy);text-decoration:underline;min-height:44px;padding:0 4px;font-weight:600;margin:6px 0 0}
+
+/* ---- refinement pass: configurable lists, reduced motion, readable tables ---- */
+#lists-panel .chips{flex-wrap:wrap;overflow:visible;gap:8px;margin:8px 0}
+#lists-panel .chip{display:inline-flex;align-items:center;gap:4px;padding:4px 6px 4px 14px;min-height:40px}
+#lists-panel .chip .linkbtn{text-decoration:none;min-height:32px;min-width:32px;margin:0;padding:0 8px;color:var(--mute);font-size:18px;line-height:1}
+#lists-panel .chip .linkbtn:hover{color:var(--bad)}
+#lists-panel .panel{margin:0 0 12px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+.chips+.mute,.chips+p{margin-top:6px}
+#main .grid:not(:last-child){margin-bottom:16px}
+.blocked+.chips{margin-top:14px}
+.fy4{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))!important}
