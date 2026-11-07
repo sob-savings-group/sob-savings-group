@@ -115,7 +115,7 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -185,7 +185,7 @@
     const p = periodNow(), custom = p.key === "custom" || st.customOpen;
     const from = h("input", { type: "date", id: "p-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "p-to", value: p.to, max: today(), "aria-label": "To date" });
     return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Reporting period"),
-      Chips(D.PERIOD_PRESETS, custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
+      Chips(D.presetOptions(today(), FYM.table(st.db)), custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
       custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
       h("div", { class: "pb-note", id: "period-note" }, p.fy ? h("span", null, h("b", null, p.fyLabel), " (financial year from share-out to share-out) · ") : null, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
   }
@@ -216,13 +216,13 @@
     const wrap = h("div", null, periodBar(),
       h("h2", { class: "sec" }, "Where the group stands · as at " + D.longDate(p.to)),
       h("div", { class: "grid", id: "kpis" },
-        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Opening " + num(o.availableCash.opening) + " → closing"),
-        c("outstandingLoans", "Outstanding Loans", "loan", o.outstandingLoans.count + " loans owed"), c("interestReceivable", "Interest Receivable", "interest", o.interestReceivable.loans + " loans · unpaid interest"),
+        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Cash at the start of the period: " + num(o.availableCash.opening)),
+        c("outstandingLoans", "Outstanding Loans", "loan", pl(o.outstandingLoans.count, "loan") + " owed"), c("interestReceivable", "Interest Receivable", "interest", pl(o.interestReceivable.loans, "loan") + " · unpaid interest"),
         c("loanExposure", "Loan Exposure", null, "Guaranteed " + ugx(o.loanExposure.guaranteed)), c("members", "Members", null, "Active")),
       h("h2", { class: "sec" }, "What happened · " + (p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to))),
       h("div", { class: "grid", id: "activity" },
-        c("savingsReceived", "Savings Received", "avail", o.savingsReceived.count + " deposits"), c("withdrawals", "Withdrawals & Share-Out", null, o.withdrawals.count + " payments"), c("loansDisbursed", "Loans Paid Out", "loan", o.loansDisbursed.count + " loans"),
-        c("repaymentsReceived", "Loan Repayments", "loan", o.repaymentsReceived.count + " payments"), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
+        c("savingsReceived", "Savings Received", "avail", pl(o.savingsReceived.count, "deposit")), c("withdrawals", "Withdrawals & Share-Out", null, pl(o.withdrawals.count, "payment")), c("loansDisbursed", "Loans Paid Out", "loan", pl(o.loansDisbursed.count, "loan")),
+        c("repaymentsReceived", "Loan Repayments", "loan", pl(o.repaymentsReceived.count, "payment")), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
         c("otherIncome", "Other Income", null, o.otherIncome.count + " entries"), c("profit", "Profit Recorded", "profit", "Profit entries in the period"), c("expenses", "Expenses", null, o.expenses.count + " entries")),
       h("h2", { class: "sec" }, "General Reserve Fund and older loans"),
       h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => { st.view = "reserve"; render(); }, "profit"),
@@ -258,10 +258,14 @@
   /* WhatsApp: always opens WhatsApp itself (the app on a phone, WhatsApp Web on a computer) with the message ready; never the Windows/OS share list */
   const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(shownText(text)); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   /* Two statements: the MEMBER statement (own savings, loans, balances, history) and the ADMINISTRATIVE statement (references, corrections, reserve, audit notes). Only officers who may read the audit trail can open the second; a member can never receive its data (the server removes it). */
+  /* the purposes offered in the entry form: the standard list plus whatever the Super Admin added (G.listOptions), always with Other (Specify) */
+  const purposeChoices = () => { const seen = {}; return Object.keys(G.LIST_DEFAULTS).filter((k) => k.indexOf("purpose.") === 0).reduce((o, k) => o.concat(G.listOptions(st.db, k)), []).filter((x) => !seen[x] && (seen[x] = 1)); };
+  const pl = (n, w) => n + " " + w + (Number(n) === 1 ? "" : "s");   // 1 loan, 2 loans
   const canAdminStatement = () => st.user && st.user.role !== "Member" && G.can(ctx(), "audit.view");
   function statementView(memberId, internal, toDate) {
+    const maxTo0 = () => toDate || today();
     let aud = "member";   // officers start on the Member statement: that is the one safe to print for a member
-    const box = h("div", { id: "stmt-view", "data-rep": "1" }), PRE = [["all", "Lifetime"], ["year", "This financial year"], ["lastYear", "Last financial year"], ["month", "This month"], ["custom", "Custom"]];
+    const box = h("div", { id: "stmt-view", "data-rep": "1" }), PRE = D.presetOptions(maxTo0(), FYM.table(st.db)).filter((x) => ["all", "year", "lastYear", "month", "custom"].includes(x[0]));
     let key = "all", cust = null; const maxTo = toDate || today();
     const periodOf = () => (key === "custom" && cust ? cust : (() => { const p = D.presetPeriod(key, maxTo, FYM.table(st.db)); return p; })());
     const lines = (rows) => h("div", { class: "panel kvs" }, rows.map(([l, v, cls]) => h("div", { class: "kv" + (cls ? " " + cls : "") }, h("span", null, l), h("b", null, typeof v === "number" ? ugx(v) : v))));
@@ -430,7 +434,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   /* ---------- ledger ---------- */
   function ledger() {
     const all = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose" }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
       Searchable("Search the ledger by member, type, purpose or amount", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
       return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
@@ -457,6 +461,24 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("div", { class: "grid" }, Card("To withdraw now", ugx(p.totals.withdrawable), "After guarantee commitments"), Card("Of which loan-holders", ugx(p.totals.withdrawableByLoanHolders), "Loans stay payable"), Card("Committed, stays in account", ugx(p.totals.committedRetained), p.totals.guaranteesAtRisk + " guarantor(s)"), Card("Profit-eligible members", String(p.totals.eligibleMembers)), Card("Excluded (outstanding loan)", String(p.totals.excludedMembers))),
       Table([{ label: "Member", key: "name" }, { label: "Actual savings", num: 1, render: (r) => num(r.savings) }, { label: "Committed", num: 1, render: (r) => num(r.committed) }, { label: "Available", num: 1, render: (r) => num(r.available) }, { label: "Withdraws", num: 1, render: (r) => num(r.withdraw) }, { label: "Stays", num: 1, render: (r) => num(r.retained) }, { label: "Loan owed", num: 1, render: (r) => num(r.outstandingLoan) }, { label: "Action", key: "savingsAction" }], p.rows, (r) => openMember(r.memberId)),
       done ? h("p", { class: "mute" }, "Share-out for " + y + " executed on " + D.toDisplay(done.date) + ".") : G.can(ctx(), "shareout.execute") ? h("div", { class: "row" }, h("button", { class: "danger", id: "exec-shareout", onclick: act(async () => { if (!confirm("Execute the " + y + " share-out? This closes the year.")) return; await commit("executeShareOut", { year: y }); }, "Share-out executed") }, "Execute share-out " + y)) : null);
+  }
+  /* ---------- financial years: independent periods; only a recorded Balance Brought Forward opens a member's new year ---------- */
+  function fyearsView() {
+    const tb = FYM.table(st.db), canW = G.can(ctx(), "reconcile.manage"), sel = st.fySel && tb.some((c) => c.year === st.fySel) ? st.fySel : (tb.length ? tb[tb.length - 1].year : null);
+    if (!tb.length) return h("div", { class: "blocked" }, "No financial years are registered yet. Each year begins on the day of the previous approved share-out.");
+    const pos = FYM.position(st.db, sel), nm = (id) => (st.db.members.find((m) => m.id === id) || {}).name || id, hasPrev = tb.some((c) => c.year < sel);
+    const recs = FYM.openings(st.db).slice().sort((a, b) => (a.year - b.year) || (a.memberId < b.memberId ? -1 : 1));
+    const record = () => Form("Record a Balance Brought Forward", [{ name: "year", label: "Into financial year", options: tb.filter((c) => tb.some((x) => x.year < c.year)).map((c) => ({ value: c.year, label: c.label })), value: sel }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name + " (" + m.id + ")" })) }, { name: "amount", label: "Amount to bring forward (UGX, whole shillings)", type: "number" }, { name: "evidence", label: "Evidence (the minute or decision approving it)" }, { name: "reason", label: "Reason" }, { type: "note", text: "This does not change any ledger entry or the member's live savings. It only opens the member's new year. It cannot exceed what the member held at the previous share-out, and it needs the Chairperson's approval." }],
+      act(async (f) => commit("recordBroughtForward", { year: Number(f.year), memberId: f.m, amount: Number(f.amount), evidence: f.evidence, reason: f.reason }), "Sent for approval"));
+    return h("div", null,
+      h("div", { class: "blocked" }, "Each financial year runs from one approved share-out to the next and stands on its own. Nothing is carried into a new year automatically: savings remaining after a share-out stay in the club's consolidated position unless an authorised officer records them as a Balance Brought Forward."),
+      Chips(tb.map((c) => [String(c.year), c.label.replace("FY", "Financial Year ")]), String(sel), (k) => { st.fySel = Number(k); render(); }),
+      h("p", { class: "mute", id: "fy-span" }, "Financial Year " + pos.year + ": " + D.longDate(pos.openedDate) + " – " + (pos.closedDate ? D.longDate(pos.closedDate) + " (closed by the approved share-out)" : "open")),
+      h("div", { class: "grid fy4" }, hasPrev ? Card("Previous year closing position", ugx(pos.totals.previousClosing), "For information") : null, hasPrev ? Card("Held in the club consolidated position", ugx(pos.totals.notBroughtForward), "Not brought forward") : null, Card("Authorised Balance Brought Forward", ugx(pos.totals.opening), "Recorded by officers"), Card("New-year transactions", ugx(pos.totals.deposits + pos.totals.profit - pos.totals.withdrawals - pos.totals.shareOuts + pos.totals.other), "Deposits, profit, withdrawals")),
+      Table([{ label: "Member", render: (r) => r.name }, { label: "Previous closing", num: 1, render: (r) => num(r.previousClosing) }, { label: "Brought forward", num: 1, render: (r) => num(r.opening) }, { label: "Deposits", num: 1, render: (r) => num(r.deposits) }, { label: "Profit", num: 1, render: (r) => num(r.profit) }, { label: "Withdrawn", num: 1, render: (r) => num(r.withdrawals) }, { label: "Share-out", num: 1, render: (r) => num(r.shareOuts) }, { label: "Closing", num: 1, render: (r) => num(r.closing) }], pos.rows),
+      h("h2", { class: "sec" }, "Recorded Balance Brought Forward"),
+      canW ? h("div", { class: "row" }, h("button", { class: "primary", id: "bbf-add", onclick: record }, "Record a Balance Brought Forward")) : null,
+      recs.length ? Table([{ label: "Year", render: (o) => "Financial Year " + o.year }, { label: "Member", render: (o) => nm(o.memberId) }, { label: "Amount", num: 1, render: (o) => num(o.amount) }, { label: "Evidence", key: "evidence" }, { label: "Recorded by", render: (o) => o.recordedBy + (o.authorisedBy ? " · approved by " + o.authorisedBy : "") }, { label: "", render: (o) => canW ? h("button", { "data-bbf-void": o.id, onclick: () => Form("Void this Balance Brought Forward", [{ name: "reason", label: "Reason" }], act(async (f) => commit("voidBroughtForward", { id: o.id, reason: f.reason }), "Sent for approval")) }, "Void") : null }], recs) : h("p", { class: "mute" }, "None recorded. Every financial year currently opens at zero."));
   }
   /* ---------- profit: proportional to eligible savings, Chairperson-approved posting ---------- */
   function profitRows(rows) {
@@ -556,7 +578,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function airtimeForm(memberId) {
     const e = elig(memberId); if (!e) return toast("Airtime information is not available", true);
     if (e.blockedByLoan) return toast("Airtime is not available while you have an unpaid loan.", true);
-    const fields = [{ name: "amount", label: "Airtime amount (UGX) — up to " + num(e.remaining) + " left this month", type: "number" }, { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "" }];
+    const fields = [{ name: "amount", label: "Airtime amount (UGX) — up to " + num(e.remaining) + " left in " + D.monthYear(today()), type: "number" }, { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "" }];
     if (isStaff()) fields.unshift({ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) });
     Form("Request airtime", fields, act(async (f) => commit("requestAirtime", { memberId: f.m || memberId, amount: Number(f.amount), phone: f.phone }), "Request sent (total with UGX " + AT.SMS_FEE + " SMS fee will be deducted from savings when fulfilled)"), "Submit request");
   }
@@ -565,7 +587,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const top = [];
     if (!staff) {
       const e = elig(id) || { used: 0, remaining: 0, monthlyCap: AT.MONTHLY_CAP, fee: AT.SMS_FEE, blockedByLoan: false, availableSavings: 0 };
-      top.push(h("div", { class: "grid" }, Card("Used this month", ugx(e.used), "of " + ugx(e.monthlyCap)), Card("Remaining", ugx(e.remaining)), Card("SMS fee per request", ugx(e.fee), "Added to each request"), Card("Available savings", ugx(Math.max(0, e.availableSavings)))));
+      top.push(h("div", { class: "grid" }, Card("Used in " + D.monthYear(today()), ugx(e.used), "of " + ugx(e.monthlyCap)), Card("Remaining", ugx(e.remaining)), Card("SMS fee per request", ugx(e.fee), "Added to each request"), Card("Available savings", ugx(Math.max(0, e.availableSavings)))));
       top.push(e.blockedByLoan ? h("div", { class: "blocked", id: "airtime-blocked" }, "Airtime is not available while you have an unpaid loan. Please clear your loan balance first.") : h("p", { class: "mute" }, "For emergencies. Limit UGX " + num(e.monthlyCap) + " per calendar month. The airtime amount plus the UGX " + e.fee + " fee is deducted from your savings only when the Admin fulfils the request."));
       top.push(h("div", { class: "row" }, h("button", { class: "primary", id: "request-airtime", onclick: () => airtimeForm(id) }, "Request airtime")));
     } else if (G.can(ctx(), "airtime.manage")) top.push(h("div", { class: "row" }, h("button", { id: "request-airtime", onclick: () => airtimeForm(null) }, "Record a request for a member")));
@@ -755,6 +777,13 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       sign());
   }
   /* ---------- system: backups + sign-ins (Admin, live deployment) ---------- */
+  /* configurable lists: the Super Admin extends the choices offered in forms without any redevelopment */
+  function listsPanel() {
+    const add = (key) => Form("Add an option: " + G.LIST_TITLES[key], [{ name: "label", label: "New option (max 60 characters)" }, { name: "reason", label: "Reason" }], act(async (f) => commit("addListItem", { list: key, label: f.label, reason: f.reason }), "Option added"));
+    const retire = (key, label) => Form("Retire \"" + label + "\" from " + G.LIST_TITLES[key], [{ type: "note", text: "Entries already recorded keep their wording. The option simply stops being offered." }, { name: "reason", label: "Reason" }], act(async (f) => commit("retireListItem", { list: key, label, reason: f.reason }), "Option retired"));
+    return h("div", { id: "lists-panel" }, h("h2", { class: "sec" }, "Lists and options"), h("p", { class: "mute" }, "These are the choices offered in forms. Every form also offers Other (Specify). Changes are audited and never alter past records."),
+      Object.keys(G.LIST_DEFAULTS).map((key) => h("div", { class: "panel" }, h("b", null, G.LIST_TITLES[key]), h("div", { class: "chips" }, G.listOptions(st.db, key).map((label) => h("span", { class: "chip" }, label, " ", h("button", { class: "linkbtn", "aria-label": "Retire " + label, onclick: () => retire(key, label) }, "×")))), h("button", { "data-add-list": key, onclick: () => add(key) }, "Add an option"))));
+  }
   function system() {
     if (!st.live) return h("div", { class: "blocked" }, "Backups and sign-in management are available on the live deployment. This preview uses demo data that is never saved.");
     if (!st.sys) { st.sys = { loading: true, backups: [] }; st.store.call({ action: "listBackups" }).then((r) => { st.sys = { backups: r.backups }; render(); }).catch((e) => { st.sys = { backups: [], error: friendly(e) }; render(); }); }
@@ -762,7 +791,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const download = async () => {
       const r = await st.store.call({ action: "exportBackup" }), a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(r.backup)], { type: "application/json" })), download: "SOB-backup-" + today() + ".json" }); document.body.append(a); a.click(); a.remove(); toast("Backup downloaded — it contains members' personal data; keep it private");
     };
-    return h("div", null, recordsPanel(), h("h2", { class: "sec" }, "Backups"),
+    return h("div", null, recordsPanel(), listsPanel(), h("h2", { class: "sec" }, "Backups"),
       h("p", { class: "mute" }, "A snapshot is taken automatically every night once the daily trigger is installed (see the deployment guide). Snapshots are checksummed. Backups never contain PINs."),
       h("div", { class: "row" }, h("button", { class: "primary", id: "backup-now", onclick: act(async () => { const r = await st.store.call({ action: "backupNow", force: true }); toast("Snapshot " + r.id + " saved"); await reload(); }) }, "Back up now"), h("button", { id: "backup-download", onclick: act(download) }, "Download offline backup")),
       st.sys && st.sys.error ? h("div", { class: "err" }, st.sys.error) : null,
@@ -797,7 +826,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };

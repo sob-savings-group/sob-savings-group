@@ -31,14 +31,28 @@ t("boundary rule: the share-out day's share-out and cash-out close the old year;
   assert.equal(yr("a1"), 2024); assert.equal(yr("a2"), 2024, "share-out of 1 Dec 2024 belongs to the year it closes"); assert.equal(yr("a3"), 2025, "savings of 1 Dec 2024 belong to the new year");
   assert.equal(yr("a5"), 2025); assert.equal(yr("a6"), 2025); assert.equal(yr("a7"), 2025, "cash-out on the share-out day belongs to the closing year"); assert.equal(yr("a8"), 2026, "savings after the share-out belong to the new year"); assert.equal(yr("a9"), 2026, "31 Dec is not a boundary");
 });
-t("opening, movements, closing and carry-forward chain from year to year and tie to the live savings", () => {
+t("each financial year stands alone: nothing is inherited, previous closing is shown separately, and the years' movements still tie to the live savings", () => {
   const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS });
   const p24 = FY.position(db, 2024), p25 = FY.position(db, 2025), p26 = FY.position(db, 2026), a = (p) => p.rows.find((r) => r.memberId === "SOB-001");
-  assert.deepEqual([a(p24).opening, a(p24).deposits, a(p24).shareOuts, a(p24).closing, a(p24).carriedForward], [0, 1000, 700, 300, 300]);
-  assert.deepEqual([a(p25).opening, a(p25).deposits, a(p25).profit, a(p25).withdrawals, a(p25).shareOuts, a(p25).closing], [300, 150, 20, 0, 310, 160]);
-  assert.deepEqual([a(p26).opening, a(p26).deposits, a(p26).closing, a(p26).carriedForward], [160, 45, 205, null]);
-  assert.equal(a(p26).closing, L.memberSavings(db, "SOB-001")); assert.deepEqual(FY.check(db), []);
-  const m = FY.memberYears(db, "SOB-001"); assert.equal(m[1].opening, m[0].closing); assert.equal(m[2].opening, m[1].closing);
+  assert.deepEqual([a(p24).opening, a(p24).deposits, a(p24).shareOuts, a(p24).closing, a(p24).previousClosing], [0, 1000, 700, 300, 0]);
+  assert.deepEqual([a(p25).opening, a(p25).previousClosing, a(p25).notBroughtForward, a(p25).deposits, a(p25).profit, a(p25).withdrawals, a(p25).shareOuts, a(p25).closing], [0, 300, 300, 150, 20, 0, 310, -140]);
+  assert.deepEqual([a(p26).opening, a(p26).previousClosing, a(p26).deposits, a(p26).closing], [0, -140, 45, 45]);
+  const live = L.memberSavings(db, "SOB-001"), all = [p24, p25, p26].reduce((x, p) => x + (a(p).closing - a(p).opening), 0);
+  assert.equal(all, live, "every year's own movements add up to the live savings"); assert.deepEqual(FY.check(db), []);
+});
+t("Balance Brought Forward: only an officer's recorded entry opens a year; it can't exceed the previous closing; voiding returns to zero; the ledger never changes", () => {
+  const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS }); const before = JSON.stringify(db.transactions), live = L.memberSavings(db, "SOB-001");
+  const adm = { role: "Admin", by: "ADMIN", now: "2026-10-08T10:00:00Z", today: "2026-10-08" };
+  assert.throws(() => FY.recordBroughtForward(db, adm, { year: 2024, memberId: "SOB-001", amount: 100, evidence: "m1", reason: "r" }), /first recorded financial year/);
+  assert.throws(() => FY.recordBroughtForward(db, adm, { year: 2025, memberId: "SOB-001", amount: 301, evidence: "Minute 3", reason: "decision" }), /EXCEEDS_PREVIOUS_CLOSING/);
+  assert.throws(() => FY.recordBroughtForward(db, adm, { year: 2025, memberId: "SOB-001", amount: 100, evidence: "", reason: "decision" }), /REQUIRED/);
+  const e = FY.recordBroughtForward(db, adm, { year: 2025, memberId: "SOB-001", amount: 200, evidence: "Minute 3 of the AGM", reason: "Members agreed to keep 200 in" });
+  const r = FY.position(db, 2025).rows.find((x) => x.memberId === "SOB-001"); assert.deepEqual([r.opening, r.previousClosing, r.notBroughtForward, r.closing], [200, 300, 100, 60]);
+  assert.throws(() => FY.recordBroughtForward(db, adm, { year: 2025, memberId: "SOB-001", amount: 101, evidence: "m", reason: "r" }), /at most 100/);
+  assert.ok(db.auditLog.some((x) => x.entityId === e.id && /recorded/.test(x.action)));
+  FY.voidBroughtForward(db, adm, { id: e.id, reason: "entered in error" }); assert.equal(FY.position(db, 2025).rows.find((x) => x.memberId === "SOB-001").opening, 0);
+  assert.equal(JSON.stringify(db.transactions), before, "no ledger entry changed"); assert.equal(L.memberSavings(db, "SOB-001"), live, "the live savings figure did not change");
+  assert.throws(() => FY.recordBroughtForward(db, { role: "Secretary", by: "S", now: "x", today: "2026-10-08" }, { year: 2025, memberId: "SOB-001", amount: 1, evidence: "m", reason: "r" }), /FORBIDDEN|PERMISSION|not allowed/i);
 });
 t("the statement shows each year, bounded by the share-out dates, with what was carried forward", () => {
   const db = world(); FY.defineFinancialYears(db, at("2026-10-08"), { years: YEARS }); const s = R.memberStatementPrint(db, "SOB-001", {}), text = JSON.stringify(s.summary);

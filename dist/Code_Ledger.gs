@@ -47,11 +47,21 @@ __M['core/dates'] = (function(){ const module = {exports:{}}; const require = __
     if (p.key === "all" || !p.from) return "Start of records – " + longDate(p.to);
     return p.from === p.to ? longDate(p.to) : longDate(p.from) + " – " + longDate(p.to);
   }
+  const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const monthYear = (iso) => MONTH_NAMES[Number(iso.slice(5, 7)) - 1] + " " + iso.slice(0, 4);
+  /* A report period is always named by what it covers (never "this year"/"last month"), so an old report still reads correctly years later. */
+  function explicitLabel(key, from, to) {
+    if (key === "month" || key === "lastMonth") return monthYear(from);
+    if (key === "quarter") return "Quarter " + (Math.floor((Number(from.slice(5, 7)) - 1) / 3) + 1) + " " + from.slice(0, 4) + " (" + MONTH_NAMES[Number(from.slice(5, 7)) - 1] + " – " + MONTH_NAMES[Number(from.slice(5, 7)) + 1] + ")";
+    if (key === "year" || key === "lastYear") return "Calendar year " + from.slice(0, 4);
+    if (key === "all") return "All records";
+    return "Custom dates";
+  }
   function makePeriod(key, from, to, today) {
-    const p = { key, from, to }; p.label = (PERIOD_PRESETS.find((x) => x[0] === key) || [0, "Custom"])[1]; p.text = describePeriod(p); p.toDate = to >= today; return p;
+    const p = { key, from, to }; p.label = explicitLabel(key, from || "", to); p.text = describePeriod(p); p.toDate = to >= today; return p;
   }
   /* SOB financial years are defined by the actual share-out dates (db.yearCycles: year, openedDate, closedDate), never by the calendar.
-     "This financial year" = the year that is open today; "Last financial year" = the one before it. Both run from the share-out that opened them
+     The "year" preset = the year that is open today; "lastYear" = the one before it (labelled by number, e.g. "Financial Year 2026"). Both run from the share-out that opened them
      to the share-out that closed them (the day itself belongs to the year that ended). Without registered years this falls back to the calendar. */
   function fyPreset(key, today, years) {
     const tb = (years || []).filter((c) => c && c.year && isISO(c.openedDate)).slice().sort((a, b) => a.year - b.year);
@@ -59,7 +69,7 @@ __M['core/dates'] = (function(){ const module = {exports:{}}; const require = __
     let i = tb.length - 1; for (let k = 0; k < tb.length; k++) if (tb[k].openedDate <= today && (!tb[k].closedDate || today <= tb[k].closedDate)) i = k;
     const c = key === "year" ? tb[i] : tb[i - 1]; if (!c) return null;
     const to = c.closedDate && c.closedDate < today ? c.closedDate : today, p = makePeriod(key, c.openedDate, to, today);
-    p.fy = c.year; p.fyOpened = c.openedDate; p.fyClosed = c.closedDate || null; p.fyLabel = "FY" + c.year; p.label = (key === "year" ? "This financial year" : "Last financial year") + " (FY" + c.year + ")"; return p;
+    p.fy = c.year; p.fyOpened = c.openedDate; p.fyClosed = c.closedDate || null; p.fyLabel = "FY" + c.year; p.label = "Financial Year " + c.year; return p;
   }
   function presetPeriod(key, today, years) {
     today = today || todayISO();
@@ -80,7 +90,11 @@ __M['core/dates'] = (function(){ const module = {exports:{}}; const require = __
     if (to > today) throw new RangeError("The end date cannot be in the future");
     return makePeriod("custom", from, to, today);
   }
-  return { longDate, presetPeriod, customPeriod, describePeriod, PERIOD_PRESETS, EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
+  /* The chip list for a period picker: every label names its actual period (Financial Year 2026, November 2026 ...). */
+  function presetOptions(today, years) {
+    today = today || todayISO(); return PERIOD_PRESETS.map((x) => { if (x[0] === "custom") return ["custom", "Custom dates"]; let l = x[1]; try { l = presetPeriod(x[0], today, years).label; } catch (e) { /* keep the generic name */ } return [x[0], l]; });
+  }
+  return { presetOptions, monthYear, MONTH_NAMES, longDate, presetPeriod, customPeriod, describePeriod, PERIOD_PRESETS, EAT_OFFSET_MS, isRealDate, setClock, nowInEAT, todayISO, isISO, parse, addDays, addMonths, monthsBetween, toDisplay, yearOf, quarterOf };
 });
 
 return module.exports; })();
@@ -463,7 +477,39 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
     audit(db, ctx, "Policy", key, "Changed", cur, next, reason);
     return rec;
   }
-  return { ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
+  /* CONFIGURABLE LISTS: the choices offered in forms (e.g. the purpose of an entry). Standard options ship with the software; authorised administrators add more
+     (or retire them) without any redevelopment. Every form also offers "Other (Specify)". Lists are only labels: no calculation depends on them, and what was
+     recorded in the past is never rewritten when a list changes. */
+  const LIST_DEFAULTS = {
+    "purpose.Savings": ["Regular savings deposit", "Additional savings deposit", "Savings brought in by a new member"],
+    "purpose.Withdraw": ["Member withdrawal", "Annual share-out payment", "Emergency withdrawal"],
+    "purpose.Expense": ["Administration", "Transport", "Stationery", "Meeting costs", "Bank charges"],
+    "purpose.Income": ["Loan interest", "Annual subscription", "Donation"],
+    "purpose.Profit": ["Profit share"],
+    "purpose.Bank Charge": ["Bank charge"]
+  };
+  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges" };
+  const listItems = (db, key) => (db.listItems || []).filter((i) => i && i.list === key);
+  function listOptions(db, key) {
+    const retired = {}, added = []; listItems(db, key).forEach((i) => { if (i.active === false) retired[i.label.toLowerCase()] = 1; else added.push(i.label); });
+    const seen = {}; return (LIST_DEFAULTS[key] || []).concat(added).filter((x) => { const k = x.toLowerCase(); if (seen[k] || retired[k]) return false; seen[k] = 1; return true; });
+  }
+  function addListItem(db, ctx, a) {
+    require_(ctx, "policy.manage"); a = a || {}; if (!LIST_DEFAULTS[a.list]) throw new Error("INVALID: unknown list '" + a.list + "'");
+    const label = need(a.label, "name of the new option"); if (label.length > 60) throw new Error("INVALID: keep the option under 60 characters"); if (/^other\b/i.test(label)) throw new Error("INVALID: 'Other (Specify)' is always offered automatically");
+    const reason = need(a.reason, "reason"); db.listItems = db.listItems || [];
+    const hit = db.listItems.find((i) => i.list === a.list && i.label.toLowerCase() === label.toLowerCase());
+    if (hit) { if (hit.active !== false) throw new Error("ALREADY_EXISTS: '" + hit.label + "' is already in this list"); hit.active = true; audit(db, ctx, "List", hit.id, "Option restored", { active: false }, { active: true }, reason); return hit; }
+    if (listOptions(db, a.list).some((x) => x.toLowerCase() === label.toLowerCase())) throw new Error("ALREADY_EXISTS: '" + label + "' is already in this list");
+    const it = { id: uid("LST"), list: a.list, label, active: true, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); audit(db, ctx, "List", it.id, "Option added", null, { list: a.list, label }, reason); return it;
+  }
+  function retireListItem(db, ctx, a) {
+    require_(ctx, "policy.manage"); a = a || {}; const reason = need(a.reason, "reason"), label = need(a.label, "option"); if (!LIST_DEFAULTS[a.list]) throw new Error("INVALID: unknown list '" + a.list + "'");
+    db.listItems = db.listItems || []; let it = db.listItems.find((i) => i.list === a.list && i.label.toLowerCase() === label.toLowerCase());
+    if (!it) { it = { id: uid("LST"), list: a.list, label, active: false, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); } else it.active = false;
+    audit(db, ctx, "List", it.id, "Option retired", { active: true }, { active: false }, reason); return it;
+  }
+  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
 });
 
 return module.exports; })();
@@ -1500,33 +1546,53 @@ __M['core/fy'] = (function(){ const module = {exports:{}}; const require = __req
   const yearOfDate = (db, d) => yearOfEntry(db, { date: d, type: "Savings" });
 
   const eff = (t) => L.classifyTransaction(t).savings;
-  /* Opening, movements, closing and the balance carried forward for every member in one financial year. */
+  /* BALANCE BROUGHT FORWARD (SOB policy): financial years are independent. Nothing is inherited automatically; a member's savings left after a share-out
+     are part of the club's consolidated position unless an authorised officer deliberately records them as a Balance Brought Forward for the new year.
+     Those records live in db.yearOpenings and NEVER change a ledger entry, a loan, a profit figure or a member's live savings total. */
+  const openings = (db) => (db.yearOpenings || []).filter((o) => o && !o.voided);
+  const openingOf = (db, year, memberId) => openings(db).filter((o) => Number(o.year) === Number(year) && o.memberId === memberId).reduce((a, o) => a + Number(o.amount), 0);
+  /* The movements of every member inside each year (deposits, profit, withdrawals, share-outs, other), from the ledger only. */
+  function movements(db, tb) {
+    const mv = {}; L.activeTransactions(db).forEach((t) => {
+      if (!t.memberId) return; const e = eff(t); if (!e) return; const y = yearOfEntry(db, t, tb); if (y === null) return;
+      const r = ((mv[y] = mv[y] || {})[t.memberId] = mv[y][t.memberId] || { deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0 }), cyc = tb.find((c) => c.year === y);
+      if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" && cyc && cyc.closedDate && t.date === cyc.closedDate) r.shareOuts += -e;
+      else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e;
+    }); return mv;
+  }
+  const net = (r) => r.deposits + r.profit - r.withdrawals - r.shareOuts + r.other;
+  /* One year at a time: opening = ONLY the recorded Balance Brought Forward; previousClosing = the year before's closing position (shown for information);
+     notBroughtForward = the part of that closing that stays in the club's consolidated position; closing = opening + this year's own movements. */
   function position(db, year) {
     const tb = table(db), cyc = tb.find((c) => c.year === Number(year)); if (!cyc) throw new Error("NOT_FOUND: financial year " + year);
-    const per = {}; (db.members || []).forEach((m) => { per[m.id] = { memberId: m.id, name: m.name, opening: 0, deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0, closing: 0 }; });
-    L.activeTransactions(db).forEach((t) => {
-      if (!t.memberId || !per[t.memberId]) return; const e = eff(t); if (!e) return; const y = yearOfEntry(db, t, tb), r = per[t.memberId];
-      if (y < cyc.year) r.opening += e;
-      else if (y === cyc.year) { if (t.type === "Savings") r.deposits += e; else if (t.type === "Profit") r.profit += e; else if (t.type === "Withdraw" && cyc.closedDate && t.date === cyc.closedDate) r.shareOuts += -e;   /* a cash-out recorded on the share-out day is part of that share-out (Chairperson decision, 9 Oct 2026) */
-      else if (t.type === "Withdraw" || t.type === "Bank Charge") r.withdrawals += -e; else if (t.type === "Share-Out") r.shareOuts += -e; else r.other += e; }
-    });
-    const rows = Object.keys(per).map((k) => per[k]).filter((r) => r.opening || r.deposits || r.profit || r.withdrawals || r.shareOuts || r.other);
-    rows.forEach((r) => { r.closing = r.opening + r.deposits + r.profit - r.withdrawals - r.shareOuts + r.other; r.carriedForward = cyc.status === "Closed" ? r.closing : null; });
+    const mv = movements(db, tb), zero = { deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0 };
+    const closingIn = (y, id) => openingOf(db, y, id) + net(((mv[y] || {})[id]) || zero);
+    const prev = tb.filter((c) => c.year < cyc.year).pop() || null;
+    const ids = {}; (db.members || []).forEach((m) => { ids[m.id] = m.name; });
+    const rows = Object.keys(ids).map((id) => {
+      const m = ((mv[cyc.year] || {})[id]) || zero, opening = openingOf(db, cyc.year, id), previousClosing = prev ? closingIn(prev.year, id) : 0, closing = opening + net(m);
+      return { memberId: id, name: ids[id], opening, previousClosing, notBroughtForward: previousClosing - opening, deposits: m.deposits, profit: m.profit, withdrawals: m.withdrawals, shareOuts: m.shareOuts, other: m.other, closing };
+    }).filter((r) => r.opening || r.previousClosing || r.deposits || r.profit || r.withdrawals || r.shareOuts || r.other);
+    const next = tb.find((c) => c.year === cyc.year + 1);
+    rows.forEach((r) => { r.broughtForwardNext = next ? openingOf(db, next.year, r.memberId) : null; });
     const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
     return { year: cyc.year, label: cyc.label, openedDate: cyc.openedDate, closedDate: cyc.closedDate || null, status: cyc.status, shareOutDate: cyc.closedDate || null, rows,
-      totals: { opening: sum("opening"), deposits: sum("deposits"), profit: sum("profit"), withdrawals: sum("withdrawals"), shareOuts: sum("shareOuts"), other: sum("other"), closing: sum("closing"), carriedForward: cyc.status === "Closed" ? sum("closing") : null } };
+      totals: { opening: sum("opening"), previousClosing: sum("previousClosing"), notBroughtForward: sum("notBroughtForward"), deposits: sum("deposits"), profit: sum("profit"), withdrawals: sum("withdrawals"), shareOuts: sum("shareOuts"), other: sum("other"), closing: sum("closing"), broughtForwardNext: next ? sum("broughtForwardNext") : null } };
   }
   const summary = (db) => table(db).map((c) => { const p = position(db, c.year); return Object.assign({ year: c.year, label: c.label, openedDate: c.openedDate, closedDate: c.closedDate || null, status: c.status, basis: c.basis || "", evidence: c.evidence || "" }, p.totals); });
   /* One member across every financial year (for statements). */
   function memberYears(db, memberId) {
-    return table(db).map((c) => { const r = position(db, c.year).rows.find((x) => x.memberId === memberId) || { opening: 0, deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0, closing: 0 };
-      return { year: c.year, label: c.label, openedDate: c.openedDate, closedDate: c.closedDate || null, status: c.status, opening: r.opening, deposits: r.deposits, profit: r.profit, withdrawals: r.withdrawals, shareOuts: r.shareOuts, closing: r.closing, carriedForward: c.status === "Closed" ? r.closing : null }; });
+    return table(db).map((c) => { const r = position(db, c.year).rows.find((x) => x.memberId === memberId) || { opening: 0, previousClosing: 0, notBroughtForward: 0, deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0, closing: 0 };
+      return { year: c.year, label: c.label, openedDate: c.openedDate, closedDate: c.closedDate || null, status: c.status, opening: r.opening, previousClosing: r.previousClosing, notBroughtForward: r.notBroughtForward, deposits: r.deposits, profit: r.profit, withdrawals: r.withdrawals, shareOuts: r.shareOuts, other: r.other, closing: r.closing }; });
   }
   /* Health: years are contiguous and the last year's closing equals the live savings total. */
   function check(db) {
     const tb = table(db), out = [];
     tb.forEach((c, i) => { if (i && tb[i - 1].closedDate !== c.openedDate) out.push("FY" + c.year + " does not begin on the day FY" + tb[i - 1].year + " closed"); if (c.status === "Closed" && !c.closedDate) out.push(c.label + " is closed without a share-out date"); });
-    if (tb.length) { const last = position(db, tb[tb.length - 1].year).totals.closing, live = L.computeGroupTotals(db).groupSavings; if (last !== live) out.push("closing of the last year (" + last + ") differs from group savings (" + live + ")"); }
+    if (tb.length) { /* every year stands alone, so the years' own movements must add up to the live savings total */
+      const all = tb.map((c) => position(db, c.year)), moved = all.reduce((a, p) => a + p.rows.reduce((x, r) => x + net(r), 0), 0), live = L.computeGroupTotals(db).groupSavings;
+      if (moved !== live) out.push("the movements of all financial years (" + moved + ") differ from group savings (" + live + ")");
+      all.forEach((p) => p.rows.forEach((r) => { if (r.opening < 0 || (r.opening > 0 && r.opening > r.previousClosing)) out.push(p.label + ": Balance Brought Forward for " + r.memberId + " (" + r.opening + ") is more than the previous year's closing (" + r.previousClosing + ")"); })); }
     return out;
   }
 
@@ -1559,7 +1625,26 @@ __M['core/fy'] = (function(){ const module = {exports:{}}; const require = __req
     });
     return out;
   }
-  return { label, table, byYear, current, yearOfEntry, yearOfDate, position, summary, memberYears, check, defineFinancialYears, SETTLEMENT };
+  /* RECORD a Balance Brought Forward: an officer deliberately opens a member's new year with (part of) what they held at the previous share-out.
+     Needs evidence and a reason, may never exceed what the member's previous-year closing position still allows, and (see commands.js GATED) takes effect only
+     when the Chairperson approves. It is a separate record: no ledger entry, loan, profit or live savings figure changes. */
+  function recordBroughtForward(db, ctx, a) {
+    G.require(ctx, "reconcile.manage"); a = a || {}; const year = Number(a.year), amount = Number(a.amount), tb = table(db), cyc = tb.find((c) => c.year === year);
+    if (!cyc) throw new Error("NOT_FOUND: financial year " + a.year); const prev = tb.filter((c) => c.year < year).pop(); if (!prev) throw new Error("INVALID: the first recorded financial year has no previous year to bring a balance forward from");
+    const m = (db.members || []).find((x) => x.id === a.memberId); if (!m) throw new Error("NOT_FOUND: member " + a.memberId);
+    if (!(amount > 0) || !Number.isInteger(amount)) throw new Error("INVALID: amount must be a whole positive number of shillings");
+    const evidence = G.need(a.evidence, "evidence (the minute or decision that approves this Balance Brought Forward)"), reason = G.need(a.reason, "reason");
+    const row = position(db, year).rows.find((r) => r.memberId === a.memberId), room = row ? row.previousClosing - row.opening : 0;
+    if (amount > room) throw new Error("EXCEEDS_PREVIOUS_CLOSING: " + a.memberId + " had " + (row ? row.previousClosing : 0) + " at the close of FY" + prev.year + " with " + (row ? row.opening : 0) + " already brought forward, so at most " + Math.max(0, room) + " can be brought forward");
+    const e = { id: G.uid("BBF"), year, memberId: a.memberId, amount, date: cyc.openedDate, previousYear: prev.year, previousClosing: row ? row.previousClosing : 0, evidence, reason, recordedBy: ctx.by, authorisedBy: ctx.approvedBy || null, createdAt: ctx.now };
+    (db.yearOpenings = db.yearOpenings || []).push(e); G.audit(db, ctx, "BalanceBroughtForward", e.id, "Balance Brought Forward recorded", null, { year, memberId: e.memberId, amount }, reason + " | evidence: " + evidence); return e;
+  }
+  function voidBroughtForward(db, ctx, a) {
+    G.require(ctx, "reconcile.manage"); a = a || {}; const e = (db.yearOpenings || []).find((x) => x.id === a.id && !x.voided); if (!e) throw new Error("NOT_FOUND: Balance Brought Forward " + a.id);
+    const reason = G.need(a.reason, "reason"); e.voided = true; e.voidReason = reason; e.voidedBy = ctx.by; e.voidedAt = ctx.now;
+    G.audit(db, ctx, "BalanceBroughtForward", e.id, "Balance Brought Forward voided", { amount: e.amount }, { voided: true }, reason); return e;
+  }
+  return { recordBroughtForward, voidBroughtForward, openings, openingOf, label, table, byYear, current, yearOfEntry, yearOfDate, position, summary, memberYears, check, defineFinancialYears, SETTLEMENT };
 });
 
 return module.exports; })();
@@ -1826,7 +1911,7 @@ __M['core/profitrec'] = (function(){ const module = {exports:{}}; const require 
     if (av.verified === null) flags.push("Group profit for " + c.label + " has not been verified by the Chairperson: nothing may move to the reserve yet.");
     if (credited > earned) flags.push("Profit credited to members (" + credited + ") is MORE than the interest recorded as received (" + earned + "): UGX " + (credited - earned) + " is unexplained by the records.");
     if (h.excess > 0) flags.push("Historical repayments of UGX " + h.excess + " were more than the interest and loan recorded as due (kept visible, not allocated).");
-    if (groupLedger && groupLedger !== earned) flags.push("The archived group bank ledger records profit of " + groupLedger + " for this year; the interest-first figure is " + earned + ".");
+    if (groupLedger && groupLedger !== earned) flags.push("The archived group bank ledger records profit of " + groupLedger + " for FY" + c.year + "; the interest-first figure is " + earned + ".");
     return { year: c.year, label: c.label, from, to: c.closedDate || null, status: c.status, interestCharged, interestReceived, interestReceivable: receivable, historicalCharged: h.interestCharged, currentCharged: cur.charged, otherIncome: income, expenses, writeOffLoss: woLoss,
       earnedRecorded: earned, profitCredited: credited, undistributed, groupLedgerProfit: groupLedger, verifiedProfit: av.verified, reservedFromYear: reserveIn, reserveAvailable: av.available, shortfall: av.shortfall, settled: (FY.byYear(db, c.year) || {}).settled || null, historicalLoanPrincipalOpenAtYearEnd: hOut.principal, historicalLoansOpenAtYearEnd: hOut.loans, flags };
   }
@@ -2279,6 +2364,10 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
     cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),
     setReminderSettings: (db, ctx, a) => RM.setSettings(db, ctx, { urgentDays: a.urgentDays, finalDays: a.finalDays, minIntervalDays: a.minIntervalDays, templates: a.templates, reason: a.reason }),
+    addListItem: (db, ctx, a) => G.addListItem(db, ctx, { list: a.list, label: a.label, reason: a.reason }),
+    retireListItem: (db, ctx, a) => G.retireListItem(db, ctx, { list: a.list, label: a.label, reason: a.reason }),
+    recordBroughtForward: (db, ctx, a) => FYR.recordBroughtForward(db, ctx, { year: a.year, memberId: a.memberId, amount: a.amount, evidence: a.evidence, reason: a.reason }),
+    voidBroughtForward: (db, ctx, a) => FYR.voidBroughtForward(db, ctx, { id: a.id, reason: a.reason }),
     setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
@@ -2300,6 +2389,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     resolveDiscrepancy: { perm: "reconcile.manage", label: "Resolve a reconciliation item", when: (a) => a && a.decision === "ACCEPT_SOURCE_WITH_ENTRY" },
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
     transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
+    recordBroughtForward: { perm: "reconcile.manage", label: "Record a member's Balance Brought Forward into a financial year" }, voidBroughtForward: { perm: "reconcile.manage", label: "Void a Balance Brought Forward record" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
@@ -2314,6 +2404,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
+    if (name === "recordBroughtForward") return "Balance Brought Forward UGX " + a.amount + " for " + a.memberId + " into FY" + a.year;
+    if (name === "voidBroughtForward") return "Void Balance Brought Forward " + a.id;
     if (name === "openReserve") return "Reserve opening balance UGX " + a.amount + " on " + a.date;
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
@@ -2562,7 +2654,7 @@ __M['core/migrate'] = (function(){ const module = {exports:{}}; const require = 
         n.interestHistory = n.interestHistory || [];
         return n;
       }),
-      guarantees: [], securities: [], policy: [], approvalRequests: [], historicalNotes: [], yearCycles: [], shareOutEvents: [], profitDistributions: [], historicalLoans: [], loanInterestRecords: [], reserveFund: [],
+      guarantees: [], securities: [], policy: [], approvalRequests: [], historicalNotes: [], yearCycles: [], shareOutEvents: [], profitDistributions: [], historicalLoans: [], loanInterestRecords: [], reserveFund: [], yearOpenings: [], listItems: [],
       users: src.users || [], requests: src.requests || [], airtimeRequests: src.airtimeRequests || [],
       auditLog: (src.auditLog || []).slice(), reconciliations: src.reconciliations || [], smsFailures: src.smsFailures || [],
       legacyAdministration: src.ledger || [], // archived bank-level rows; they do NOT feed any total
@@ -2774,7 +2866,7 @@ __M['core/loader'] = (function(){ const module = {exports:{}}; const require = _
       const r = must(await api({ action: "command", name: "defineFinancialYears", args: { years: H.financialYears } }), "financial years");
       db = await read(); const prob = FY.check(db);
       c.add("financial years set by the share-outs: " + FY.table(db).map((y) => y.label + " " + y.openedDate + (y.closedDate ? " to " + y.closedDate : " (open)")).join("; "), H.financialYears.every((y) => { const t = FY.byYear(db, y.year); return t && t.openedDate === y.openedDate && (t.closedDate || null) === (y.closedDate || null); }), "");
-      c.add("each year starts on the day the previous share-out was held, and the last year's closing equals total savings", prob.length === 0, prob.join("; "));
+      c.add("each year starts on the day the previous share-out was held, and the movements of all years add up to total savings", prob.length === 0, prob.join("; "));
     }
 
     /* 3. reconciliation register: uncertain items stay open, with their evidence */
@@ -3220,11 +3312,18 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     const m = (db.members || []).find((x) => x.id === memberId); if (!m) throw new Error("NOT_FOUND: member " + memberId);
     const today = opts.today || dates.todayISO(), to = period.to && period.to < today ? period.to : today, from = period.from || "", dd = asAt(db, to);
     const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to), inP = hist.filter((t) => !from || t.date >= from);
-    const opening = from ? L.memberSavingsAsOf(dd, memberId, dates.addDays(from, -1)) : 0, closing = L.memberSavingsAsOf(dd, memberId, to);
+    /* A financial-year statement (the period starts on the day a year opened) is INDEPENDENT: it opens with the recorded Balance Brought Forward only, never with an inherited balance.
+       Any other period (lifetime, a month, custom dates) is a running balance of the ledger and is labelled as such. */
+    const fyc = from ? FY.table(dd).find((c) => c.openedDate === from && to <= (c.closedDate || "9999-12-31")) : null;
+    let opening, closing, fyInfo = null;
+    if (fyc) { const pos = FY.position(dd, fyc.year).rows.find((x) => x.memberId === memberId) || { opening: 0, previousClosing: 0, notBroughtForward: 0 }; opening = pos.opening; fyInfo = { label: fyc.label, previousClosing: pos.previousClosing, notBroughtForward: pos.notBroughtForward, hasPrevious: FY.table(dd).some((c) => c.year < fyc.year) }; }
+    else opening = from ? L.memberSavingsAsOf(dd, memberId, dates.addDays(from, -1)) : 0;
+    closing = fyc ? null : L.memberSavingsAsOf(dd, memberId, to);
     const mv = { deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, offsets: 0, other: 0 };
     inP.forEach((t) => { const e = L.classifyTransaction(t).savings; if (!e) return; const b = t.viaSavings ? "offsets" : (BUCKET[t.type] || "other"); mv[b] += (b === "deposits" || b === "profit" || b === "other") ? e : -e; });   // "other" keeps its own sign
     const net = mv.deposits + mv.profit - mv.withdrawals - mv.shareOuts - mv.offsets + mv.other;
-    const savings = Object.assign({ opening, closing }, mv, { net, checks: { movementsAddUp: opening + net === closing, matchesRunningBalance: !inP.length || inP[inP.length - 1].runningSavings === closing || !!from, matchesPosition: L.memberPositionAsAt(dd, memberId, to).savings === closing } });
+    if (fyc) closing = opening + net;
+    const savings = Object.assign({ opening, closing }, mv, { net, checks: { movementsAddUp: opening + net === closing, matchesRunningBalance: !inP.length || inP[inP.length - 1].runningSavings === closing || !!from, matchesPosition: fyc ? true : L.memberPositionAsAt(dd, memberId, to).savings === closing } }, { basis: fyc ? "financial-year" : "running", fy: fyInfo });
     const years = FY.table(dd).filter((c) => c.openedDate <= to && (!from || !c.closedDate || c.closedDate >= from)).map((c) => { const r = FY.position(dd, c.year).rows.find((x) => x.memberId === memberId) || { opening: 0, deposits: 0, profit: 0, withdrawals: 0, shareOuts: 0, other: 0, closing: 0 };
       return { label: c.label, year: c.year, opened: c.openedDate, closed: c.closedDate || null, open: c.status !== "Closed", opening: r.opening, deposits: r.deposits, profit: r.profit, withdrawals: r.withdrawals, shareOuts: r.shareOuts, other: r.other || 0, closing: r.closing, rowAddsUp: r.opening + r.deposits + r.profit - r.withdrawals - r.shareOuts + (r.other || 0) === r.closing }; });
     const only = opts.loanId || "";
@@ -3282,9 +3381,9 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     h += ADM ? '<div class="conf">ADMINISTRATIVE STATEMENT — INTERNAL. For authorised officers only: it contains reconciliations, internal references and audit notes. Do not give or send this to the member (use the Member statement). Figures are in Uganda Shillings (UGX).</div>'
       : '<div class="conf">CONFIDENTIAL — prepared for the named member only. Please do not forward. Figures are in Uganda Shillings (UGX).</div>';
     const full = a.mode !== "loan"; let k = 0; const sec = (t) => '<h3 class="sec">' + (++k) + ". " + t + "</h3>";
-    if (full) h += sec("Savings summary") + kv([["Savings brought forward" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening], ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]].concat(s.offsets ? [["Offset against a loan (approved)", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Savings position as at " + dates.longDate(p.to) + " (closing savings)", s.closing, "tot"]])) + '<div class="cf">Savings position = savings + profit − withdrawals − share-outs. Loans are NOT deducted from it.</div>' + (a.loans.length ? sec("Owed to SOB (shown separately — not deducted from savings)") + kv([["Loan still owed", a.loans.reduce((x, l) => x + l.principalLeft, 0)], ["Interest and penalties still due", a.loans.reduce((x, l) => x + l.interestDue + l.penaltiesDue, 0)], ["Total owed on current loans", a.loanTotals.owed, "tot"]]) : "");
+    if (full) h += sec("Savings summary") + kv((s.fy ? [["Balance Brought Forward into " + s.fy.label + " (officer-recorded)", s.opening]].concat(s.fy.hasPrevious ? [["Previous year closing position (not carried over automatically)", s.fy.previousClosing], ["Held in the club consolidated position", s.fy.notBroughtForward]] : []) : [["Savings balance at the start of the period" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening]]).concat([ ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]]).concat(s.offsets ? [["Offset against a loan (approved)", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Savings position as at " + dates.longDate(p.to) + " (closing savings)", s.closing, "tot"]])) + '<div class="cf">Savings position = savings + profit − withdrawals − share-outs. Loans are NOT deducted from it.</div>' + (a.loans.length ? sec("Owed to SOB (shown separately — not deducted from savings)") + kv([["Loan still owed", a.loans.reduce((x, l) => x + l.principalLeft, 0)], ["Interest and penalties still due", a.loans.reduce((x, l) => x + l.interestDue + l.penaltiesDue, 0)], ["Total owed on current loans", a.loanTotals.owed, "tot"]]) : "");
     if (full && (ADM || !s.checks.movementsAddUp)) h += '<div class="cf">Check: opening ' + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + (s.checks.movementsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE — report to the Treasurer</span>') + "</div>";
-    if (full && a.years.length) h += sec("By financial year (share-out to share-out)") + tbl([{ h: "Year", f: (y) => y.label + " (" + dates.toDisplay(y.opened) + " – " + (y.closed ? dates.toDisplay(y.closed) : "open") + ")" }, { h: "Opening", n: 1, f: (y) => num(y.opening) }, { h: "Deposits", n: 1, f: (y) => num(y.deposits) }, { h: "Profit", n: 1, f: (y) => num(y.profit) }, { h: "Withdrawn", n: 1, f: (y) => num(y.withdrawals) }, { h: "Share-out", n: 1, f: (y) => num(y.shareOuts) }, { h: "Closing", n: 1, f: (y) => num(y.closing) + (y.open ? "*" : "") }], a.years) + '<div class="cf">*Open year, to date. A closed year\'s closing balance is carried forward as the opening of the next year.</div>';
+    if (full && a.years.length) h += sec("By financial year (share-out to share-out)") + tbl([{ h: "Year", f: (y) => y.label + " (" + dates.toDisplay(y.opened) + " – " + (y.closed ? dates.toDisplay(y.closed) : "open") + ")" }, { h: "Brought forward", n: 1, f: (y) => num(y.opening) }, { h: "Deposits", n: 1, f: (y) => num(y.deposits) }, { h: "Profit", n: 1, f: (y) => num(y.profit) }, { h: "Withdrawn", n: 1, f: (y) => num(y.withdrawals) }, { h: "Share-out", n: 1, f: (y) => num(y.shareOuts) }, { h: "Closing", n: 1, f: (y) => num(y.closing) + (y.open ? "*" : "") }], a.years) + '<div class="cf">*Open year, to date. Each year stands alone: nothing is carried into the next year unless an officer records a Balance Brought Forward.</div>';
     if (full && ADM) h += '<div class="box">' + sec("Year-end savings and the General Reserve Fund") + '<div class="cf">' + esc(a.reserve.text) + "</div></div>";
     h += sec(full ? "Loans" : "Loan details");
     if (!a.loans.length && !a.earlier.length) h += '<div class="cf">No loans on record for this member in the period.</div>';
@@ -3317,11 +3416,11 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     const req = (db.approvalRequests || []).filter((q) => q.status === "Pending" && q.command === "settleFinancialYear" && Number((q.args || {}).year) === Number(year));
     const members = FY.position(db, year).rows.filter((r) => r.closing).map((r) => ({ id: r.memberId, member: (db.members.find((m) => m.id === r.memberId) || {}).name || r.memberId, closing: r.closing }));
     const lines = [
-      { line: "Members' savings at the end of " + sm.label + " (carried into the next year)", amount: sm.closing, note: members.length + " members hold a balance; each is the member's own money." },
+      { line: "Members' savings at the end of " + sm.label + " (closing position; not carried into the next year unless an officer records a Balance Brought Forward)", amount: sm.closing, note: members.length + " members hold a balance; each is the member's own money." },
       { line: "Group loan interest received in " + sm.label, amount: pr.interestReceived || 0, note: "From the loan records, interest first." },
       { line: "Profit credited to members for " + sm.label, amount: pr.profitCredited || 0, note: "Already inside the members' savings above; it does not move to the reserve." },
       { line: "Interest received less profit credited", amount: pr.undistributed || 0, note: "Verified group result left after distributions: the only money that can go to the reserve." },
-      { line: "Moved to the General Reserve Fund (approved)", amount: st.transfers || 0, note: req.length ? "A transfer for this year is waiting for the Chairperson (" + req.map((q) => q.id).join(", ") + ")." : "" },
+      { line: "Moved to the General Reserve Fund (approved)", amount: st.transfers || 0, note: req.length ? "A transfer for " + sm.label + " is waiting for the Chairperson (" + req.map((q) => q.id).join(", ") + ")." : "" },
       { line: "General Reserve Fund closing balance for " + sm.label, amount: st.closing || 0, note: "Belongs to SOB collectively." }];
     const rep = { title: "Year-end reconciliation: member savings and the General Reserve Fund — " + sm.label, columns: ["line", "amount", "note"], rows: lines, totals: {}, labels: { line: "Line", amount: "UGX", note: "Note" }, members, period: dates.longDate(sm.openedDate) + " – " + (sm.closedDate ? dates.longDate(sm.closedDate) : "open"), hideTotals: true };
     rep.summary = [["Member savings carried forward are separate from the reserve", "Yes"], ["Members with a carried-forward balance", members.length]];
@@ -3355,6 +3454,8 @@ __M['backend/store'] = (function(){ const module = {exports:{}}; const require =
     historicalLoans: { sheet: "HistoricalLoans", cols: [] },
     loanInterestRecords: { sheet: "LoanInterestRecords", cols: [] },
     reserveFund: { sheet: "GeneralReserveFund", cols: [] },
+    listItems: { sheet: "ConfigLists", cols: [] },
+    yearOpenings: { sheet: "BalanceBroughtForward", cols: [] },
     profitDistributions: { sheet: "ProfitDistributions", cols: ["id","period","status","rows"] },
     auditLog: { sheet: "AuditLog", cols: ["id","timestamp","date","entityType","entityId","action","previousValue","newValue","by","role","reason"] },
     discrepancies: { sheet: "Discrepancies", cols: ["id","kind","subject","summary","platformValue","sourceValue","source","status","openedDate","openedBy","resolvedDate","resolvedBy","decision","resolutionReason","evidence","correctingEntryId"] },
@@ -3714,11 +3815,12 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
     const guaranteed = (db.guarantees || []).filter((g) => g.guarantorId === me);
     const guaranteedLoans = (db.loans || []).filter((l) => guaranteed.some((g) => g.loanId === l.id) && l.memberId !== me);
     const loans = mine.concat(guaranteedLoans).filter((l) => !l.voided);
+    const related = { [me]: 1 }; (db.guarantees || []).forEach((g) => { if (mine.some((l) => l.id === g.loanId)) related[g.guarantorId] = 1; }); guaranteedLoans.forEach((l) => { related[l.memberId] = 1; });
     return Object.assign({}, base, {
-      members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
+      members: (db.members || []).filter((m) => related[m.id]).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),   // only the member and the people tied to their own loans/guarantees: no other member is disclosed
       transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
       loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
-      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
 
@@ -3895,7 +3997,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "38ebd3fc36";
+var SOB_BUILD = "0a6debfbb9";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

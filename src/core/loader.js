@@ -121,7 +121,7 @@
       const r = must(await api({ action: "command", name: "defineFinancialYears", args: { years: H.financialYears } }), "financial years");
       db = await read(); const prob = FY.check(db);
       c.add("financial years set by the share-outs: " + FY.table(db).map((y) => y.label + " " + y.openedDate + (y.closedDate ? " to " + y.closedDate : " (open)")).join("; "), H.financialYears.every((y) => { const t = FY.byYear(db, y.year); return t && t.openedDate === y.openedDate && (t.closedDate || null) === (y.closedDate || null); }), "");
-      c.add("each year starts on the day the previous share-out was held, and the last year's closing equals total savings", prob.length === 0, prob.join("; "));
+      c.add("each year starts on the day the previous share-out was held, and the movements of all years add up to total savings", prob.length === 0, prob.join("; "));
     }
 
     /* 3. reconciliation register: uncertain items stay open, with their evidence */

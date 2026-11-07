@@ -33,11 +33,12 @@
     const guaranteed = (db.guarantees || []).filter((g) => g.guarantorId === me);
     const guaranteedLoans = (db.loans || []).filter((l) => guaranteed.some((g) => g.loanId === l.id) && l.memberId !== me);
     const loans = mine.concat(guaranteedLoans).filter((l) => !l.voided);
+    const related = { [me]: 1 }; (db.guarantees || []).forEach((g) => { if (mine.some((l) => l.id === g.loanId)) related[g.guarantorId] = 1; }); guaranteedLoans.forEach((l) => { related[l.memberId] = 1; });
     return Object.assign({}, base, {
-      members: (db.members || []).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),
+      members: (db.members || []).filter((m) => related[m.id]).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),   // only the member and the people tied to their own loans/guarantees: no other member is disclosed
       transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
       loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
-      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
 

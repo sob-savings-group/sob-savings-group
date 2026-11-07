@@ -36,7 +36,7 @@
     if (av.verified === null) flags.push("Group profit for " + c.label + " has not been verified by the Chairperson: nothing may move to the reserve yet.");
     if (credited > earned) flags.push("Profit credited to members (" + credited + ") is MORE than the interest recorded as received (" + earned + "): UGX " + (credited - earned) + " is unexplained by the records.");
     if (h.excess > 0) flags.push("Historical repayments of UGX " + h.excess + " were more than the interest and loan recorded as due (kept visible, not allocated).");
-    if (groupLedger && groupLedger !== earned) flags.push("The archived group bank ledger records profit of " + groupLedger + " for this year; the interest-first figure is " + earned + ".");
+    if (groupLedger && groupLedger !== earned) flags.push("The archived group bank ledger records profit of " + groupLedger + " for FY" + c.year + "; the interest-first figure is " + earned + ".");
     return { year: c.year, label: c.label, from, to: c.closedDate || null, status: c.status, interestCharged, interestReceived, interestReceivable: receivable, historicalCharged: h.interestCharged, currentCharged: cur.charged, otherIncome: income, expenses, writeOffLoss: woLoss,
       earnedRecorded: earned, profitCredited: credited, undistributed, groupLedgerProfit: groupLedger, verifiedProfit: av.verified, reservedFromYear: reserveIn, reserveAvailable: av.available, shortfall: av.shortfall, settled: (FY.byYear(db, c.year) || {}).settled || null, historicalLoanPrincipalOpenAtYearEnd: hOut.principal, historicalLoansOpenAtYearEnd: hOut.loans, flags };
   }
