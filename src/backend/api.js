@@ -80,7 +80,7 @@
         try {
           const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
           const before = JSON.parse(JSON.stringify(db));
-          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100, ids: Array.isArray(body.ids) ? body.ids.slice(0, 20) : null });
           S.writeChanged(env.ss, before, db);
           return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
         } finally { env.lock.releaseLock(); }

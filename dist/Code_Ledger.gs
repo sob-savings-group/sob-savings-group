@@ -1267,6 +1267,7 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     airtimeRejected: (v) => "SOB: your airtime request " + v.ref + " was not approved." + (v.reason ? " Reason: " + v.reason : ""),
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
+    loanReminderSms: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -1303,7 +1304,8 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const todo = (db.outbox || []).filter((m) => m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
     todo.forEach((m) => {
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
@@ -1983,8 +1985,8 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
-  const DELIVERY = ["PREPARED", "OPENED", "SENT_CONFIRMED", "CANCELLED"];
-  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
+  const DELIVERY = ["PREPARED", "OPENED", "SMS_ACCEPTED", "SENT_CONFIRMED", "CANCELLED"];
+  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SMS_ACCEPTED: "SMS accepted by gateway (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
   const FOLLOW = ["NONE", "AWAITING_REPLY", "REPLIED", "PROMISE_TO_PAY", "NO_RESPONSE", "CLOSED"];
   const FOLLOW_LABEL = { NONE: "No follow-up yet", AWAITING_REPLY: "Awaiting reply", REPLIED: "Member replied", PROMISE_TO_PAY: "Promised to pay", NO_RESPONSE: "No response", CLOSED: "Closed" };
   const PLACEHOLDERS = ["name", "id", "deadline", "daysToDeadline", "shareOutDate", "daysToShareOut"];
@@ -2210,6 +2212,28 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     G.audit(db, ctx, "Reminder", r.id, "Sent confirmed by officer", null, { delivery: r.delivery }, a.note || "");
     return r;
   }
+  /* SMS through the gateway. The officer taps "Send by SMS" for ONE prepared reminder. The text is re-checked against the ledger right now (same rules as WhatsApp),
+     the member must not have opted out, and the message goes to the outbox with a key that makes a second tap harmless. "Accepted by the gateway" is NOT "delivered". */
+  const smsText = (t) => String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, "");
+  function queueSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const chk = revalidate(db, ctx, { id: r.id });
+    if (r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: this reminder was already sent; prepare a new one when the next reminder is due");
+    const member = (db.members || []).find((m) => m.id === r.memberId); if (member && member.notifyOptOut) throw new Error("OPTED_OUT: the member switched notifications off, so no SMS is sent");
+    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsText(chk.text) }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
+    if (msg.status === "SKIPPED") throw new Error("NO_VALID_PHONE: " + msg.reason);
+    r.smsOutboxId = msg.id; event(r, ctx, "SMS_QUEUED", "SMS prepared for the gateway (" + msg.id + "). Not sent until the gateway accepts it.");
+    G.audit(db, ctx, "Reminder", r.id, "SMS queued", null, { outbox: msg.id }, "Officer asked for this reminder to go by SMS"); return { reminder: r, outboxId: msg.id };
+  }
+  /* After the outbox ran: record honestly what the gateway answered. */
+  function syncSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const m = (db.outbox || []).find((x) => x.id === r.smsOutboxId); if (!m) throw new Error("NOT_FOUND: no SMS was queued for this reminder");
+    if (m.status === "SENT" && r.delivery !== "SMS_ACCEPTED" && r.delivery !== "SENT_CONFIRMED") {
+      r.delivery = "SMS_ACCEPTED"; r.smsAcceptedAt = m.lastAttemptAt || ctx.now; if (r.followUp === "NONE") r.followUp = "AWAITING_REPLY";
+      event(r, ctx, "SMS_ACCEPTED", "The SMS gateway accepted the message. This does not prove the member received it."); G.audit(db, ctx, "Reminder", r.id, "SMS accepted by gateway", null, { delivery: r.delivery }, "Gateway acceptance is not delivery");
+    } else if (m.status === "FAILED") event(r, ctx, "SMS_FAILED", String(m.reason || "").slice(0, 200));
+    else if (m.status === "DRY_RUN") event(r, ctx, "SMS_NOT_SENT", "The SMS gateway is not switched on, so nothing was sent.");
+    return { reminder: r, outboxStatus: m.status, reason: m.reason || "" };
+  }
   function setFollowUp(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
     if (!FOLLOW.includes(a.followUp)) throw new Error("INVALID: follow-up must be one of " + FOLLOW.join(", "));
@@ -2222,12 +2246,12 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   }
   function cancel(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); G.need(a.reason, "reason");
-    if (r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: a reminder confirmed as sent cannot be cancelled; record a follow-up instead");
+    if (r.delivery === "SENT_CONFIRMED" || r.delivery === "SMS_ACCEPTED") throw new Error("BAD_STATE: a reminder that was sent cannot be cancelled; record a follow-up instead");
     if (r.delivery === "CANCELLED") return r;
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
-  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 return module.exports; })();
@@ -2360,6 +2384,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
     cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),
@@ -3862,7 +3888,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
         try {
           const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
           const before = JSON.parse(JSON.stringify(db));
-          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100, ids: Array.isArray(body.ids) ? body.ids.slice(0, 20) : null });
           S.writeChanged(env.ss, before, db);
           return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
         } finally { env.lock.releaseLock(); }
@@ -3997,7 +4023,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "0a6debfbb9";
+var SOB_BUILD = "3671011519";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

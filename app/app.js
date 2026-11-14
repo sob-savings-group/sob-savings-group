@@ -615,7 +615,13 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const reload = async () => { await st.store.load(); st.db = st.store.db; rem.at = new Date().toISOString(); render(); };
     const memberOf = (id) => st.db.members.find((m) => m.id === id) || {};
     const whenTxt = (iso) => (iso ? D.toDisplay(String(iso).slice(0, 10)) + " " + RM.eatTime(iso) : "");
-    const tone = { PREPARED: "warn", OPENED: "warn", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const tone = { PREPARED: "warn", OPENED: "warn", SMS_ACCEPTED: "ok", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const sentLike = (d) => d === "SENT_CONFIRMED" || d === "SMS_ACCEPTED";
+    /* Send ONE reminder by SMS through the gateway: queue (re-checked against the ledger) -> targeted send -> record what the gateway answered */
+    const smsSend = (rec, phone, m) => Form("Send by SMS", [{ type: "note", text: "Send this reminder as an SMS to " + rec.memberName + " (" + phone + ") now? It cannot be unsent." }], act(async () => {
+      const q = await commit("queueReminderSms", { id: rec.id }); const out = q && q.outboxId ? q : { outboxId: ((st.db.reminders.find((x) => x.id === rec.id) || {}).smsOutboxId) };
+      const r = await st.store.call({ action: "dispatchOutbox", ids: [out.outboxId] }); const s = await commit("syncReminderSms", { id: rec.id });
+      if (s && s.outboxStatus === "SENT") { m && m.close(); } else if (s && s.outboxStatus === "FAILED") throw new Error("The SMS was not sent: " + (s.reason || "gateway error")); else throw new Error("The SMS gateway is not switched on, so nothing was sent."); }, "SMS accepted by the gateway. This does not prove the member received it."));
     /* the message window: text + the private-chat link. The link is a real <a>, so the browser opens it from the officer's own tap. */
     function messageModal(rec, text, phone, calcAt) {
       const link = RM.waLink(phone, text);
@@ -624,6 +630,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         h("pre", { class: "wa-preview", id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:50vh;overflow:auto" }, text),
         link ? h("div", { class: "row" },
           h("a", { class: "btn primary", id: "rem-open-wa", href: link, target: "_blank", rel: "noopener", style: "text-decoration:none;display:inline-block;padding:10px 16px", onclick: () => { if (rec && st.live) { commit("markReminderOpened", { id: rec.id }).then(() => toast("WhatsApp opened — delivery is NOT confirmed yet. Tap “I sent it” after you press Send in WhatsApp.", "warn")).catch((e) => toast(friendly(e), true)); } } }, "Open WhatsApp chat (private)"),
+          rec && st.live ? h("button", { id: "rem-send-sms", onclick: () => smsSend(rec, phone, m) }, "Send by SMS") : null,
           rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
           : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
         h("p", { class: "mute" }, "Opens the member's private chat only. “Opened” is not “delivered”: confirm with “I sent it”.")));
@@ -697,10 +704,10 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Reminder history and follow-up"),
       Table([{ label: "Prepared", render: (x) => whenTxt(x.createdAt) }, { label: "Member", render: (x) => x.memberName + " (" + x.memberId + ")" }, { label: "Level", render: (x) => RM.LEVEL_LABEL[x.level] }, { label: "Owed then", num: 1, render: (x) => ugx(x.figures.totalOutstanding) },
         { label: "Delivery", render: (x) => badge(RM.DELIVERY_LABEL[x.delivery], tone[x.delivery]) }, { label: "Follow-up", render: (x) => RM.FOLLOW_LABEL[x.followUp] + (x.promiseDate ? " (by " + D.toDisplay(x.promiseDate) + ")" : "") },
-        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
+        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, !sentLike(x.delivery) ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
           x.delivery === "OPENED" ? h("button", { "data-hist-sent": x.id, onclick: () => act(async () => commit("confirmReminderSent", { id: x.id, note: "" }), "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null,
           x.delivery !== "PREPARED" ? h("button", { "data-hist-follow": x.id, onclick: () => followForm(x) }, "Follow-up") : null,
-          x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
+          !sentLike(x.delivery) ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
       h("p", { class: "mute" }, "Live-book loans only. Reminders never change a balance."));
   }
 

@@ -13,8 +13,8 @@
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
-  const DELIVERY = ["PREPARED", "OPENED", "SENT_CONFIRMED", "CANCELLED"];
-  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
+  const DELIVERY = ["PREPARED", "OPENED", "SMS_ACCEPTED", "SENT_CONFIRMED", "CANCELLED"];
+  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SMS_ACCEPTED: "SMS accepted by gateway (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
   const FOLLOW = ["NONE", "AWAITING_REPLY", "REPLIED", "PROMISE_TO_PAY", "NO_RESPONSE", "CLOSED"];
   const FOLLOW_LABEL = { NONE: "No follow-up yet", AWAITING_REPLY: "Awaiting reply", REPLIED: "Member replied", PROMISE_TO_PAY: "Promised to pay", NO_RESPONSE: "No response", CLOSED: "Closed" };
   const PLACEHOLDERS = ["name", "id", "deadline", "daysToDeadline", "shareOutDate", "daysToShareOut"];
@@ -240,6 +240,28 @@
     G.audit(db, ctx, "Reminder", r.id, "Sent confirmed by officer", null, { delivery: r.delivery }, a.note || "");
     return r;
   }
+  /* SMS through the gateway. The officer taps "Send by SMS" for ONE prepared reminder. The text is re-checked against the ledger right now (same rules as WhatsApp),
+     the member must not have opted out, and the message goes to the outbox with a key that makes a second tap harmless. "Accepted by the gateway" is NOT "delivered". */
+  const smsText = (t) => String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, "");
+  function queueSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const chk = revalidate(db, ctx, { id: r.id });
+    if (r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: this reminder was already sent; prepare a new one when the next reminder is due");
+    const member = (db.members || []).find((m) => m.id === r.memberId); if (member && member.notifyOptOut) throw new Error("OPTED_OUT: the member switched notifications off, so no SMS is sent");
+    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsText(chk.text) }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
+    if (msg.status === "SKIPPED") throw new Error("NO_VALID_PHONE: " + msg.reason);
+    r.smsOutboxId = msg.id; event(r, ctx, "SMS_QUEUED", "SMS prepared for the gateway (" + msg.id + "). Not sent until the gateway accepts it.");
+    G.audit(db, ctx, "Reminder", r.id, "SMS queued", null, { outbox: msg.id }, "Officer asked for this reminder to go by SMS"); return { reminder: r, outboxId: msg.id };
+  }
+  /* After the outbox ran: record honestly what the gateway answered. */
+  function syncSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const m = (db.outbox || []).find((x) => x.id === r.smsOutboxId); if (!m) throw new Error("NOT_FOUND: no SMS was queued for this reminder");
+    if (m.status === "SENT" && r.delivery !== "SMS_ACCEPTED" && r.delivery !== "SENT_CONFIRMED") {
+      r.delivery = "SMS_ACCEPTED"; r.smsAcceptedAt = m.lastAttemptAt || ctx.now; if (r.followUp === "NONE") r.followUp = "AWAITING_REPLY";
+      event(r, ctx, "SMS_ACCEPTED", "The SMS gateway accepted the message. This does not prove the member received it."); G.audit(db, ctx, "Reminder", r.id, "SMS accepted by gateway", null, { delivery: r.delivery }, "Gateway acceptance is not delivery");
+    } else if (m.status === "FAILED") event(r, ctx, "SMS_FAILED", String(m.reason || "").slice(0, 200));
+    else if (m.status === "DRY_RUN") event(r, ctx, "SMS_NOT_SENT", "The SMS gateway is not switched on, so nothing was sent.");
+    return { reminder: r, outboxStatus: m.status, reason: m.reason || "" };
+  }
   function setFollowUp(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
     if (!FOLLOW.includes(a.followUp)) throw new Error("INVALID: follow-up must be one of " + FOLLOW.join(", "));
@@ -252,10 +274,10 @@
   }
   function cancel(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); G.need(a.reason, "reason");
-    if (r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: a reminder confirmed as sent cannot be cancelled; record a follow-up instead");
+    if (r.delivery === "SENT_CONFIRMED" || r.delivery === "SMS_ACCEPTED") throw new Error("BAD_STATE: a reminder that was sent cannot be cancelled; record a follow-up instead");
     if (r.delivery === "CANCELLED") return r;
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
-  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
