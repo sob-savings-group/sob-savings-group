@@ -78,12 +78,36 @@
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
     return Math.max(0, elapsed - loanGraceMonths(loan));
   }
-  const loanAccumulatedInterest = (loan, asOf) =>
-    loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
+     opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
+     of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
+  const REDUCING_FROM_YEAR = 2027;
+  const reducingFrom = (db, loan) => {
+    if (!db || !loan || !dates.isISO(loan.date) || !(Number(loan.loanAmount) > 0)) return "";
+    const y = REDUCING_FROM_YEAR, c = (db.yearCycles || []).find((x) => Number(x.year) === y);
+    return c && dates.isISO(c.openedDate) ? c.openedDate : "";
+  };
+  /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
+  function reducingInterest(loan, db, asOf, principalPaidBefore) {
+    const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
+    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= g + months; m++) {
+      const start = dates.addMonths(loan.date, m - 1);
+      total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
+    }
+    return total;
+  }
+  const loanAccumulatedInterest = (loan, asOf, db, paidBefore) => {
+    if (db && reducingFrom(db, loan)) {
+      let st = null; const pb = paidBefore || ((d) => { st = st || walkAllocation(loan, db, asOf).steps; return st.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0); });
+      return reducingInterest(loan, db, asOf, pb);
+    }
+    return loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  };
   const loanTotalPenalties = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
   const loanPayable = (loan, asOf, db) =>
-    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf) + (db ? loanTotalPenalties(loan, db) : 0);
+    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf, db) + (db ? loanTotalPenalties(loan, db) : 0);
   const loanTotalRepaid = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
   const loanOutstanding = (loan, db, asOf) => loanPayable(loan, asOf, db) - loanTotalRepaid(loan, db);
@@ -131,14 +155,14 @@
     let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
       let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
-      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
+      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
       [["interest", interestDue], ["pen", penDue], ["principal", principalDue]].forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
       steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
-    const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    const accrued = loanAccumulatedInterest(loan, e, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
     return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
   }
   /* Principal reduction caused by each counted repayment (this, and only this, releases guarantees). */

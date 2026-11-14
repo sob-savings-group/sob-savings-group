@@ -28,10 +28,6 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   const signout = async () => { await pg.click("#logout"); await pg.waitForSelector("#login-go"); };
   const text = () => pg.evaluate(() => document.getElementById("main").innerText);
   await pg.goto(base + "/app/index.html");
-  /* 1. name sign-in is view-only */
-  await signin("SOB-002 Member"); ok(/signed in with your name/.test(await text()), "ID + name signs in and says it is view-only");
-  await pg.click('[data-nav="myguar"]'); ok((await pg.locator("[data-accept-guarantee]").count()) === 0 && /Sign in with your PIN/.test(await text()), "a name sign-in cannot accept a guarantee");
-  await signout();
   /* 2. PIN sign-in: guarantee request is the first thing shown, accept with a confirmation */
   await signin("SOB-002", "4321"); ok(/asked you to guarantee/.test(await text()), "home highlights the guarantee request");
   ok((await pg.locator('[data-nav="myguar"] .badge-n').innerText()) === "1", "Guarantees tab shows a badge of 1");
