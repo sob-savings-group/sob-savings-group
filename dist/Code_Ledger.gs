@@ -174,11 +174,21 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   /* SOB has NO grace period by default: interest runs from the first payout, month by month, until the loan is settled. A grace period counts ONLY when
      the Chairperson has authorised it on that loan (graceAuthorisedBy). Any stored graceMonths without that authorisation is ignored. */
   const loanGraceMonths = (loan) => (loan && loan.graceAuthorisedBy ? Number(loan.graceMonths) || 0 : 0);
+  /* INTEREST LOCK: an authorised officer may lock interest on an active loan. A month that overlaps a lock period (from the lock date until the unlock date, or for as long as it stays locked)
+     is not charged. Months before the lock stay charged; nothing recorded is rewritten. */
+  const monthLocked = (loan, k) => {
+    const locks = (loan && loan.interestLocks) || []; if (!locks.length) return false;
+    const start = dates.addMonths(loan.date, k - 1), end = dates.addMonths(loan.date, k);
+    return locks.some((l) => dates.isISO(l.from) && l.from < end && (!dates.isISO(l.to) || start < l.to));
+  };
+  const loanElapsedMonths = (loan, asOf) => dates.isISO(loan.date) ? Math.max(0, dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf))) : 0;
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
-    const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
-    return Math.max(0, elapsed - loanGraceMonths(loan));
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan); let n = 0;
+    for (let k = g + 1; k <= elapsed; k++) if (!monthLocked(loan, k)) n++;
+    return n;
   }
+  const loanInterestLocked = (loan) => ((loan && loan.interestLocks) || []).some((l) => !dates.isISO(l.to));
   /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
      opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
      of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
@@ -191,8 +201,9 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
   /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
   function reducingInterest(loan, db, asOf, principalPaidBefore) {
     const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
-    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
-    for (let m = g + 1; m <= g + months; m++) {
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= elapsed; m++) {
+      if (monthLocked(loan, m)) continue;
       const start = dates.addMonths(loan.date, m - 1);
       total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
     }
@@ -317,7 +328,7 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
 
   return {
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
-    loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
@@ -871,6 +882,27 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     G.audit(db, ctx, "Loan", loanId, "Assigned interest corrected", { assignedMonthlyInterest: prev }, { assignedMonthlyInterest: newAmount }, reason);
     return loan;
   }
+  /* Lock / unlock interest on an ACTIVE loan. Recorded as a period on the loan and in the audit trail; no entry is changed or removed. */
+  function lockInterest(db, ctx, loanId, reason, from) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (L.loanInterestLocked(loan)) throw new Error("INVALID: interest is already locked on this loan");
+    from = from || ctx.today; if (!dates.isISO(from)) throw new Error("INVALID: date");
+    if (loan.date && from < loan.date) throw new Error("INVALID: the lock cannot start before the loan was paid out (" + loan.date + ")");
+    (loan.interestLocks = loan.interestLocks || []).push({ from, to: "", reason, lockedBy: ctx.by, lockedByRole: ctx.role, lockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest locked", { interestLocked: false }, { interestLocked: true, from }, reason);
+    return loan;
+  }
+  function unlockInterest(db, ctx, loanId, reason, to) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const open = (loan.interestLocks || []).find((l) => !dates.isISO(l.to));
+    if (!open) throw new Error("INVALID: interest is not locked on this loan");
+    to = to || ctx.today; if (!dates.isISO(to) || to < open.from) throw new Error("INVALID: unlock date");
+    Object.assign(open, { to, unlockReason: reason, unlockedBy: ctx.by, unlockedByRole: ctx.role, unlockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest unlocked", { interestLocked: true, from: open.from }, { interestLocked: false, to }, reason);
+    return loan;
+  }
   function voidLoan(db, ctx, loanId, reason) {
     G.require(ctx, "loan.reverse"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); if (loan.voided) throw new Error("ALREADY_VOIDED");
@@ -893,7 +925,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   }
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
-    return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
+    return { id: loan.id, status: loan.status, interestLocked: L.loanInterestLocked(loan), interestLockedFrom: ((loan.interestLocks || []).find((x) => !dates.isISO(x.to)) || {}).from || "", principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
@@ -921,7 +953,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, lockInterest, unlockInterest, voidLoan, restoreLoan, loanView };
 });
 
 return module.exports; })();
@@ -2343,6 +2375,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
     editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
+    lockInterest: (db, ctx, a) => LN.lockInterest(db, ctx, a.loanId, a.reason, a.date), unlockInterest: (db, ctx, a) => LN.unlockInterest(db, ctx, a.loanId, a.reason, a.date),
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
@@ -2427,7 +2460,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
   const GATED = {
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
-    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, lockInterest: { perm: "loan.editInterest", label: "Lock interest on a loan" }, unlockInterest: { perm: "loan.editInterest", label: "Unlock interest on a loan" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
@@ -2447,7 +2480,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "lockInterest" || name === "unlockInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
     if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
@@ -4075,7 +4108,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "436fbd2ebf";
+var SOB_BUILD = "580736ad18";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

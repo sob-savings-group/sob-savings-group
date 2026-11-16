@@ -73,11 +73,21 @@
   /* SOB has NO grace period by default: interest runs from the first payout, month by month, until the loan is settled. A grace period counts ONLY when
      the Chairperson has authorised it on that loan (graceAuthorisedBy). Any stored graceMonths without that authorisation is ignored. */
   const loanGraceMonths = (loan) => (loan && loan.graceAuthorisedBy ? Number(loan.graceMonths) || 0 : 0);
+  /* INTEREST LOCK: an authorised officer may lock interest on an active loan. A month that overlaps a lock period (from the lock date until the unlock date, or for as long as it stays locked)
+     is not charged. Months before the lock stay charged; nothing recorded is rewritten. */
+  const monthLocked = (loan, k) => {
+    const locks = (loan && loan.interestLocks) || []; if (!locks.length) return false;
+    const start = dates.addMonths(loan.date, k - 1), end = dates.addMonths(loan.date, k);
+    return locks.some((l) => dates.isISO(l.from) && l.from < end && (!dates.isISO(l.to) || start < l.to));
+  };
+  const loanElapsedMonths = (loan, asOf) => dates.isISO(loan.date) ? Math.max(0, dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf))) : 0;
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
-    const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
-    return Math.max(0, elapsed - loanGraceMonths(loan));
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan); let n = 0;
+    for (let k = g + 1; k <= elapsed; k++) if (!monthLocked(loan, k)) n++;
+    return n;
   }
+  const loanInterestLocked = (loan) => ((loan && loan.interestLocks) || []).some((l) => !dates.isISO(l.to));
   /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
      opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
      of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
@@ -90,8 +100,9 @@
   /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
   function reducingInterest(loan, db, asOf, principalPaidBefore) {
     const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
-    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
-    for (let m = g + 1; m <= g + months; m++) {
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= elapsed; m++) {
+      if (monthLocked(loan, m)) continue;
       const start = dates.addMonths(loan.date, m - 1);
       total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
     }
@@ -216,7 +227,7 @@
 
   return {
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
-    loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution

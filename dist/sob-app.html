@@ -1,37 +1,37 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#ffffff"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><title>SOB Lifetime Platform</title><link rel="icon" href="data:,"><style>/* SOB Lifetime Platform — clean, light, professional. Navy for authority, a restrained gold accent, soft shadows, generous spacing.
    Phone first; a sidebar appears on large screens; tablets get a two-column layout. */
-:root{--bg:#f4f6fb;--bg2:#eef2f9;--surface:#ffffff;--surface2:#f1f4fa;--line:#d9e0ee;--line2:#e7ecf5;--text:#12213f;--mute:#56657f;--mute2:#7a879d;
-  --gold:#b88a2e;--gold2:#8a6414;--gold-soft:#f7efd9;--navy:#0f2a56;--navy2:#1c3d78;--navy-soft:#e8eefb;--card:#ffffff;
-  --avail:#0d8a5f;--commit:#b5760f;--loan:#c0392b;--interest:#2f56c8;--profit:#0b8b82;--ok:#0d8a5f;--bad:#c0392b;--warn:#b5760f;
-  --r:14px;--shadow:0 1px 2px rgba(18,33,63,.06),0 8px 24px rgba(18,33,63,.07);--shadow-s:0 1px 2px rgba(18,33,63,.07);--nav-h:64px}
+:root{--bg:#f6f2ea;--bg2:#efe9dd;--surface:#fffdf9;--surface2:#f3eee3;--line:#ddd3bf;--line2:#e8e0cf;--text:#1c1a16;--mute:#6a6254;--mute2:#8a8272;
+  --gold:#a8812f;--gold2:#7a5c16;--gold-soft:#f4ead0;--navy:#14202e;--navy2:#22364d;--navy-soft:#ebe6da;--card:#fffdf9;
+  --avail:#2f6b4f;--commit:#9a6a14;--loan:#8e2f2a;--interest:#2d4a6b;--profit:#2a6a66;--ok:#2f6b4f;--bad:#8e2f2a;--warn:#9a6a14;
+  --r:12px;--shadow:0 1px 2px rgba(28,26,22,.06),0 10px 28px rgba(28,26,22,.08);--shadow-s:0 1px 2px rgba(28,26,22,.06);--nav-h:64px}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:15.5px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
-h1,h2,h3{margin:0;letter-spacing:-.01em}.mute{color:var(--mute)}.n{text-align:right}
+h1,h2,h3{margin:0;letter-spacing:-.005em;font-family:Georgia,"Times New Roman",serif;font-weight:700}.mute{color:var(--mute)}.n{text-align:right}
 button{font:inherit;font-weight:600;font-size:14.5px;color:var(--navy);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 15px;min-height:44px;cursor:pointer;box-shadow:var(--shadow-s);transition:background .15s,border-color .15s,box-shadow .15s,transform .05s}
 button:hover{border-color:var(--navy2);background:var(--navy-soft)}button:active{transform:scale(.985)}
-button:focus-visible,input:focus-visible,select:focus-visible,.li:focus-visible,.card:focus-visible{outline:3px solid rgba(47,86,200,.35);outline-offset:2px}
-button.primary{background:var(--navy);color:#fff;border-color:var(--navy);box-shadow:0 2px 8px rgba(15,42,86,.25)}button.primary:hover{background:var(--navy2);border-color:var(--navy2)}
-button.danger{background:#fdeeed;border-color:#efb6b0;color:#9d2a1d}button.active{border-color:var(--navy);color:var(--navy);background:var(--navy-soft)}
+button:focus-visible,input:focus-visible,select:focus-visible,.li:focus-visible,.card:focus-visible{outline:3px solid rgba(168,129,47,.45);outline-offset:2px}
+button.primary{background:var(--navy);color:#fff;border-color:var(--navy);box-shadow:0 2px 8px rgba(20,32,46,.28)}button.primary:hover{background:var(--navy2);border-color:var(--navy2)}
+button.danger{background:#f8ebe8;border-color:#dcb3ad;color:#7d2620}button.active{border-color:var(--navy);color:var(--navy);background:var(--navy-soft)}
 button:disabled{opacity:.5;cursor:not-allowed}
 .iconbtn{display:inline-flex;align-items:center;justify-content:center;width:42px;height:42px;padding:0;border-radius:50%}
 input,select,textarea{width:100%;min-height:46px;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--text);font:inherit;font-size:16px}
-input::placeholder{color:#93a0b6}
-input:focus,select:focus,textarea:focus{border-color:var(--navy2);box-shadow:0 0 0 3px rgba(47,86,200,.14);outline:0}
+input::placeholder{color:#a29a88}
+input:focus,select:focus,textarea:focus{border-color:var(--navy2);box-shadow:0 0 0 3px rgba(168,129,47,.18);outline:0}
 label{display:block;margin:14px 0 6px;color:var(--mute);font-size:13.5px;font-weight:650}
 .ic{display:inline-flex;vertical-align:middle}
 
 /* ---- shell ---- */
 .shell{min-height:100vh}
-header.top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);border-bottom:1px solid var(--line2);box-shadow:0 1px 0 rgba(18,33,63,.03)}
+header.top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:9px 16px;background:rgba(255,253,249,.94);backdrop-filter:blur(10px);border-bottom:1px solid var(--line2);box-shadow:0 1px 0 rgba(18,33,63,.03)}
 header.top .brand{display:flex;align-items:center;gap:11px;flex:1;min-width:0}
 header.top .brand img{width:42px;height:40px;object-fit:contain;background:#fff;border-radius:9px;padding:2px;border:1px solid var(--line2)}.login .logo{background:#fff;border-radius:16px;padding:4px}
 header.top .bt1{font:700 16.5px/1.15 Georgia,"Times New Roman",serif;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header.top .bt2{font-size:12px;color:var(--mute)}
 .avatar{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;background:var(--navy);color:#fff;font-weight:700;font-size:14px}
-.pill{font-size:12px;padding:3px 10px;border-radius:99px;background:var(--gold-soft);color:var(--gold2);border:1px solid #ecd9a6;font-weight:650}
+.pill{font-size:12px;padding:3px 10px;border-radius:99px;background:var(--gold-soft);color:var(--gold2);border:1px solid #e3d2a0;font-weight:650}
 .menu-btn{background:transparent;border:0;padding:0;min-height:0;border-radius:50%;box-shadow:none}
 main#main{padding:16px 14px calc(var(--nav-h) + 28px);max-width:1040px;margin:0 auto;min-width:0;width:100%}
-nav.nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;background:rgba(255,255,255,.97);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:5px 6px calc(5px + env(safe-area-inset-bottom));box-shadow:0 -4px 18px rgba(18,33,63,.06)}
+nav.nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;background:rgba(255,253,249,.97);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:5px 6px calc(5px + env(safe-area-inset-bottom));box-shadow:0 -4px 18px rgba(18,33,63,.06)}
 nav.nav button{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:1;background:transparent;border:0;box-shadow:none;border-radius:10px;padding:5px 2px;min-height:50px;color:var(--mute);font-size:12px;font-weight:650}
 nav.nav button:hover{background:var(--surface2)}
 nav.nav button.active{color:var(--navy);background:var(--navy-soft)}
@@ -56,13 +56,13 @@ nav.nav .only-desktop{display:none}
 /* ---- cards ---- */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(236px,1fr))}
 .card{background:var(--card);border:1px solid var(--line2);border-radius:var(--r);padding:16px 16px 14px;box-shadow:var(--shadow-s);position:relative;overflow:hidden}
-.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--navy);opacity:.9}
+.card::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--gold);opacity:.55}
 .card.click{cursor:pointer;transition:box-shadow .15s,transform .1s,border-color .15s}.card.click:hover{box-shadow:var(--shadow);border-color:var(--line);transform:translateY(-1px)}
 .card .lbl{color:var(--mute);font-size:13.5px;font-weight:650}
 .card .val{font-size:clamp(19px,2.1vw,25px);font-weight:750;color:var(--navy);margin-top:6px;word-break:break-word;letter-spacing:-.01em}
 .card .sub{color:var(--mute2);font-size:12.5px;margin-top:3px}
 .card:has(.t-avail)::before{background:var(--avail)}.card:has(.t-commit)::before{background:var(--commit)}.card:has(.t-loan)::before{background:var(--loan)}.card:has(.t-interest)::before{background:var(--interest)}.card:has(.t-profit)::before{background:var(--profit)}
-.hero-card{border-radius:20px;padding:22px 22px;background:linear-gradient(135deg,#ffffff 0%,#f3f6fd 60%,#eef2fb 100%);border:1px solid var(--line);box-shadow:var(--shadow);position:relative;overflow:hidden}
+.hero-card{border-radius:20px;padding:22px 22px;background:linear-gradient(135deg,#fffdf9 0%,#f6f0e2 100%);border:1px solid var(--line);box-shadow:var(--shadow);position:relative;overflow:hidden}
 .hero-card::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:linear-gradient(90deg,var(--navy),var(--gold))}
 .hero-card .hl{color:var(--mute);font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
 .hero-card .hv{font:700 clamp(30px,8vw,40px)/1.1 Georgia,"Times New Roman",serif;color:var(--navy);margin:8px 0 3px;word-break:break-word}
@@ -84,7 +84,7 @@ h2.sec::after{content:"";flex:1;height:1px;background:var(--line2)}
 .li{display:flex;align-items:center;gap:12px;padding:13px 14px;border-bottom:1px solid var(--line2);min-height:62px}.li:last-child{border-bottom:0}
 .li.click{cursor:pointer}.li.click:hover{background:var(--surface2)}
 .lic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--navy-soft);color:var(--navy2);flex:none}
-.lic.avail{background:#e1f5ec;color:var(--avail)}.lic.loan{background:#fbe7e4;color:var(--loan)}.lic.commit{background:#fbefd6;color:var(--commit)}.lic.interest{background:#e5ebfb;color:var(--interest)}.lic.profit{background:#dcf3f1;color:var(--profit)}
+.lic.avail{background:#e1f5ec;color:var(--avail)}.lic.loan{background:#fbe7e4;color:var(--loan)}.lic.commit{background:#fbefd6;color:var(--commit)}.lic.interest{background:#ece6d8;color:var(--interest)}.lic.profit{background:#dcf3f1;color:var(--profit)}
 .lm{flex:1;min-width:0}.lt{font-weight:650;overflow:hidden;text-overflow:ellipsis}.ls{font-size:12.5px;color:var(--mute2);margin-top:1px}
 .lr{text-align:right;flex:none}.lv{font-weight:700}.lv.pos{color:var(--avail)}.lv.neg{color:var(--loan)}
 .month{padding:9px 14px;background:var(--surface2);color:var(--mute);font-size:12px;font-weight:750;letter-spacing:.06em;text-transform:uppercase}
@@ -97,7 +97,7 @@ h2.sec::after{content:"";flex:1;height:1px;background:var(--line2)}
 .scroll{overflow-x:auto;border:1px solid var(--line2);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow-s)}
 table{width:100%;border-collapse:collapse}th,td{padding:11px 13px;border-bottom:1px solid var(--line2);text-align:left;font-size:14px;white-space:nowrap}
 th{color:var(--mute);font-weight:700;font-size:12px;letter-spacing:.05em;text-transform:uppercase;background:var(--surface2);position:sticky;top:0}td.n,th.n{text-align:right}tr:last-child td{border-bottom:0}
-tbody tr:nth-child(even) td{background:#fafbfe}
+tbody tr:nth-child(even) td{background:#fbf8f1}
 tr.click{cursor:pointer}tr.click:hover td{background:var(--navy-soft)}
 td.wrap{white-space:normal}
 
@@ -116,10 +116,10 @@ td.wrap{white-space:normal}
 /* ---- states ---- */
 .state{padding:32px 16px;text-align:center;color:var(--mute);display:flex;flex-direction:column;align-items:center;gap:12px}.state.err{color:var(--bad)}
 .empty{text-align:center;padding:34px 18px;display:flex;flex-direction:column;align-items:center;gap:8px}.empty .eic{width:58px;height:58px;border-radius:18px;background:var(--navy-soft);color:var(--navy2);display:flex;align-items:center;justify-content:center}.empty .et{font-weight:700;font-size:17px}.empty .etx{color:var(--mute);max-width:320px}
-.skel-wrap{display:grid;gap:12px}.skel{height:76px;border-radius:var(--r);background:linear-gradient(90deg,#eceff6 25%,#f6f8fc 50%,#eceff6 75%);background-size:200% 100%;animation:shim 1.3s infinite}.skel.big{height:190px;border-radius:20px}
+.skel-wrap{display:grid;gap:12px}.skel{height:76px;border-radius:var(--r);background:linear-gradient(90deg,#eee8da 25%,#f7f2e7 50%,#eee8da 75%);background-size:200% 100%;animation:shim 1.3s infinite}.skel.big{height:190px;border-radius:20px}
 @keyframes shim{to{background-position:-200% 0}}
 .banner{font-size:14.5px;display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;margin:12px 0;border:1px solid}.banner .bt{flex:1}
-.banner.warn{background:#fdf6e6;border-color:#ecd49b;color:#7c4f06}.banner.bad{background:#fdeeed;border-color:#efb6b0;color:#8f2a1d}.banner.ok{background:#e9f7f0;border-color:#a9dcc3;color:#0a5a3e}.banner.info{background:#edf2fd;border-color:#bccbf0;color:#1f3f95}
+.banner.warn{background:#fdf6e6;border-color:#ecd49b;color:#7c4f06}.banner.bad{background:#f8ebe8;border-color:#dcb3ad;color:#8f2a1d}.banner.ok{background:#e9f7f0;border-color:#a9dcc3;color:#0a5a3e}.banner.info{background:#f1ece0;border-color:#d8cdb4;color:#1f3f95}
 .banner button{min-height:38px;padding:5px 12px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + 16px);z-index:80;display:flex;gap:10px;align-items:center;max-width:92vw;padding:12px 16px;border-radius:12px;box-shadow:0 12px 30px rgba(18,33,63,.25);font-weight:600;animation:rise .2s ease-out}
 .toast.ok{background:#0d6b4b;color:#fff}.toast.warn{background:#8f5a08;color:#fff}.toast.bad{background:#a3301f;color:#fff}
@@ -132,7 +132,7 @@ td.wrap{white-space:normal}
 .busy-box{background:#fff;padding:14px 22px;border-radius:14px;display:flex;gap:12px;align-items:center;border:1px solid var(--line);box-shadow:var(--shadow);font-weight:600;max-width:90vw}
 
 /* ---- sign-in ---- */
-body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,transparent),var(--bg)}
+body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#eadfc6,transparent),var(--bg)}
 .card.login{max-width:430px;width:calc(100% - 24px);margin:6vh auto 24px;padding:30px 24px;border-radius:22px;border:1px solid var(--line2);background:#fff;box-shadow:var(--shadow)}
 .card.login::before{width:auto;right:0;height:4px;bottom:auto;background:linear-gradient(90deg,var(--navy),var(--gold))}
 .login .logo{display:block;width:92px;margin:0 auto 10px;border:1px solid var(--line2)}
@@ -204,7 +204,7 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 @media(max-width:600px){button,.btn,select,input,textarea{min-height:44px;font-size:16px}.row{gap:10px}.row>button{flex:1 1 140px}table{font-size:14px}}
 
 /* ---- login tabs ---- */
-.tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0 4px}.tab{min-height:46px;border-radius:12px;font-weight:700;background:#fff;color:var(--navy);border:1px solid var(--line)}.tab.on{background:var(--navy,#12213f);color:#fff;border-color:var(--navy,#12213f)}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:16px 0 4px}.tab{min-height:46px;border-radius:12px;font-weight:700;background:#fff;color:var(--navy);border:1px solid var(--line)}.tab.on{background:var(--navy,#1c1a16);color:#fff;border-color:var(--navy,#1c1a16)}
 .pinrow{display:flex;gap:8px;align-items:stretch}.pinrow input{flex:1;min-width:0}.ghost{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 14px;font-weight:700;color:var(--navy)}
 #conn-status{margin:12px 0 0;text-align:center}.hint.warn{color:#9a3412}
 .linkbtn{background:none;border:0;box-shadow:none;color:var(--navy);text-decoration:underline;min-height:44px;padding:0 4px;font-weight:600;margin:6px 0 0}
@@ -223,7 +223,7 @@ body:has(.login){background:radial-gradient(900px 480px at 50% -8%,#e3eaf9,trans
 </style></head><body><div id="app"></div><script>(function(){var u="";try{var d=new URLSearchParams(location.search).get("dev");if(d&&/^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$|^http:\/\/localhost(:\d+)?\//.test(d))u=d;}catch(e){}
 try{localStorage.removeItem("sobUrl");}catch(e){}
 window.SOB_DEMO_NAMES=["Demo Member 001","Demo Member 002","Demo Member 003","Demo Member 004","Demo Member 005","Demo Member 006","Demo Member 007","Demo Member 008","Demo Member 009","Demo Member 010","Demo Member 011","Demo Member 012","Demo Member 013","Demo Member 014","Demo Member 015","Demo Member 016","Demo Member 017","Demo Member 018","Demo Member 019","Demo Member 020","Demo Member 021","Demo Member 022","Demo Member 023","Demo Member 024","Demo Member 025","Demo Member 026","Demo Member 027","Demo Member 028","Demo Member 029","Demo Member 030","Demo Member 031","Demo Member 032","Demo Member 033","Demo Member 034","Demo Member 035","Demo Member 036","Demo Member 037","Demo Member 038","Demo Member 039","Demo Member 040","Demo Member 041","Demo Member 042","Demo Member 043","Demo Member 044","Demo Member 045","Demo Member 046","Demo Member 047","Demo Member 048","Demo Member 049","Demo Member 050","Demo Member 051","Demo Member 052","Demo Member 053","Demo Member 054","Demo Member 055"];
-window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</script><script>/* SOB web client - generated by build/make-site.js */
+window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"580736ad18"};})();</script><script>/* SOB web client - generated by build/make-site.js */
 
 /* ../src/core/dates.js */
 /* SOB core/dates — EAT (UTC+3, no DST). Internal format YYYY-MM-DD; display DD/MM/YYYY.
@@ -398,11 +398,21 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
   /* SOB has NO grace period by default: interest runs from the first payout, month by month, until the loan is settled. A grace period counts ONLY when
      the Chairperson has authorised it on that loan (graceAuthorisedBy). Any stored graceMonths without that authorisation is ignored. */
   const loanGraceMonths = (loan) => (loan && loan.graceAuthorisedBy ? Number(loan.graceMonths) || 0 : 0);
+  /* INTEREST LOCK: an authorised officer may lock interest on an active loan. A month that overlaps a lock period (from the lock date until the unlock date, or for as long as it stays locked)
+     is not charged. Months before the lock stay charged; nothing recorded is rewritten. */
+  const monthLocked = (loan, k) => {
+    const locks = (loan && loan.interestLocks) || []; if (!locks.length) return false;
+    const start = dates.addMonths(loan.date, k - 1), end = dates.addMonths(loan.date, k);
+    return locks.some((l) => dates.isISO(l.from) && l.from < end && (!dates.isISO(l.to) || start < l.to));
+  };
+  const loanElapsedMonths = (loan, asOf) => dates.isISO(loan.date) ? Math.max(0, dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf))) : 0;
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
-    const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
-    return Math.max(0, elapsed - loanGraceMonths(loan));
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan); let n = 0;
+    for (let k = g + 1; k <= elapsed; k++) if (!monthLocked(loan, k)) n++;
+    return n;
   }
+  const loanInterestLocked = (loan) => ((loan && loan.interestLocks) || []).some((l) => !dates.isISO(l.to));
   /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
      opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
      of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
@@ -415,8 +425,9 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
   /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
   function reducingInterest(loan, db, asOf, principalPaidBefore) {
     const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
-    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
-    for (let m = g + 1; m <= g + months; m++) {
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= elapsed; m++) {
+      if (monthLocked(loan, m)) continue;
       const start = dates.addMonths(loan.date, m - 1);
       total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
     }
@@ -541,7 +552,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
 
   return {
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
-    loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
@@ -1095,6 +1106,27 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
     G.audit(db, ctx, "Loan", loanId, "Assigned interest corrected", { assignedMonthlyInterest: prev }, { assignedMonthlyInterest: newAmount }, reason);
     return loan;
   }
+  /* Lock / unlock interest on an ACTIVE loan. Recorded as a period on the loan and in the audit trail; no entry is changed or removed. */
+  function lockInterest(db, ctx, loanId, reason, from) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (L.loanInterestLocked(loan)) throw new Error("INVALID: interest is already locked on this loan");
+    from = from || ctx.today; if (!dates.isISO(from)) throw new Error("INVALID: date");
+    if (loan.date && from < loan.date) throw new Error("INVALID: the lock cannot start before the loan was paid out (" + loan.date + ")");
+    (loan.interestLocks = loan.interestLocks || []).push({ from, to: "", reason, lockedBy: ctx.by, lockedByRole: ctx.role, lockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest locked", { interestLocked: false }, { interestLocked: true, from }, reason);
+    return loan;
+  }
+  function unlockInterest(db, ctx, loanId, reason, to) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const open = (loan.interestLocks || []).find((l) => !dates.isISO(l.to));
+    if (!open) throw new Error("INVALID: interest is not locked on this loan");
+    to = to || ctx.today; if (!dates.isISO(to) || to < open.from) throw new Error("INVALID: unlock date");
+    Object.assign(open, { to, unlockReason: reason, unlockedBy: ctx.by, unlockedByRole: ctx.role, unlockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest unlocked", { interestLocked: true, from: open.from }, { interestLocked: false, to }, reason);
+    return loan;
+  }
   function voidLoan(db, ctx, loanId, reason) {
     G.require(ctx, "loan.reverse"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); if (loan.voided) throw new Error("ALREADY_VOIDED");
@@ -1117,7 +1149,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
   }
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
-    return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
+    return { id: loan.id, status: loan.status, interestLocked: L.loanInterestLocked(loan), interestLockedFrom: ((loan.interestLocks || []).find((x) => !dates.isISO(x.to)) || {}).from || "", principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
@@ -1145,7 +1177,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, lockInterest, unlockInterest, voidLoan, restoreLoan, loanView };
 });
 
 
@@ -2776,6 +2808,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
     editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
+    lockInterest: (db, ctx, a) => LN.lockInterest(db, ctx, a.loanId, a.reason, a.date), unlockInterest: (db, ctx, a) => LN.unlockInterest(db, ctx, a.loanId, a.reason, a.date),
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
@@ -2860,7 +2893,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
   const GATED = {
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
-    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, lockInterest: { perm: "loan.editInterest", label: "Lock interest on a loan" }, unlockInterest: { perm: "loan.editInterest", label: "Unlock interest on a loan" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
@@ -2880,7 +2913,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "lockInterest" || name === "unlockInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
     if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
@@ -3664,7 +3697,7 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"8fefd1806c"};})();</scrip
     a.loans.forEach((l) => {
       h += '<div class="box"><div class="lh"><b>Loan ' + esc(l.ref) + '</b><span class="pill ' + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—", "", "adm"], ["Agreed interest per month", l.monthlyInterest], ["Grace period", l.graceMonths ? l.graceMonths + " month" + (l.graceMonths === 1 ? "" : "s") + (ADM ? " (authorised by the Chairperson)" : "") : "None — interest runs from the first payout"]]) +
         (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts as ONE loan; interest counts from the first payout (" + dates.toDisplay(l.payouts[0].date) + "):</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref", adm: 1 }], l.payouts) : "") +
-        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself.</div>") +
+        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself.</div>") +
         kv([["Loan paid out", l.principal], ["Interest charged to date", l.accruedInterest, "sub"], ["Interest paid", l.interestPaid, "sub"], ["Interest still due", l.interestDue, "sub"], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft]].concat(l.penalties ? [["Penalties still due", l.penaltiesDue]] : []).concat([["TOTAL OWED as at " + dates.longDate(p.to), l.totalOwed, "tot"]])) +
         (ADM ? '<div class="cf">Working: loan still owed ' + num(l.principalLeft) + " + interest still due " + num(l.interestDue) + (l.penaltiesDue ? " + penalties " + num(l.penaltiesDue) : "") + " = " + num(l.totalOwed) + (l.checks.partsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE</span>') + "</div>" : (l.checks.partsAddUp ? "" : '<div class="cf"><span class="pill w">Please ask the Treasurer to check this loan</span></div>')) +
         (l.repayments.length ? tbl([{ h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Reference", k: "ref", adm: 1 }, { h: "Paid", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => num(r.interest) }, { h: "To loan", n: 1, f: (r) => num(r.principal) }, { h: "Loan left", n: 1, f: (r) => num(r.principalLeft) }], l.repayments) : '<div class="cf">No repayments recorded yet. ' + esc(l.rule) + "</div>") +
@@ -4663,7 +4696,7 @@ window.SOBMember = function (E) {
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
         a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")),
           lines([["Loan paid out", l.principal], ["Date paid out", l.dateText]].concat(adm ? [["Payout entry", l.disbursementRef || "—"]] : []).concat([["Agreed interest per month", l.monthlyInterest], ["Interest charged to date", l.accruedInterest], ["Interest paid", l.interestPaid], ["Interest still due", l.interestDue], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft], ["TOTAL OWED", l.totalOwed, "tot"]])),
-          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
+          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
           l.repayments.length ? Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Paid", num: 1, render: (r) => num(r.amount) }, { label: "To interest", num: 1, render: (r) => num(r.interest) }, { label: "To loan", num: 1, render: (r) => num(r.principal) }, { label: "Loan left", num: 1, render: (r) => num(r.principalLeft) }]), l.repayments, null) : h("p", { class: "mute rg-blurb" }, "No repayments recorded yet. " + l.rule))),
         a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, adm ? "Earlier loan " + l.ref : "Earlier loan" + (l.dateText ? " (" + l.dateText + ")" : "")), badge(l.status, l.totalOwed ? "warn" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
         h("h2", { class: "sec" }, adm ? "Every transaction · tap one to review it" : "Every transaction"), Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Transaction", key: "type" }, { label: "Details", key: "details" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }, { label: "Effect", num: 1, render: (x) => num(x.effect) }, { label: "Balance", num: 1, render: (x) => num(x.balance) }]), a.transactions.slice().reverse().slice(0, 150), adm ? (x) => openEntry(x.ref) : null, "No transactions in this period"),
@@ -4766,6 +4799,7 @@ window.SOBMember = function (E) {
     const row = h("div", { class: "row", id: "loan-actions" }, exportMenu({ id: "loan-export", rep: () => accountRep(loanAcct()), period: loanAcct().period.text, wa: () => statementText(loanAcct()) }));
     const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
+      v.interestLocked ? Banner("warn", "Interest is locked from " + D.toDisplay(v.interestLockedFrom) + ". No new interest is added until it is unlocked.") : null,
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
       loanBacking(loan),
@@ -4790,6 +4824,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
+    add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form(v.interestLocked ? "Unlock interest on this loan" : "Lock interest on this loan", [dateF("date", v.interestLocked ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(v.interestLocked ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, v.interestLocked ? "Interest unlocked" : "Interest locked")));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);
   }
@@ -4804,7 +4839,17 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   }
   function loans() {
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt }), "Application recorded")) }, "New application") : null),
+      loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Members normally qualify for up to 3× their savings. Above that, guarantors or approved security are needed."));
+  }
+  /* Totals across all active loans. Tap a card for the loan-by-loan breakdown; tap a row to open that loan. */
+  function loanTotals() {
+    const act = K.loanBook(st.db, today()).filter((v) => v.status === "Active"), sum = (k) => act.reduce((a, v) => a + (Number(v[k]) || 0), 0);
+    const P = sum("principal"), I = sum("accumulatedInterest"), R = sum("repaid"), B = sum("balance");
+    const detail = (title) => () => { const cols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Loan amount", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "", render: (v) => v.interestLocked ? badge("Interest locked", "mute") : "" }];
+      const m = Modal(title, h("div", null, Table(cols, act, (v) => { const bg = document.querySelector(".modal-bg"); if (bg) bg.remove(); openLoan(v.id); }), h("div", { class: "grid" }, Card("Total loan amount", ugx(P)), Card("Total interest", ugx(I)), Card("Repaid so far", ugx(R)), Card("Total balance", ugx(B))))); return m; };
+    return h("div", { id: "loan-totals", class: "grid" }, Card("Total loan amount", ugx(P), act.length + " active loan" + (act.length === 1 ? "" : "s") + " · tap for details", detail("Active loans: loan amount")),
+      Card("Total interest", ugx(I), act.filter((v) => v.interestLocked).length ? act.filter((v) => v.interestLocked).length + " locked · tap for details" : "Tap for details", detail("Active loans: interest")));
   }
 
   /* ---------- ledger ---------- */
