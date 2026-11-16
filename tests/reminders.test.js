@@ -183,4 +183,29 @@ t("the reminder history is Super-Admin-only: other staff and members never recei
   const mv = API.viewFor(db, { role: "Member", id: a.id, memberId: a.id }, "2026-10-22"); assert.ok(!mv.reminders || mv.reminders.length === 0); assert.ok(!JSON.stringify(mv).includes("Praise the Lord"), "member view contains no reminder text");
 });
 
+const N = require("../src/core/notify.js");
+const smsWorld = () => { const w = world(); setDates(w.db, "2026-10-22"); const rec = run(w.db, "Admin", "2026-10-22", "prepareReminder", { loanId: w.l.id }); return Object.assign(w, { rec }); };
+const gw = (live, answer) => { const sent = []; return { sent, g: { SMS: { live, send: (m) => { sent.push(m); return answer || { ok: true, providerRef: "" }; } }, adminPhone: "" } }; };
+t("SMS: queue -> gateway -> accepted is recorded honestly (accepted is not delivered), the text is the verified reminder text, and it goes to the member's own number only", () => {
+  const { db, rec } = smsWorld(), { g, sent } = gw(true); const q = run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id });
+  assert.equal(db.outbox.length, 1); assert.equal(db.outbox[0].to, "+256772123456"); assert.equal(db.outbox[0].channel, "SMS");
+  N.dispatch(db, ctx("Admin", "2026-10-22"), g, { ids: [q.outboxId] }); assert.equal(sent.length, 1); assert.ok(!/[*]|(^|\s)_/.test(sent[0].body), "no WhatsApp markup in an SMS"); assert.ok(/UGX/.test(sent[0].body));
+  run(db, "Admin", "2026-10-22", "syncReminderSms", { id: rec.id }); const r = db.reminders[0]; assert.equal(r.delivery, "SMS_ACCEPTED"); assert.ok(r.events.some((e) => e.event === "SMS_ACCEPTED" && /does not prove/.test(e.note)));
+  assert.throws(() => run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id }), /already sent/); assert.throws(() => run(db, "Admin", "2026-10-22", "cancelReminder", { id: rec.id, reason: "x" }), /cannot be cancelled/);
+});
+t("SMS: a second tap never sends twice; with the gateway off nothing is sent; a failure is recorded and can be retried", () => {
+  const { db, rec } = smsWorld(); const a = run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id }), b = run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id }); assert.equal(a.outboxId, b.outboxId); assert.equal(db.outbox.length, 1);
+  const off = gw(false); N.dispatch(db, ctx("Admin", "2026-10-22"), off.g, { ids: [a.outboxId] }); assert.equal(off.sent.length, 0); run(db, "Admin", "2026-10-22", "syncReminderSms", { id: rec.id }); assert.notEqual(db.reminders[0].delivery, "SMS_ACCEPTED"); assert.ok(db.reminders[0].events.some((e) => e.event === "SMS_NOT_SENT"));
+  const bad = gw(true, { ok: false, error: "HTTP 401" }); N.dispatch(db, ctx("Admin", "2026-10-22"), bad.g, { ids: [a.outboxId] }); run(db, "Admin", "2026-10-22", "syncReminderSms", { id: rec.id }); assert.ok(db.reminders[0].events.some((e) => e.event === "SMS_FAILED" && /401/.test(e.note))); assert.notEqual(db.reminders[0].delivery, "SMS_ACCEPTED");
+  const ok = gw(true); N.dispatch(db, ctx("Admin", "2026-10-22"), ok.g, { ids: [a.outboxId] }); run(db, "Admin", "2026-10-22", "syncReminderSms", { id: rec.id }); assert.equal(db.reminders[0].delivery, "SMS_ACCEPTED"); assert.equal(ok.sent.length, 1);
+});
+t("SMS: a targeted send touches nothing else in the outbox; stale figures, opted-out members and non-officers are refused", () => {
+  const { db, rec, a } = smsWorld(); N.queue(db, ctx("Admin", "2026-10-22"), { memberId: a.id, template: "custom", vars: { text: "other queued message" }, channel: "SMS" });
+  const q = run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id }), { g, sent } = gw(true); N.dispatch(db, ctx("Admin", "2026-10-22"), g, { ids: [q.outboxId] }); assert.equal(sent.length, 1); assert.equal(db.outbox.find((m) => m.template === "custom").status, "QUEUED");
+  const w2 = smsWorld(); G.updateMemberContact; w2.db.members[0].notifyOptOut = true; assert.throws(() => run(w2.db, "Admin", "2026-10-22", "queueReminderSms", { id: w2.rec.id }), /OPTED_OUT/);
+  const w3 = smsWorld(); G.createEntry(w3.db, ctx("Admin", "2026-10-22"), { date: "2026-10-22", memberId: w3.a.id, amount: 5000, type: "Loan Repayment", loanId: w3.l.id });
+  assert.throws(() => run(w3.db, "Admin", "2026-10-22", "queueReminderSms", { id: w3.rec.id }), /STALE|changed|CANNOT/);
+  const w4 = smsWorld(); ["Treasurer", "Secretary", "Committee"].forEach((r) => assert.throws(() => run(w4.db, r, "2026-10-22", "queueReminderSms", { id: w4.rec.id })));
+  const before = JSON.stringify([w4.db.transactions, w4.db.loans]); N.dispatch(w4.db, ctx("Admin", "2026-10-22"), gw(true).g, { ids: [] }); assert.equal(JSON.stringify([w4.db.transactions, w4.db.loans]), before, "no financial record changes");
+});
 console.log(n + " reminder tests passed");

@@ -47,6 +47,15 @@
     try {
       if (body.action === "ping") return { ok: true, pong: true };
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
+      if (body.action === "claim") {   // a member creates their own password (SOB ID + phone number on record)
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users"), r = A.claim(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.phone, body.password);
+          if (!r.ok) return r;
+          S.writeCollection(env.ss, "users", users);
+          return { ok: true, token: r.token, user: r.user };
+        } finally { env.lock.releaseLock(); }
+      }
       const usersDb = { users: S.readCollection(env.ss, "users") };
       const user = A.session(env, usersDb, body.token);
       if (!user) return fail("UNAUTHENTICATED");
@@ -80,7 +89,7 @@
         try {
           const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
           const before = JSON.parse(JSON.stringify(db));
-          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100, ids: Array.isArray(body.ids) ? body.ids.slice(0, 20) : null });
           S.writeChanged(env.ss, before, db);
           return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
         } finally { env.lock.releaseLock(); }

@@ -9,6 +9,7 @@
   const ROUNDS = 300, MAX_FAILS = 5, LOCK_SECONDS = 900, SESSION_SECONDS = 6 * 3600;
   const ROLES = ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"];  // Admin = Super Admin
   const MIN_PIN = { Admin: 6, Chairperson: 6, Treasurer: 6, Secretary: 6, Committee: 6, Member: 4 };
+  const MIN_OWN = 6;   // a password a member creates for themselves
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
   const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });
@@ -73,6 +74,24 @@
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
+  /* SELF-SERVICE PASSWORD. A member whose account still has an officer-issued temporary PIN proves who they are with the SOB ID + the phone number
+     on record, then chooses their own password. Refused once the member has made their own (an officer's reset re-opens it). Shares the sign-in lock-out. */
+  const digits = (x) => String(x || "").replace(/\D+/g, "");
+  const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
+  function claim(env, db, id, phone, newPassword) {
+    const k = "fail:" + String(id || "").toUpperCase(), fails = Number(env.cache.get(k) || 0);
+    if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
+    const u = findUser(db, id), m = u && u.role === "Member" && (db.members || []).find((x) => x.id === u.memberId);
+    const phones = u ? [u.phone, m && m.phone, m && m.contact].filter(Boolean) : [];
+    if (!u || u.role !== "Member" || !phones.some((p) => samePhone(p, phone))) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "NOT_VERIFIED: we could not match that SOB ID and phone number" }; }
+    const kind = statusKind(m && m.status); if (kind) return blockedError(kind);
+    if (!(u.mustChange === true || u.mustChange === "true")) return { ok: false, error: "ALREADY_SET: you already created a password. Sign in, or ask an officer to reset it" };
+    if (String(newPassword || "").length < MIN_OWN) return { ok: false, error: "WEAK_PIN: use at least " + MIN_OWN + " characters" };
+    u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
+    env.cache.remove(k);
+    const token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
+    return { ok: true, token, user: publicUser(u), updated: u };
+  }
   /* ADMIN PIN recovery. Pure rule, called only from the Apps Script editor (never from the web app). It can change ONE thing: the PIN of the single Super Admin.
      It has no user-id parameter, so it cannot be pointed at the Chairperson, Treasurer, a member or anyone else. Returns the updated users list; the caller audits and saves. */
   function recoverAdminPin(env, users, pin) {
@@ -106,5 +125,5 @@
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser, recoverAdminPin };
+  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, claim, publicUser, findUser, recoverAdminPin };
 });

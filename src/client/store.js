@@ -51,8 +51,8 @@
       /* Plain GET of the web-app address (no sign-in): tells the app whether the endpoint is reachable, is the SOB ledger, and which build is deployed. */
       async check() { try { const r = await o.fetch(o.url, { method: "GET", redirect: "follow", credentials: "omit", cache: "no-store" }), t = await r.text(); let j; try { j = JSON.parse(t); } catch (e) { return { ok: false, error: endpointProblem(t, r.status, o.url) }; } if (j && j.ok && j.service === "SOB Ledger") { serverBuild = j.build || null; return { ok: true, build: j.build || null }; } return { ok: false, error: endpointProblem(t, r.status, o.url, "NOT_SOB") }; } catch (e) { return { ok: false, error: Object.assign(new Error("NETWORK: the app could not reach Google."), { code: "NETWORK" }) }; } },
       /* Contract: a successful login answers {ok:true, token:string, user:{id,name,role,mustChangePin}}. Anything else is checked here, once, so the UI can trust the result. */
-      async login(id, pin) {
-        const j = await call({ action: "login", id, pin });
+      async login(id, pin, extra) {
+        const j = await call(Object.assign({ action: "login", id, pin }, extra || {}));
         if (!j || typeof j.token !== "string" || !j.token) throw Object.assign(new Error("SIGNIN_CONTRACT: the server did not return a session (fields received: " + Object.keys(j || {}).join(", ") + "). Redeploy the latest Code.gs as a New version."), { code: "SIGNIN_CONTRACT" });
         token = j.token; let u = j.user;
         if (!validUser(u)) { try { const w = await call({ action: "whoami" }); u = w.user; } catch (e) { token = null; throw e; } }   // the session exists: ask the server who it belongs to

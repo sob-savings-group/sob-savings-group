@@ -126,6 +126,8 @@
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
     cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),

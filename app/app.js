@@ -33,10 +33,9 @@
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
       const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "new-password", enterkeyhint: "go" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your password", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
-      const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
+      const MSG = { NOT_VERIFIED: "We could not match that SOB ID and phone number. Ask the Treasurer or Secretary to check the number the group has for you.", ALREADY_SET: "You already created a password. Sign in with it, or ask an officer to reset it.", WEAK_PIN: "Choose a password of at least 6 characters.", BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
       const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
       /* ONE place that runs a sign-in and shows the outcome; "produce" returns the store.login() promise (or throws a format message). */
       const attempt = async (produce, kind, typedId) => {
@@ -59,15 +58,21 @@
         finally { working = false; }
       };
       const go = () => attempt(async () => {
-        /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted. SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-        const nm = fname.value.trim(), idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
-        /* the PIN box counts ONLY when the member opened it ("I have a PIN"): a hidden box can never carry a browser-saved password into a name sign-in */
-        let id, secret = pinRow.hidden ? "" : pin.value.trim(), typed = idPart || nm;
-        if (idPart) { const m = /^(\S+)[\s,;:]+(.+)$/.exec(idPart); id = m ? m[1] : idPart; if (!secret) secret = nm || (m ? m[2].trim() : ""); }
-        else { const m = /^(\S+)[\s,;:]+(.+)$/.exec(nm); id = nm; if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = nm; }
-        if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
+        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), secret = pin.value.trim();
+        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        if (!secret) throw Object.assign(new Error("Enter your password"), { code: "FORMAT" });
         return st.store.login(id, secret);
-      }, "member", mid.value || fname.value);
+      }, "member", mid.value);
+      /* First time: the member proves who they are (SOB ID + phone number on record) and chooses their own password. */
+      const cphone = h("input", { id: "cphone", type: "tel", placeholder: "07…", autocomplete: "tel", inputmode: "tel" }), cpw = h("input", { id: "cpw", type: "password", placeholder: "At least 6 characters", autocomplete: "new-password" });
+      const createGo = () => attempt(async () => {
+        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
+        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        if (!cphone.value.trim()) throw Object.assign(new Error("Enter the phone number the group has for you"), { code: "FORMAT" });
+        if (cpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "FORMAT" });
+        return st.store.login(id, null, { action: "claim", phone: cphone.value.trim(), password: cpw.value });
+      }, "member", mid.value);
       /* Officer login: Staff ID + PIN only (no first name, no member SOB ID). The PIN box has no browser auto-fill and a Show button, so a wrong or old saved PIN can never go in unseen. */
       const sid = h("input", { id: "sid", placeholder: "ADMIN, CHAIR, TREAS or SECRETARY", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const spin = h("input", { type: "password", id: "spin", placeholder: "Your officer PIN", autocomplete: "new-password", autocorrect: "off", autocapitalize: "off", spellcheck: "false", enterkeyhint: "go" });
@@ -78,19 +83,21 @@
         if (!secret) throw Object.assign(new Error("Enter your PIN"), { code: "FORMAT" });
         return st.store.login(id, secret);
       }, "officer", sid.value);
-      [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
+      [cphone, cpw].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") createGo(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
-      /* Two boxes for a member: First name + SOB ID. A PIN is only asked for when the member has one ("I have a PIN"); the choice is remembered on this device. */
-      let hasPin = false; try { hasPin = localStorage.getItem("sob.hasPin") === "1"; } catch (e) {}
-      const pinRow = h("div", { id: "pin-row", hidden: !hasPin }, h("label", { for: "pin" }, "PIN"), pin);
-      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { pinRow.hidden = !pinRow.hidden; pinToggle.textContent = pinRow.hidden ? "I have a PIN" : "I do not have a PIN"; try { localStorage.setItem("sob.hasPin", pinRow.hidden ? "0" : "1"); } catch (e) {} if (pinRow.hidden) pin.value = ""; else pin.focus(); } }, hasPin ? "I do not have a PIN" : "I have a PIN");
-      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, pinRow, pinToggle,
-        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      /* A member needs two things: SOB ID + password. First time: "Create my password". */
+      const pinRow = h("div", { id: "pin-row" }, h("label", { for: "pin" }, "Password"), pin);
+      const createBox = h("div", { id: "create-box", hidden: true }, h("p", { class: "hint" }, "First time? Enter your SOB ID above, the phone number the group has for you, and choose a password."),
+        h("label", { for: "cphone" }, "Phone number"), cphone, h("label", { for: "cpw" }, "New password"), cpw, h("button", { class: "primary big", id: "create-go", onclick: createGo }, "Create my password"));
+      const signBox = h("div", { id: "sign-box" }, pinRow, h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = createBox.hidden; createBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); pinToggle.textContent = c ? "Back to sign in" : "First time? Create my password"; } }, "First time? Create my password");
+      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "mid" }, "SOB ID"), mid, signBox, createBox, pinToggle);
       const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
         h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));
       const tabM = h("button", { type: "button", id: "tab-member", class: "tab on", role: "tab", onclick: () => setMode("member") }, "Member login"), tabO = h("button", { type: "button", id: "tab-officer", class: "tab", role: "tab", onclick: () => setMode("officer") }, "Officer login");
-      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? fname : sid).focus(); };
+      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? mid : sid).focus(); };
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
         h("div", { class: "tabs", role: "tablist" }, tabM, tabO), memberPanel, officerPanel, problem,
@@ -287,7 +294,7 @@
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
         a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")),
           lines([["Loan paid out", l.principal], ["Date paid out", l.dateText]].concat(adm ? [["Payout entry", l.disbursementRef || "—"]] : []).concat([["Agreed interest per month", l.monthlyInterest], ["Interest charged to date", l.accruedInterest], ["Interest paid", l.interestPaid], ["Interest still due", l.interestDue], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft], ["TOTAL OWED", l.totalOwed, "tot"]])),
-          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
+          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
           l.repayments.length ? Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Paid", num: 1, render: (r) => num(r.amount) }, { label: "To interest", num: 1, render: (r) => num(r.interest) }, { label: "To loan", num: 1, render: (r) => num(r.principal) }, { label: "Loan left", num: 1, render: (r) => num(r.principalLeft) }]), l.repayments, null) : h("p", { class: "mute rg-blurb" }, "No repayments recorded yet. " + l.rule))),
         a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, adm ? "Earlier loan " + l.ref : "Earlier loan" + (l.dateText ? " (" + l.dateText + ")" : "")), badge(l.status, l.totalOwed ? "warn" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
         h("h2", { class: "sec" }, adm ? "Every transaction · tap one to review it" : "Every transaction"), Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Transaction", key: "type" }, { label: "Details", key: "details" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }, { label: "Effect", num: 1, render: (x) => num(x.effect) }, { label: "Balance", num: 1, render: (x) => num(x.balance) }]), a.transactions.slice().reverse().slice(0, 150), adm ? (x) => openEntry(x.ref) : null, "No transactions in this period"),
@@ -615,7 +622,13 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const reload = async () => { await st.store.load(); st.db = st.store.db; rem.at = new Date().toISOString(); render(); };
     const memberOf = (id) => st.db.members.find((m) => m.id === id) || {};
     const whenTxt = (iso) => (iso ? D.toDisplay(String(iso).slice(0, 10)) + " " + RM.eatTime(iso) : "");
-    const tone = { PREPARED: "warn", OPENED: "warn", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const tone = { PREPARED: "warn", OPENED: "warn", SMS_ACCEPTED: "ok", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const sentLike = (d) => d === "SENT_CONFIRMED" || d === "SMS_ACCEPTED";
+    /* Send ONE reminder by SMS through the gateway: queue (re-checked against the ledger) -> targeted send -> record what the gateway answered */
+    const smsSend = (rec, phone, m) => Form("Send by SMS", [{ type: "note", text: "Send this reminder as an SMS to " + rec.memberName + " (" + phone + ") now? It cannot be unsent." }], act(async () => {
+      const q = await commit("queueReminderSms", { id: rec.id }); const out = q && q.outboxId ? q : { outboxId: ((st.db.reminders.find((x) => x.id === rec.id) || {}).smsOutboxId) };
+      const r = await st.store.call({ action: "dispatchOutbox", ids: [out.outboxId] }); const s = await commit("syncReminderSms", { id: rec.id });
+      if (s && s.outboxStatus === "SENT") { m && m.close(); } else if (s && s.outboxStatus === "FAILED") throw new Error("The SMS was not sent: " + (s.reason || "gateway error")); else throw new Error("The SMS gateway is not switched on, so nothing was sent."); }, "SMS accepted by the gateway. This does not prove the member received it."));
     /* the message window: text + the private-chat link. The link is a real <a>, so the browser opens it from the officer's own tap. */
     function messageModal(rec, text, phone, calcAt) {
       const link = RM.waLink(phone, text);
@@ -624,6 +637,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         h("pre", { class: "wa-preview", id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:50vh;overflow:auto" }, text),
         link ? h("div", { class: "row" },
           h("a", { class: "btn primary", id: "rem-open-wa", href: link, target: "_blank", rel: "noopener", style: "text-decoration:none;display:inline-block;padding:10px 16px", onclick: () => { if (rec && st.live) { commit("markReminderOpened", { id: rec.id }).then(() => toast("WhatsApp opened — delivery is NOT confirmed yet. Tap “I sent it” after you press Send in WhatsApp.", "warn")).catch((e) => toast(friendly(e), true)); } } }, "Open WhatsApp chat (private)"),
+          rec && st.live ? h("button", { id: "rem-send-sms", onclick: () => smsSend(rec, phone, m) }, "Send by SMS") : null,
           rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
           : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
         h("p", { class: "mute" }, "Opens the member's private chat only. “Opened” is not “delivered”: confirm with “I sent it”.")));
@@ -697,10 +711,10 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Reminder history and follow-up"),
       Table([{ label: "Prepared", render: (x) => whenTxt(x.createdAt) }, { label: "Member", render: (x) => x.memberName + " (" + x.memberId + ")" }, { label: "Level", render: (x) => RM.LEVEL_LABEL[x.level] }, { label: "Owed then", num: 1, render: (x) => ugx(x.figures.totalOutstanding) },
         { label: "Delivery", render: (x) => badge(RM.DELIVERY_LABEL[x.delivery], tone[x.delivery]) }, { label: "Follow-up", render: (x) => RM.FOLLOW_LABEL[x.followUp] + (x.promiseDate ? " (by " + D.toDisplay(x.promiseDate) + ")" : "") },
-        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
+        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, !sentLike(x.delivery) ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
           x.delivery === "OPENED" ? h("button", { "data-hist-sent": x.id, onclick: () => act(async () => commit("confirmReminderSent", { id: x.id, note: "" }), "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null,
           x.delivery !== "PREPARED" ? h("button", { "data-hist-follow": x.id, onclick: () => followForm(x) }, "Follow-up") : null,
-          x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
+          !sentLike(x.delivery) ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
       h("p", { class: "mute" }, "Live-book loans only. Reminders never change a balance."));
   }
 

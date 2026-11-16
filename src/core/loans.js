@@ -354,7 +354,7 @@
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
-      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
+      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }

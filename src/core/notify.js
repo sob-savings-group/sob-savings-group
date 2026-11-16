@@ -22,6 +22,7 @@
     airtimeRejected: (v) => "SOB: your airtime request " + v.ref + " was not approved." + (v.reason ? " Reason: " + v.reason : ""),
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
+    loanReminderSms: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -58,7 +59,8 @@
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const todo = (db.outbox || []).filter((m) => m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
     todo.forEach((m) => {
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;

@@ -179,12 +179,36 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
     return Math.max(0, elapsed - loanGraceMonths(loan));
   }
-  const loanAccumulatedInterest = (loan, asOf) =>
-    loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
+     opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
+     of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
+  const REDUCING_FROM_YEAR = 2027;
+  const reducingFrom = (db, loan) => {
+    if (!db || !loan || !dates.isISO(loan.date) || !(Number(loan.loanAmount) > 0)) return "";
+    const y = REDUCING_FROM_YEAR, c = (db.yearCycles || []).find((x) => Number(x.year) === y);
+    return c && dates.isISO(c.openedDate) ? c.openedDate : "";
+  };
+  /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
+  function reducingInterest(loan, db, asOf, principalPaidBefore) {
+    const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
+    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= g + months; m++) {
+      const start = dates.addMonths(loan.date, m - 1);
+      total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
+    }
+    return total;
+  }
+  const loanAccumulatedInterest = (loan, asOf, db, paidBefore) => {
+    if (db && reducingFrom(db, loan)) {
+      let st = null; const pb = paidBefore || ((d) => { st = st || walkAllocation(loan, db, asOf).steps; return st.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0); });
+      return reducingInterest(loan, db, asOf, pb);
+    }
+    return loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  };
   const loanTotalPenalties = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
   const loanPayable = (loan, asOf, db) =>
-    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf) + (db ? loanTotalPenalties(loan, db) : 0);
+    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf, db) + (db ? loanTotalPenalties(loan, db) : 0);
   const loanTotalRepaid = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
   const loanOutstanding = (loan, db, asOf) => loanPayable(loan, asOf, db) - loanTotalRepaid(loan, db);
@@ -232,14 +256,14 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
       let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
-      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
+      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
       [["interest", interestDue], ["pen", penDue], ["principal", principalDue]].forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
       steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
-    const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    const accrued = loanAccumulatedInterest(loan, e, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
     return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
   }
   /* Principal reduction caused by each counted repayment (this, and only this, releases guarantees). */
@@ -870,7 +894,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
-      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
+      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
@@ -1267,6 +1291,7 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     airtimeRejected: (v) => "SOB: your airtime request " + v.ref + " was not approved." + (v.reason ? " Reason: " + v.reason : ""),
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
+    loanReminderSms: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -1303,7 +1328,8 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const todo = (db.outbox || []).filter((m) => m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
     todo.forEach((m) => {
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
@@ -1891,7 +1917,7 @@ __M['core/profitrec'] = (function(){ const module = {exports:{}}; const require 
     const end = to && to <= dates.addDays(asOf, 1) ? dates.addDays(to, -1) : asOf, start = dates.addDays(from, -1); let charged = 0, received = 0, receivable = 0, loans = 0;
     L.activeLoans(db).forEach((l) => {
       if (!dates.isISO(l.date) || l.date > end) return; loans++;
-      charged += Math.max(0, L.loanAccumulatedInterest(l, end) - (l.date <= start ? L.loanAccumulatedInterest(l, start) : 0));
+      charged += Math.max(0, L.loanAccumulatedInterest(l, end, db) - (l.date <= start ? L.loanAccumulatedInterest(l, start, db) : 0));
       const p = L.loanInterestPosition(l, db, end); p.steps.filter((x) => x.date >= from && x.date <= end).forEach((x) => { received += x.interest; }); receivable += p.unpaidInterest;
     });
     return { charged, received, receivable, loans };
@@ -1983,8 +2009,8 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
-  const DELIVERY = ["PREPARED", "OPENED", "SENT_CONFIRMED", "CANCELLED"];
-  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
+  const DELIVERY = ["PREPARED", "OPENED", "SMS_ACCEPTED", "SENT_CONFIRMED", "CANCELLED"];
+  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SMS_ACCEPTED: "SMS accepted by gateway (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
   const FOLLOW = ["NONE", "AWAITING_REPLY", "REPLIED", "PROMISE_TO_PAY", "NO_RESPONSE", "CLOSED"];
   const FOLLOW_LABEL = { NONE: "No follow-up yet", AWAITING_REPLY: "Awaiting reply", REPLIED: "Member replied", PROMISE_TO_PAY: "Promised to pay", NO_RESPONSE: "No response", CLOSED: "Closed" };
   const PLACEHOLDERS = ["name", "id", "deadline", "daysToDeadline", "shareOutDate", "daysToShareOut"];
@@ -2210,6 +2236,28 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     G.audit(db, ctx, "Reminder", r.id, "Sent confirmed by officer", null, { delivery: r.delivery }, a.note || "");
     return r;
   }
+  /* SMS through the gateway. The officer taps "Send by SMS" for ONE prepared reminder. The text is re-checked against the ledger right now (same rules as WhatsApp),
+     the member must not have opted out, and the message goes to the outbox with a key that makes a second tap harmless. "Accepted by the gateway" is NOT "delivered". */
+  const smsText = (t) => String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, "");
+  function queueSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const chk = revalidate(db, ctx, { id: r.id });
+    if (r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: this reminder was already sent; prepare a new one when the next reminder is due");
+    const member = (db.members || []).find((m) => m.id === r.memberId); if (member && member.notifyOptOut) throw new Error("OPTED_OUT: the member switched notifications off, so no SMS is sent");
+    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsText(chk.text) }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
+    if (msg.status === "SKIPPED") throw new Error("NO_VALID_PHONE: " + msg.reason);
+    r.smsOutboxId = msg.id; event(r, ctx, "SMS_QUEUED", "SMS prepared for the gateway (" + msg.id + "). Not sent until the gateway accepts it.");
+    G.audit(db, ctx, "Reminder", r.id, "SMS queued", null, { outbox: msg.id }, "Officer asked for this reminder to go by SMS"); return { reminder: r, outboxId: msg.id };
+  }
+  /* After the outbox ran: record honestly what the gateway answered. */
+  function syncSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const m = (db.outbox || []).find((x) => x.id === r.smsOutboxId); if (!m) throw new Error("NOT_FOUND: no SMS was queued for this reminder");
+    if (m.status === "SENT" && r.delivery !== "SMS_ACCEPTED" && r.delivery !== "SENT_CONFIRMED") {
+      r.delivery = "SMS_ACCEPTED"; r.smsAcceptedAt = m.lastAttemptAt || ctx.now; if (r.followUp === "NONE") r.followUp = "AWAITING_REPLY";
+      event(r, ctx, "SMS_ACCEPTED", "The SMS gateway accepted the message. This does not prove the member received it."); G.audit(db, ctx, "Reminder", r.id, "SMS accepted by gateway", null, { delivery: r.delivery }, "Gateway acceptance is not delivery");
+    } else if (m.status === "FAILED") event(r, ctx, "SMS_FAILED", String(m.reason || "").slice(0, 200));
+    else if (m.status === "DRY_RUN") event(r, ctx, "SMS_NOT_SENT", "The SMS gateway is not switched on, so nothing was sent.");
+    return { reminder: r, outboxStatus: m.status, reason: m.reason || "" };
+  }
   function setFollowUp(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
     if (!FOLLOW.includes(a.followUp)) throw new Error("INVALID: follow-up must be one of " + FOLLOW.join(", "));
@@ -2222,12 +2270,12 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   }
   function cancel(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); G.need(a.reason, "reason");
-    if (r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: a reminder confirmed as sent cannot be cancelled; record a follow-up instead");
+    if (r.delivery === "SENT_CONFIRMED" || r.delivery === "SMS_ACCEPTED") throw new Error("BAD_STATE: a reminder that was sent cannot be cancelled; record a follow-up instead");
     if (r.delivery === "CANCELLED") return r;
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
-  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 return module.exports; })();
@@ -2360,6 +2408,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
     cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),
@@ -3390,7 +3440,7 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     a.loans.forEach((l) => {
       h += '<div class="box"><div class="lh"><b>Loan ' + esc(l.ref) + '</b><span class="pill ' + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—", "", "adm"], ["Agreed interest per month", l.monthlyInterest], ["Grace period", l.graceMonths ? l.graceMonths + " month" + (l.graceMonths === 1 ? "" : "s") + (ADM ? " (authorised by the Chairperson)" : "") : "None — interest runs from the first payout"]]) +
         (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts as ONE loan; interest counts from the first payout (" + dates.toDisplay(l.payouts[0].date) + "):</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref", adm: 1 }], l.payouts) : "") +
-        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself.</div>") +
+        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself.</div>") +
         kv([["Loan paid out", l.principal], ["Interest charged to date", l.accruedInterest, "sub"], ["Interest paid", l.interestPaid, "sub"], ["Interest still due", l.interestDue, "sub"], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft]].concat(l.penalties ? [["Penalties still due", l.penaltiesDue]] : []).concat([["TOTAL OWED as at " + dates.longDate(p.to), l.totalOwed, "tot"]])) +
         (ADM ? '<div class="cf">Working: loan still owed ' + num(l.principalLeft) + " + interest still due " + num(l.interestDue) + (l.penaltiesDue ? " + penalties " + num(l.penaltiesDue) : "") + " = " + num(l.totalOwed) + (l.checks.partsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE</span>') + "</div>" : (l.checks.partsAddUp ? "" : '<div class="cf"><span class="pill w">Please ask the Treasurer to check this loan</span></div>')) +
         (l.repayments.length ? tbl([{ h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Reference", k: "ref", adm: 1 }, { h: "Paid", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => num(r.interest) }, { h: "To loan", n: 1, f: (r) => num(r.principal) }, { h: "Loan left", n: 1, f: (r) => num(r.principalLeft) }], l.repayments) : '<div class="cf">No repayments recorded yet. ' + esc(l.rule) + "</div>") +
@@ -3678,6 +3728,7 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
   const ROUNDS = 300, MAX_FAILS = 5, LOCK_SECONDS = 900, SESSION_SECONDS = 6 * 3600;
   const ROLES = ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"];  // Admin = Super Admin
   const MIN_PIN = { Admin: 6, Chairperson: 6, Treasurer: 6, Secretary: 6, Committee: 6, Member: 4 };
+  const MIN_OWN = 6;   // a password a member creates for themselves
   function stretch(env, salt, pin) { let h = salt + ":" + pin; for (let i = 0; i < ROUNDS; i++) h = env.hash(h + salt); return h; }
   const safeEq = (a, b) => { a = String(a); b = String(b); let d = a.length ^ b.length; for (let i = 0; i < Math.max(a.length, b.length); i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; };
   const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, memberId: u.memberId || null, mustChangePin: u.mustChange === true || u.mustChange === "true" });
@@ -3742,6 +3793,24 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
+  /* SELF-SERVICE PASSWORD. A member whose account still has an officer-issued temporary PIN proves who they are with the SOB ID + the phone number
+     on record, then chooses their own password. Refused once the member has made their own (an officer's reset re-opens it). Shares the sign-in lock-out. */
+  const digits = (x) => String(x || "").replace(/\D+/g, "");
+  const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
+  function claim(env, db, id, phone, newPassword) {
+    const k = "fail:" + String(id || "").toUpperCase(), fails = Number(env.cache.get(k) || 0);
+    if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
+    const u = findUser(db, id), m = u && u.role === "Member" && (db.members || []).find((x) => x.id === u.memberId);
+    const phones = u ? [u.phone, m && m.phone, m && m.contact].filter(Boolean) : [];
+    if (!u || u.role !== "Member" || !phones.some((p) => samePhone(p, phone))) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "NOT_VERIFIED: we could not match that SOB ID and phone number" }; }
+    const kind = statusKind(m && m.status); if (kind) return blockedError(kind);
+    if (!(u.mustChange === true || u.mustChange === "true")) return { ok: false, error: "ALREADY_SET: you already created a password. Sign in, or ask an officer to reset it" };
+    if (String(newPassword || "").length < MIN_OWN) return { ok: false, error: "WEAK_PIN: use at least " + MIN_OWN + " characters" };
+    u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
+    env.cache.remove(k);
+    const token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
+    return { ok: true, token, user: publicUser(u), updated: u };
+  }
   /* ADMIN PIN recovery. Pure rule, called only from the Apps Script editor (never from the web app). It can change ONE thing: the PIN of the single Super Admin.
      It has no user-id parameter, so it cannot be pointed at the Chairperson, Treasurer, a member or anyone else. Returns the updated users list; the caller audits and saves. */
   function recoverAdminPin(env, users, pin) {
@@ -3775,7 +3844,7 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, publicUser, findUser, recoverAdminPin };
+  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, claim, publicUser, findUser, recoverAdminPin };
 });
 
 return module.exports; })();
@@ -3829,6 +3898,15 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
     try {
       if (body.action === "ping") return { ok: true, pong: true };
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
+      if (body.action === "claim") {   // a member creates their own password (SOB ID + phone number on record)
+        env.lock.waitLock(20000);
+        try {
+          const users = S.readCollection(env.ss, "users"), r = A.claim(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.phone, body.password);
+          if (!r.ok) return r;
+          S.writeCollection(env.ss, "users", users);
+          return { ok: true, token: r.token, user: r.user };
+        } finally { env.lock.releaseLock(); }
+      }
       const usersDb = { users: S.readCollection(env.ss, "users") };
       const user = A.session(env, usersDb, body.token);
       if (!user) return fail("UNAUTHENTICATED");
@@ -3862,7 +3940,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
         try {
           const db = S.readAll(env.ss); const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
           const before = JSON.parse(JSON.stringify(db));
-          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100 });
+          const result = N.dispatch(db, ctx, env.gateways || {}, { limit: 100, ids: Array.isArray(body.ids) ? body.ids.slice(0, 20) : null });
           S.writeChanged(env.ss, before, db);
           return { ok: true, result, live: gwStatus(env), summary: N.summary(db) };
         } finally { env.lock.releaseLock(); }
@@ -3997,7 +4075,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "0a6debfbb9";
+var SOB_BUILD = "436fbd2ebf";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

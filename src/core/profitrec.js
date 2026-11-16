@@ -16,7 +16,7 @@
     const end = to && to <= dates.addDays(asOf, 1) ? dates.addDays(to, -1) : asOf, start = dates.addDays(from, -1); let charged = 0, received = 0, receivable = 0, loans = 0;
     L.activeLoans(db).forEach((l) => {
       if (!dates.isISO(l.date) || l.date > end) return; loans++;
-      charged += Math.max(0, L.loanAccumulatedInterest(l, end) - (l.date <= start ? L.loanAccumulatedInterest(l, start) : 0));
+      charged += Math.max(0, L.loanAccumulatedInterest(l, end, db) - (l.date <= start ? L.loanAccumulatedInterest(l, start, db) : 0));
       const p = L.loanInterestPosition(l, db, end); p.steps.filter((x) => x.date >= from && x.date <= end).forEach((x) => { received += x.interest; }); receivable += p.unpaidInterest;
     });
     return { charged, received, receivable, loans };
