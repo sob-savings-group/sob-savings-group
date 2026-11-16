@@ -331,6 +331,27 @@
     G.audit(db, ctx, "Loan", loanId, "Assigned interest corrected", { assignedMonthlyInterest: prev }, { assignedMonthlyInterest: newAmount }, reason);
     return loan;
   }
+  /* Lock / unlock interest on an ACTIVE loan. Recorded as a period on the loan and in the audit trail; no entry is changed or removed. */
+  function lockInterest(db, ctx, loanId, reason, from) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (L.loanInterestLocked(loan)) throw new Error("INVALID: interest is already locked on this loan");
+    from = from || ctx.today; if (!dates.isISO(from)) throw new Error("INVALID: date");
+    if (loan.date && from < loan.date) throw new Error("INVALID: the lock cannot start before the loan was paid out (" + loan.date + ")");
+    (loan.interestLocks = loan.interestLocks || []).push({ from, to: "", reason, lockedBy: ctx.by, lockedByRole: ctx.role, lockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest locked", { interestLocked: false }, { interestLocked: true, from }, reason);
+    return loan;
+  }
+  function unlockInterest(db, ctx, loanId, reason, to) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const open = (loan.interestLocks || []).find((l) => !dates.isISO(l.to));
+    if (!open) throw new Error("INVALID: interest is not locked on this loan");
+    to = to || ctx.today; if (!dates.isISO(to) || to < open.from) throw new Error("INVALID: unlock date");
+    Object.assign(open, { to, unlockReason: reason, unlockedBy: ctx.by, unlockedByRole: ctx.role, unlockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest unlocked", { interestLocked: true, from: open.from }, { interestLocked: false, to }, reason);
+    return loan;
+  }
   function voidLoan(db, ctx, loanId, reason) {
     G.require(ctx, "loan.reverse"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); if (loan.voided) throw new Error("ALREADY_VOIDED");
@@ -353,7 +374,7 @@
   }
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
-    return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
+    return { id: loan.id, status: loan.status, interestLocked: L.loanInterestLocked(loan), interestLockedFrom: ((loan.interestLocks || []).find((x) => !dates.isISO(x.to)) || {}).from || "", principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
@@ -381,5 +402,5 @@
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, lockInterest, unlockInterest, voidLoan, restoreLoan, loanView };
 });

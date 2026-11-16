@@ -397,6 +397,7 @@
     const row = h("div", { class: "row", id: "loan-actions" }, exportMenu({ id: "loan-export", rep: () => accountRep(loanAcct()), period: loanAcct().period.text, wa: () => statementText(loanAcct()) }));
     const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
+      v.interestLocked ? Banner("warn", "Interest is locked from " + D.toDisplay(v.interestLockedFrom) + ". No new interest is added until it is unlocked.") : null,
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
       loanBacking(loan),
@@ -421,6 +422,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
+    add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form(v.interestLocked ? "Unlock interest on this loan" : "Lock interest on this loan", [dateF("date", v.interestLocked ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(v.interestLocked ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, v.interestLocked ? "Interest unlocked" : "Interest locked")));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);
   }
@@ -435,7 +437,17 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   }
   function loans() {
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt }), "Application recorded")) }, "New application") : null),
+      loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Members normally qualify for up to 3× their savings. Above that, guarantors or approved security are needed."));
+  }
+  /* Totals across all active loans. Tap a card for the loan-by-loan breakdown; tap a row to open that loan. */
+  function loanTotals() {
+    const act = K.loanBook(st.db, today()).filter((v) => v.status === "Active"), sum = (k) => act.reduce((a, v) => a + (Number(v[k]) || 0), 0);
+    const P = sum("principal"), I = sum("accumulatedInterest"), R = sum("repaid"), B = sum("balance");
+    const detail = (title) => () => { const cols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Loan amount", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "", render: (v) => v.interestLocked ? badge("Interest locked", "mute") : "" }];
+      const m = Modal(title, h("div", null, Table(cols, act, (v) => { const bg = document.querySelector(".modal-bg"); if (bg) bg.remove(); openLoan(v.id); }), h("div", { class: "grid" }, Card("Total loan amount", ugx(P)), Card("Total interest", ugx(I)), Card("Repaid so far", ugx(R)), Card("Total balance", ugx(B))))); return m; };
+    return h("div", { id: "loan-totals", class: "grid" }, Card("Total loan amount", ugx(P), act.length + " active loan" + (act.length === 1 ? "" : "s") + " · tap for details", detail("Active loans: loan amount")),
+      Card("Total interest", ugx(I), act.filter((v) => v.interestLocked).length ? act.filter((v) => v.interestLocked).length + " locked · tap for details" : "Tap for details", detail("Active loans: interest")));
   }
 
   /* ---------- ledger ---------- */
