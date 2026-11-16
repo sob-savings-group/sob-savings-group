@@ -178,12 +178,36 @@
     const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
     return Math.max(0, elapsed - loanGraceMonths(loan));
   }
-  const loanAccumulatedInterest = (loan, asOf) =>
-    loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
+     opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
+     of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
+  const REDUCING_FROM_YEAR = 2027;
+  const reducingFrom = (db, loan) => {
+    if (!db || !loan || !dates.isISO(loan.date) || !(Number(loan.loanAmount) > 0)) return "";
+    const y = REDUCING_FROM_YEAR, c = (db.yearCycles || []).find((x) => Number(x.year) === y);
+    return c && dates.isISO(c.openedDate) ? c.openedDate : "";
+  };
+  /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
+  function reducingInterest(loan, db, asOf, principalPaidBefore) {
+    const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
+    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= g + months; m++) {
+      const start = dates.addMonths(loan.date, m - 1);
+      total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
+    }
+    return total;
+  }
+  const loanAccumulatedInterest = (loan, asOf, db, paidBefore) => {
+    if (db && reducingFrom(db, loan)) {
+      let st = null; const pb = paidBefore || ((d) => { st = st || walkAllocation(loan, db, asOf).steps; return st.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0); });
+      return reducingInterest(loan, db, asOf, pb);
+    }
+    return loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
+  };
   const loanTotalPenalties = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
   const loanPayable = (loan, asOf, db) =>
-    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf) + (db ? loanTotalPenalties(loan, db) : 0);
+    Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf, db) + (db ? loanTotalPenalties(loan, db) : 0);
   const loanTotalRepaid = (loan, db) =>
     activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
   const loanOutstanding = (loan, db, asOf) => loanPayable(loan, asOf, db) - loanTotalRepaid(loan, db);
@@ -231,14 +255,14 @@
     let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
       let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
-      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date) - interestPaid);
+      const interestDue = Math.max(0, loanAccumulatedInterest(loan, t.date, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)) - interestPaid);
       const penDue = Math.max(0, pens.filter((x) => x.date <= t.date).reduce((a, x) => a + Number(x.amount), 0) - penaltiesPaid);
       const principalDue = Math.max(0, principal - principalPaid);
       [["interest", interestDue], ["pen", penDue], ["principal", principalDue]].forEach(([k, due]) => { const x = Math.min(amt, due); amt -= x; if (k === "interest") interestPaid += x; else if (k === "pen") penaltiesPaid += x; else principalPaid += x; });
       if (amt > 0) principalPaid += amt;                                     // overpayment is kept visible, never dropped
       steps.push({ entryId: t.id, date: t.date, amount: Number(t.amount), interest: interestPaid - was.i, penalties: penaltiesPaid - was.n, principal: principalPaid - was.p });
     });
-    const accrued = loanAccumulatedInterest(loan, e), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
+    const accrued = loanAccumulatedInterest(loan, e, db, (d) => steps.filter((x) => x.date <= d).reduce((a, x) => a + x.principal, 0)), penTotal = pens.reduce((a, x) => a + Number(x.amount), 0);
     return { principal, steps, accruedInterest: accrued, penalties: penTotal, interestPaid, penaltiesPaid, principalPaid, unpaidInterest: Math.max(0, accrued - interestPaid), unpaidPenalties: Math.max(0, penTotal - penaltiesPaid), principalOutstanding: principal - principalPaid, totalRepaid: interestPaid + penaltiesPaid + principalPaid };
   }
   /* Principal reduction caused by each counted repayment (this, and only this, releases guarantees). */
@@ -869,7 +893,7 @@
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
     return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
-      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf),
+      unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
   }
@@ -1475,6 +1499,7 @@
     airtimeRejected: (v) => "SOB: your airtime request " + v.ref + " was not approved." + (v.reason ? " Reason: " + v.reason : ""),
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
+    loanReminderSms: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -1511,7 +1536,8 @@
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const todo = (db.outbox || []).filter((m) => m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
     todo.forEach((m) => {
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
@@ -2099,7 +2125,7 @@
     const end = to && to <= dates.addDays(asOf, 1) ? dates.addDays(to, -1) : asOf, start = dates.addDays(from, -1); let charged = 0, received = 0, receivable = 0, loans = 0;
     L.activeLoans(db).forEach((l) => {
       if (!dates.isISO(l.date) || l.date > end) return; loans++;
-      charged += Math.max(0, L.loanAccumulatedInterest(l, end) - (l.date <= start ? L.loanAccumulatedInterest(l, start) : 0));
+      charged += Math.max(0, L.loanAccumulatedInterest(l, end, db) - (l.date <= start ? L.loanAccumulatedInterest(l, start, db) : 0));
       const p = L.loanInterestPosition(l, db, end); p.steps.filter((x) => x.date >= from && x.date <= end).forEach((x) => { received += x.interest; }); receivable += p.unpaidInterest;
     });
     return { charged, received, receivable, loans };
@@ -2191,8 +2217,8 @@
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
-  const DELIVERY = ["PREPARED", "OPENED", "SENT_CONFIRMED", "CANCELLED"];
-  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
+  const DELIVERY = ["PREPARED", "OPENED", "SMS_ACCEPTED", "SENT_CONFIRMED", "CANCELLED"];
+  const DELIVERY_LABEL = { PREPARED: "Prepared (not opened)", OPENED: "WhatsApp opened (delivery NOT confirmed)", SMS_ACCEPTED: "SMS accepted by gateway (delivery NOT confirmed)", SENT_CONFIRMED: "Sent (confirmed by officer)", CANCELLED: "Cancelled" };
   const FOLLOW = ["NONE", "AWAITING_REPLY", "REPLIED", "PROMISE_TO_PAY", "NO_RESPONSE", "CLOSED"];
   const FOLLOW_LABEL = { NONE: "No follow-up yet", AWAITING_REPLY: "Awaiting reply", REPLIED: "Member replied", PROMISE_TO_PAY: "Promised to pay", NO_RESPONSE: "No response", CLOSED: "Closed" };
   const PLACEHOLDERS = ["name", "id", "deadline", "daysToDeadline", "shareOutDate", "daysToShareOut"];
@@ -2418,6 +2444,28 @@
     G.audit(db, ctx, "Reminder", r.id, "Sent confirmed by officer", null, { delivery: r.delivery }, a.note || "");
     return r;
   }
+  /* SMS through the gateway. The officer taps "Send by SMS" for ONE prepared reminder. The text is re-checked against the ledger right now (same rules as WhatsApp),
+     the member must not have opted out, and the message goes to the outbox with a key that makes a second tap harmless. "Accepted by the gateway" is NOT "delivered". */
+  const smsText = (t) => String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, "");
+  function queueSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const chk = revalidate(db, ctx, { id: r.id });
+    if (r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: this reminder was already sent; prepare a new one when the next reminder is due");
+    const member = (db.members || []).find((m) => m.id === r.memberId); if (member && member.notifyOptOut) throw new Error("OPTED_OUT: the member switched notifications off, so no SMS is sent");
+    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsText(chk.text) }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
+    if (msg.status === "SKIPPED") throw new Error("NO_VALID_PHONE: " + msg.reason);
+    r.smsOutboxId = msg.id; event(r, ctx, "SMS_QUEUED", "SMS prepared for the gateway (" + msg.id + "). Not sent until the gateway accepts it.");
+    G.audit(db, ctx, "Reminder", r.id, "SMS queued", null, { outbox: msg.id }, "Officer asked for this reminder to go by SMS"); return { reminder: r, outboxId: msg.id };
+  }
+  /* After the outbox ran: record honestly what the gateway answered. */
+  function syncSms(db, ctx, a) {
+    G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const m = (db.outbox || []).find((x) => x.id === r.smsOutboxId); if (!m) throw new Error("NOT_FOUND: no SMS was queued for this reminder");
+    if (m.status === "SENT" && r.delivery !== "SMS_ACCEPTED" && r.delivery !== "SENT_CONFIRMED") {
+      r.delivery = "SMS_ACCEPTED"; r.smsAcceptedAt = m.lastAttemptAt || ctx.now; if (r.followUp === "NONE") r.followUp = "AWAITING_REPLY";
+      event(r, ctx, "SMS_ACCEPTED", "The SMS gateway accepted the message. This does not prove the member received it."); G.audit(db, ctx, "Reminder", r.id, "SMS accepted by gateway", null, { delivery: r.delivery }, "Gateway acceptance is not delivery");
+    } else if (m.status === "FAILED") event(r, ctx, "SMS_FAILED", String(m.reason || "").slice(0, 200));
+    else if (m.status === "DRY_RUN") event(r, ctx, "SMS_NOT_SENT", "The SMS gateway is not switched on, so nothing was sent.");
+    return { reminder: r, outboxStatus: m.status, reason: m.reason || "" };
+  }
   function setFollowUp(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
     if (!FOLLOW.includes(a.followUp)) throw new Error("INVALID: follow-up must be one of " + FOLLOW.join(", "));
@@ -2430,12 +2478,12 @@
   }
   function cancel(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); G.need(a.reason, "reason");
-    if (r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: a reminder confirmed as sent cannot be cancelled; record a follow-up instead");
+    if (r.delivery === "SENT_CONFIRMED" || r.delivery === "SMS_ACCEPTED") throw new Error("BAD_STATE: a reminder that was sent cannot be cancelled; record a follow-up instead");
     if (r.delivery === "CANCELLED") return r;
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
-  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 
@@ -2568,6 +2616,8 @@
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
     cancelReminder: (db, ctx, a) => RM.cancel(db, ctx, { id: a.id, reason: a.reason }),
@@ -3389,7 +3439,7 @@
     a.loans.forEach((l) => {
       h += '<div class="box"><div class="lh"><b>Loan ' + esc(l.ref) + '</b><span class="pill ' + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—", "", "adm"], ["Agreed interest per month", l.monthlyInterest], ["Grace period", l.graceMonths ? l.graceMonths + " month" + (l.graceMonths === 1 ? "" : "s") + (ADM ? " (authorised by the Chairperson)" : "") : "None — interest runs from the first payout"]]) +
         (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts as ONE loan; interest counts from the first payout (" + dates.toDisplay(l.payouts[0].date) + "):</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref", adm: 1 }], l.payouts) : "") +
-        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself.</div>") +
+        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself.</div>") +
         kv([["Loan paid out", l.principal], ["Interest charged to date", l.accruedInterest, "sub"], ["Interest paid", l.interestPaid, "sub"], ["Interest still due", l.interestDue, "sub"], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft]].concat(l.penalties ? [["Penalties still due", l.penaltiesDue]] : []).concat([["TOTAL OWED as at " + dates.longDate(p.to), l.totalOwed, "tot"]])) +
         (ADM ? '<div class="cf">Working: loan still owed ' + num(l.principalLeft) + " + interest still due " + num(l.interestDue) + (l.penaltiesDue ? " + penalties " + num(l.penaltiesDue) : "") + " = " + num(l.totalOwed) + (l.checks.partsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE</span>') + "</div>" : (l.checks.partsAddUp ? "" : '<div class="cf"><span class="pill w">Please ask the Treasurer to check this loan</span></div>')) +
         (l.repayments.length ? tbl([{ h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Reference", k: "ref", adm: 1 }, { h: "Paid", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => num(r.interest) }, { h: "To loan", n: 1, f: (r) => num(r.principal) }, { h: "Loan left", n: 1, f: (r) => num(r.principalLeft) }], l.repayments) : '<div class="cf">No repayments recorded yet. ' + esc(l.rule) + "</div>") +
@@ -3484,8 +3534,8 @@
       /* Plain GET of the web-app address (no sign-in): tells the app whether the endpoint is reachable, is the SOB ledger, and which build is deployed. */
       async check() { try { const r = await o.fetch(o.url, { method: "GET", redirect: "follow", credentials: "omit", cache: "no-store" }), t = await r.text(); let j; try { j = JSON.parse(t); } catch (e) { return { ok: false, error: endpointProblem(t, r.status, o.url) }; } if (j && j.ok && j.service === "SOB Ledger") { serverBuild = j.build || null; return { ok: true, build: j.build || null }; } return { ok: false, error: endpointProblem(t, r.status, o.url, "NOT_SOB") }; } catch (e) { return { ok: false, error: Object.assign(new Error("NETWORK: the app could not reach Google."), { code: "NETWORK" }) }; } },
       /* Contract: a successful login answers {ok:true, token:string, user:{id,name,role,mustChangePin}}. Anything else is checked here, once, so the UI can trust the result. */
-      async login(id, pin) {
-        const j = await call({ action: "login", id, pin });
+      async login(id, pin, extra) {
+        const j = await call(Object.assign({ action: "login", id, pin }, extra || {}));
         if (!j || typeof j.token !== "string" || !j.token) throw Object.assign(new Error("SIGNIN_CONTRACT: the server did not return a session (fields received: " + Object.keys(j || {}).join(", ") + "). Redeploy the latest Code.gs as a New version."), { code: "SIGNIN_CONTRACT" });
         token = j.token; let u = j.user;
         if (!validUser(u)) { try { const w = await call({ action: "whoami" }); u = w.user; } catch (e) { token = null; throw e; } }   // the session exists: ask the server who it belongs to
@@ -4127,10 +4177,9 @@ window.SOBMember = function (E) {
     } else {
       /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
       const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const fname = h("input", { id: "fname", placeholder: "Aaron", autocomplete: "given-name", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your PIN", inputmode: "text", autocomplete: "new-password", enterkeyhint: "go" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Your password", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
-      const MSG = { BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
+      const MSG = { NOT_VERIFIED: "We could not match that SOB ID and phone number. Ask the Treasurer or Secretary to check the number the group has for you.", ALREADY_SET: "You already created a password. Sign in with it, or ask an officer to reset it.", WEAK_PIN: "Choose a password of at least 6 characters.", BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
       const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
       /* ONE place that runs a sign-in and shows the outcome; "produce" returns the store.login() promise (or throws a format message). */
       const attempt = async (produce, kind, typedId) => {
@@ -4153,15 +4202,21 @@ window.SOBMember = function (E) {
         finally { working = false; }
       };
       const go = () => attempt(async () => {
-        /* "SOB-015 Aaron" = ID + name; "SOB-015" + PIN = full access; a full registered name alone is also accepted. SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-        const nm = fname.value.trim(), idPart = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
-        /* the PIN box counts ONLY when the member opened it ("I have a PIN"): a hidden box can never carry a browser-saved password into a name sign-in */
-        let id, secret = pinRow.hidden ? "" : pin.value.trim(), typed = idPart || nm;
-        if (idPart) { const m = /^(\S+)[\s,;:]+(.+)$/.exec(idPart); id = m ? m[1] : idPart; if (!secret) secret = nm || (m ? m[2].trim() : ""); }
-        else { const m = /^(\S+)[\s,;:]+(.+)$/.exec(nm); id = nm; if (m && /\d/.test(m[1])) { id = m[1]; if (!secret) secret = m[2].trim(); } else if (!secret) secret = nm; }
-        if (!typed) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
+        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), secret = pin.value.trim();
+        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        if (!secret) throw Object.assign(new Error("Enter your password"), { code: "FORMAT" });
         return st.store.login(id, secret);
-      }, "member", mid.value || fname.value);
+      }, "member", mid.value);
+      /* First time: the member proves who they are (SOB ID + phone number on record) and chooses their own password. */
+      const cphone = h("input", { id: "cphone", type: "tel", placeholder: "07…", autocomplete: "tel", inputmode: "tel" }), cpw = h("input", { id: "cpw", type: "password", placeholder: "At least 6 characters", autocomplete: "new-password" });
+      const createGo = () => attempt(async () => {
+        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
+        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        if (!cphone.value.trim()) throw Object.assign(new Error("Enter the phone number the group has for you"), { code: "FORMAT" });
+        if (cpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "FORMAT" });
+        return st.store.login(id, null, { action: "claim", phone: cphone.value.trim(), password: cpw.value });
+      }, "member", mid.value);
       /* Officer login: Staff ID + PIN only (no first name, no member SOB ID). The PIN box has no browser auto-fill and a Show button, so a wrong or old saved PIN can never go in unseen. */
       const sid = h("input", { id: "sid", placeholder: "ADMIN, CHAIR, TREAS or SECRETARY", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const spin = h("input", { type: "password", id: "spin", placeholder: "Your officer PIN", autocomplete: "new-password", autocorrect: "off", autocapitalize: "off", spellcheck: "false", enterkeyhint: "go" });
@@ -4172,19 +4227,21 @@ window.SOBMember = function (E) {
         if (!secret) throw Object.assign(new Error("Enter your PIN"), { code: "FORMAT" });
         return st.store.login(id, secret);
       }, "officer", sid.value);
-      [fname, mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
+      [cphone, cpw].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") createGo(); }));
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
-      /* Two boxes for a member: First name + SOB ID. A PIN is only asked for when the member has one ("I have a PIN"); the choice is remembered on this device. */
-      let hasPin = false; try { hasPin = localStorage.getItem("sob.hasPin") === "1"; } catch (e) {}
-      const pinRow = h("div", { id: "pin-row", hidden: !hasPin }, h("label", { for: "pin" }, "PIN"), pin);
-      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { pinRow.hidden = !pinRow.hidden; pinToggle.textContent = pinRow.hidden ? "I have a PIN" : "I do not have a PIN"; try { localStorage.setItem("sob.hasPin", pinRow.hidden ? "0" : "1"); } catch (e) {} if (pinRow.hidden) pin.value = ""; else pin.focus(); } }, hasPin ? "I do not have a PIN" : "I have a PIN");
-      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "fname" }, "First name"), fname, h("label", { for: "mid" }, "SOB ID"), mid, pinRow, pinToggle,
-        h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      /* A member needs two things: SOB ID + password. First time: "Create my password". */
+      const pinRow = h("div", { id: "pin-row" }, h("label", { for: "pin" }, "Password"), pin);
+      const createBox = h("div", { id: "create-box", hidden: true }, h("p", { class: "hint" }, "First time? Enter your SOB ID above, the phone number the group has for you, and choose a password."),
+        h("label", { for: "cphone" }, "Phone number"), cphone, h("label", { for: "cpw" }, "New password"), cpw, h("button", { class: "primary big", id: "create-go", onclick: createGo }, "Create my password"));
+      const signBox = h("div", { id: "sign-box" }, pinRow, h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
+      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = createBox.hidden; createBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); pinToggle.textContent = c ? "Back to sign in" : "First time? Create my password"; } }, "First time? Create my password");
+      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "mid" }, "SOB ID"), mid, signBox, createBox, pinToggle);
       const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
         h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));
       const tabM = h("button", { type: "button", id: "tab-member", class: "tab on", role: "tab", onclick: () => setMode("member") }, "Member login"), tabO = h("button", { type: "button", id: "tab-officer", class: "tab", role: "tab", onclick: () => setMode("officer") }, "Officer login");
-      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? fname : sid).focus(); };
+      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? mid : sid).focus(); };
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
         h("div", { class: "tabs", role: "tablist" }, tabM, tabO), memberPanel, officerPanel, problem,
@@ -4381,7 +4438,7 @@ window.SOBMember = function (E) {
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
         a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")),
           lines([["Loan paid out", l.principal], ["Date paid out", l.dateText]].concat(adm ? [["Payout entry", l.disbursementRef || "—"]] : []).concat([["Agreed interest per month", l.monthlyInterest], ["Interest charged to date", l.accruedInterest], ["Interest paid", l.interestPaid], ["Interest still due", l.interestDue], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft], ["TOTAL OWED", l.totalOwed, "tot"]])),
-          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
+          h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
           l.repayments.length ? Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Paid", num: 1, render: (r) => num(r.amount) }, { label: "To interest", num: 1, render: (r) => num(r.interest) }, { label: "To loan", num: 1, render: (r) => num(r.principal) }, { label: "Loan left", num: 1, render: (r) => num(r.principalLeft) }]), l.repayments, null) : h("p", { class: "mute rg-blurb" }, "No repayments recorded yet. " + l.rule))),
         a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, adm ? "Earlier loan " + l.ref : "Earlier loan" + (l.dateText ? " (" + l.dateText + ")" : "")), badge(l.status, l.totalOwed ? "warn" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
         h("h2", { class: "sec" }, adm ? "Every transaction · tap one to review it" : "Every transaction"), Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Transaction", key: "type" }, { label: "Details", key: "details" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }, { label: "Effect", num: 1, render: (x) => num(x.effect) }, { label: "Balance", num: 1, render: (x) => num(x.balance) }]), a.transactions.slice().reverse().slice(0, 150), adm ? (x) => openEntry(x.ref) : null, "No transactions in this period"),
@@ -4709,7 +4766,13 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const reload = async () => { await st.store.load(); st.db = st.store.db; rem.at = new Date().toISOString(); render(); };
     const memberOf = (id) => st.db.members.find((m) => m.id === id) || {};
     const whenTxt = (iso) => (iso ? D.toDisplay(String(iso).slice(0, 10)) + " " + RM.eatTime(iso) : "");
-    const tone = { PREPARED: "warn", OPENED: "warn", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const tone = { PREPARED: "warn", OPENED: "warn", SMS_ACCEPTED: "ok", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
+    const sentLike = (d) => d === "SENT_CONFIRMED" || d === "SMS_ACCEPTED";
+    /* Send ONE reminder by SMS through the gateway: queue (re-checked against the ledger) -> targeted send -> record what the gateway answered */
+    const smsSend = (rec, phone, m) => Form("Send by SMS", [{ type: "note", text: "Send this reminder as an SMS to " + rec.memberName + " (" + phone + ") now? It cannot be unsent." }], act(async () => {
+      const q = await commit("queueReminderSms", { id: rec.id }); const out = q && q.outboxId ? q : { outboxId: ((st.db.reminders.find((x) => x.id === rec.id) || {}).smsOutboxId) };
+      const r = await st.store.call({ action: "dispatchOutbox", ids: [out.outboxId] }); const s = await commit("syncReminderSms", { id: rec.id });
+      if (s && s.outboxStatus === "SENT") { m && m.close(); } else if (s && s.outboxStatus === "FAILED") throw new Error("The SMS was not sent: " + (s.reason || "gateway error")); else throw new Error("The SMS gateway is not switched on, so nothing was sent."); }, "SMS accepted by the gateway. This does not prove the member received it."));
     /* the message window: text + the private-chat link. The link is a real <a>, so the browser opens it from the officer's own tap. */
     function messageModal(rec, text, phone, calcAt) {
       const link = RM.waLink(phone, text);
@@ -4718,6 +4781,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         h("pre", { class: "wa-preview", id: "rem-text", style: "white-space:pre-wrap;word-break:break-word;background:var(--surface2,#f6f6f6);border:1px solid var(--line2,#ddd);border-radius:12px;padding:12px;font:inherit;max-height:50vh;overflow:auto" }, text),
         link ? h("div", { class: "row" },
           h("a", { class: "btn primary", id: "rem-open-wa", href: link, target: "_blank", rel: "noopener", style: "text-decoration:none;display:inline-block;padding:10px 16px", onclick: () => { if (rec && st.live) { commit("markReminderOpened", { id: rec.id }).then(() => toast("WhatsApp opened — delivery is NOT confirmed yet. Tap “I sent it” after you press Send in WhatsApp.", "warn")).catch((e) => toast(friendly(e), true)); } } }, "Open WhatsApp chat (private)"),
+          rec && st.live ? h("button", { id: "rem-send-sms", onclick: () => smsSend(rec, phone, m) }, "Send by SMS") : null,
           rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
           : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
         h("p", { class: "mute" }, "Opens the member's private chat only. “Opened” is not “delivered”: confirm with “I sent it”.")));
@@ -4791,10 +4855,10 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Reminder history and follow-up"),
       Table([{ label: "Prepared", render: (x) => whenTxt(x.createdAt) }, { label: "Member", render: (x) => x.memberName + " (" + x.memberId + ")" }, { label: "Level", render: (x) => RM.LEVEL_LABEL[x.level] }, { label: "Owed then", num: 1, render: (x) => ugx(x.figures.totalOutstanding) },
         { label: "Delivery", render: (x) => badge(RM.DELIVERY_LABEL[x.delivery], tone[x.delivery]) }, { label: "Follow-up", render: (x) => RM.FOLLOW_LABEL[x.followUp] + (x.promiseDate ? " (by " + D.toDisplay(x.promiseDate) + ")" : "") },
-        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
+        { label: "", render: (x) => x.delivery === "CANCELLED" ? "" : h("div", { class: "row", style: "margin:0" }, !sentLike(x.delivery) ? h("button", { "data-hist-open": x.id, onclick: () => openStored(x.id) }, "Open WhatsApp") : null,
           x.delivery === "OPENED" ? h("button", { "data-hist-sent": x.id, onclick: () => act(async () => commit("confirmReminderSent", { id: x.id, note: "" }), "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null,
           x.delivery !== "PREPARED" ? h("button", { "data-hist-follow": x.id, onclick: () => followForm(x) }, "Follow-up") : null,
-          x.delivery !== "SENT_CONFIRMED" ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
+          !sentLike(x.delivery) ? h("button", { "data-hist-cancel": x.id, onclick: () => Form("Cancel reminder", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelReminder", { id: x.id, reason: f.reason }), "Cancelled")) }, "Cancel") : null) }], hist, null, "No reminders prepared yet"),
       h("p", { class: "mute" }, "Live-book loans only. Reminders never change a balance."));
   }
 
