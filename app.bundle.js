@@ -173,11 +173,21 @@
   /* SOB has NO grace period by default: interest runs from the first payout, month by month, until the loan is settled. A grace period counts ONLY when
      the Chairperson has authorised it on that loan (graceAuthorisedBy). Any stored graceMonths without that authorisation is ignored. */
   const loanGraceMonths = (loan) => (loan && loan.graceAuthorisedBy ? Number(loan.graceMonths) || 0 : 0);
+  /* INTEREST LOCK: an authorised officer may lock interest on an active loan. A month that overlaps a lock period (from the lock date until the unlock date, or for as long as it stays locked)
+     is not charged. Months before the lock stay charged; nothing recorded is rewritten. */
+  const monthLocked = (loan, k) => {
+    const locks = (loan && loan.interestLocks) || []; if (!locks.length) return false;
+    const start = dates.addMonths(loan.date, k - 1), end = dates.addMonths(loan.date, k);
+    return locks.some((l) => dates.isISO(l.from) && l.from < end && (!dates.isISO(l.to) || start < l.to));
+  };
+  const loanElapsedMonths = (loan, asOf) => dates.isISO(loan.date) ? Math.max(0, dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf))) : 0;
   function loanMonthsAfterGrace(loan, asOf) {
     if (!dates.isISO(loan.date)) return 0;
-    const elapsed = dates.monthsBetween(loan.date, effectiveAsOf(loan, asOf));
-    return Math.max(0, elapsed - loanGraceMonths(loan));
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan); let n = 0;
+    for (let k = g + 1; k <= elapsed; k++) if (!monthLocked(loan, k)) n++;
+    return n;
   }
+  const loanInterestLocked = (loan) => ((loan && loan.interestLocks) || []).some((l) => !dates.isISO(l.to));
   /* REDUCING INTEREST (SOB rule from the financial year set in financial year 2027). From the day that year OPENS (read from the year's own
      opening date, never guessed) each full month of a loan is charged the same percentage as before (assigned interest / amount lent) on the PRINCIPAL STILL OWED at the START
      of that month. Months that began earlier, and interest already charged, never change. If that year has not opened yet, nothing changes. */
@@ -190,8 +200,9 @@
   /* principalPaidBefore(d) = principal repaid on or before day d (a payment made on the day a month starts already lowers that month). Fixed months stay fixed; later months use the principal left at their start. */
   function reducingInterest(loan, db, asOf, principalPaidBefore) {
     const from = reducingFrom(db, loan), fixed = Number(loan.assignedMonthlyInterest) || 0; if (!from) return null;
-    const months = loanMonthsAfterGrace(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
-    for (let m = g + 1; m <= g + months; m++) {
+    const elapsed = loanElapsedMonths(loan, asOf), g = loanGraceMonths(loan), rate = fixed / Number(loan.loanAmount); let total = 0;
+    for (let m = g + 1; m <= elapsed; m++) {
+      if (monthLocked(loan, m)) continue;
       const start = dates.addMonths(loan.date, m - 1);
       total += start >= from ? Math.round(rate * Math.max(0, Number(loan.loanAmount) - principalPaidBefore(start))) : fixed;
     }
@@ -316,7 +327,7 @@
 
   return {
     RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
-    loanGraceMonths, loanMonthsAfterGrace, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
+    loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
     loanEligibility, eligibleForDistribution
@@ -870,6 +881,27 @@
     G.audit(db, ctx, "Loan", loanId, "Assigned interest corrected", { assignedMonthlyInterest: prev }, { assignedMonthlyInterest: newAmount }, reason);
     return loan;
   }
+  /* Lock / unlock interest on an ACTIVE loan. Recorded as a period on the loan and in the audit trail; no entry is changed or removed. */
+  function lockInterest(db, ctx, loanId, reason, from) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    if (L.loanInterestLocked(loan)) throw new Error("INVALID: interest is already locked on this loan");
+    from = from || ctx.today; if (!dates.isISO(from)) throw new Error("INVALID: date");
+    if (loan.date && from < loan.date) throw new Error("INVALID: the lock cannot start before the loan was paid out (" + loan.date + ")");
+    (loan.interestLocks = loan.interestLocks || []).push({ from, to: "", reason, lockedBy: ctx.by, lockedByRole: ctx.role, lockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest locked", { interestLocked: false }, { interestLocked: true, from }, reason);
+    return loan;
+  }
+  function unlockInterest(db, ctx, loanId, reason, to) {
+    G.require(ctx, "loan.editInterest"); G.need(reason, "reason");
+    const loan = getLoan(db, loanId); stateMust(loan, "Active");
+    const open = (loan.interestLocks || []).find((l) => !dates.isISO(l.to));
+    if (!open) throw new Error("INVALID: interest is not locked on this loan");
+    to = to || ctx.today; if (!dates.isISO(to) || to < open.from) throw new Error("INVALID: unlock date");
+    Object.assign(open, { to, unlockReason: reason, unlockedBy: ctx.by, unlockedByRole: ctx.role, unlockedAt: ctx.now });
+    G.audit(db, ctx, "Loan", loanId, "Interest unlocked", { interestLocked: true, from: open.from }, { interestLocked: false, to }, reason);
+    return loan;
+  }
   function voidLoan(db, ctx, loanId, reason) {
     G.require(ctx, "loan.reverse"); G.need(reason, "reason");
     const loan = getLoan(db, loanId); if (loan.voided) throw new Error("ALREADY_VOIDED");
@@ -892,7 +924,7 @@
   }
   /* Everything the "drill-down" cards need about one loan, from the same engine. */
   function loanView(db, loan, asOf) {
-    return { id: loan.id, status: loan.status, principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
+    return { id: loan.id, status: loan.status, interestLocked: L.loanInterestLocked(loan), interestLockedFrom: ((loan.interestLocks || []).find((x) => !dates.isISO(x.to)) || {}).from || "", principal: Number(loan.loanAmount), assignedMonthlyInterest: Number(loan.assignedMonthlyInterest) || 0,
       unpaidMonths: L.loanMonthsAfterGrace(loan, asOf), accumulatedInterest: L.loanAccumulatedInterest(loan, asOf, db),
       penalties: L.loanTotalPenalties(loan, db), payable: L.loanPayable(loan, asOf, db), repaid: L.loanTotalRepaid(loan, db),
       balance: L.loanOutstanding(loan, db, asOf), repaymentAllocation: L.confirmedAllocation(db), guaranteed: loanGuaranteed(db, loan.id), guaranteeCommitted: loanCover(db, loan.id), securityCover: securityCover(db, loan.id), interestHistory: loan.interestHistory || [] };
@@ -920,7 +952,7 @@
       reconciled: gs.every((g) => Number(g.releasedAmount || 0) === (g.releases || []).filter((r) => !r.reversed).reduce((a, r) => a + r.amount, 0)) } };
   }
   return { assessLoan, syncReleases, syncAllReleases, pendingRelease, acceptGuarantee, declineGuarantee, linkedLedger, onRepaymentCounted, onRepaymentRemoved, loanGuaranteed, securityCover, committed, loanCover, qualifyingSavings, guarantorAvailable, exposureReport, addGuarantee, releaseGuarantor, releaseGuarantees, applyForLoan, approveLoan,
-    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, voidLoan, restoreLoan, loanView };
+    declineLoan, disburseLoan, addDisbursement, settleFromSavings, settlementReview, recordExistingLoan, repayLoan, editAssignedInterest, lockInterest, unlockInterest, voidLoan, restoreLoan, loanView };
 });
 
 
@@ -2551,6 +2583,7 @@
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
     editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
+    lockInterest: (db, ctx, a) => LN.lockInterest(db, ctx, a.loanId, a.reason, a.date), unlockInterest: (db, ctx, a) => LN.unlockInterest(db, ctx, a.loanId, a.reason, a.date),
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
@@ -2635,7 +2668,7 @@
   const GATED = {
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
-    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
+    editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, lockInterest: { perm: "loan.editInterest", label: "Lock interest on a loan" }, unlockInterest: { perm: "loan.editInterest", label: "Unlock interest on a loan" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
@@ -2655,7 +2688,7 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
-    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
+    if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "lockInterest" || name === "unlockInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
     if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
@@ -4541,6 +4574,7 @@ window.SOBMember = function (E) {
     const row = h("div", { class: "row", id: "loan-actions" }, exportMenu({ id: "loan-export", rep: () => accountRep(loanAcct()), period: loanAcct().period.text, wa: () => statementText(loanAcct()) }));
     const b = h("div", null, row, privacyToggle(),
       h("div", { class: "grid" }, Card("Principal", ugx(v.principal)), Card("Assigned monthly interest", ugx(v.assignedMonthlyInterest), "Set by Admin per loan"), Card("Interest accrued", ugx(v.accumulatedInterest), v.unpaidMonths + " month" + (v.unpaidMonths === 1 ? "" : "s") + " × " + ugx(v.assignedMonthlyInterest)), Card("Balance", ugx(v.balance), "Payable " + ugx(v.payable) + " − repaid " + ugx(v.repaid))),
+      v.interestLocked ? Banner("warn", "Interest is locked from " + D.toDisplay(v.interestLockedFrom) + ". No new interest is added until it is unlocked.") : null,
       h("p", null, "Member: ", nameOf(loan.memberId), " · Status: ", badge(loan.status, loan.voided ? "bad" : "mute"), loan.voided ? badge("VOIDED", "bad") : null),
       loan.components && loan.components.length ? h("div", { id: "loan-components" }, h("p", { class: "mute" }, "One loan account, paid out in " + loan.components.length + " parts:"), Table([{ label: "Date", render: (c) => D.toDisplay(c.date) }, { label: "Amount", num: 1, render: (c) => num(c.amount) }, { label: "Source", key: "ref" }], loan.components)) : null,
       loanBacking(loan),
@@ -4565,6 +4599,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
+    add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form(v.interestLocked ? "Unlock interest on this loan" : "Lock interest on this loan", [dateF("date", v.interestLocked ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(v.interestLocked ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, v.interestLocked ? "Interest unlocked" : "Interest locked")));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);
   }
@@ -4579,7 +4614,17 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   }
   function loans() {
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt }), "Application recorded")) }, "New application") : null),
+      loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Members normally qualify for up to 3× their savings. Above that, guarantors or approved security are needed."));
+  }
+  /* Totals across all active loans. Tap a card for the loan-by-loan breakdown; tap a row to open that loan. */
+  function loanTotals() {
+    const act = K.loanBook(st.db, today()).filter((v) => v.status === "Active"), sum = (k) => act.reduce((a, v) => a + (Number(v[k]) || 0), 0);
+    const P = sum("principal"), I = sum("accumulatedInterest"), R = sum("repaid"), B = sum("balance");
+    const detail = (title) => () => { const cols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Loan amount", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "", render: (v) => v.interestLocked ? badge("Interest locked", "mute") : "" }];
+      const m = Modal(title, h("div", null, Table(cols, act, (v) => { const bg = document.querySelector(".modal-bg"); if (bg) bg.remove(); openLoan(v.id); }), h("div", { class: "grid" }, Card("Total loan amount", ugx(P)), Card("Total interest", ugx(I)), Card("Repaid so far", ugx(R)), Card("Total balance", ugx(B))))); return m; };
+    return h("div", { id: "loan-totals", class: "grid" }, Card("Total loan amount", ugx(P), act.length + " active loan" + (act.length === 1 ? "" : "s") + " · tap for details", detail("Active loans: loan amount")),
+      Card("Total interest", ugx(I), act.filter((v) => v.interestLocked).length ? act.filter((v) => v.interestLocked).length + " locked · tap for details" : "Tap for details", detail("Active loans: interest")));
   }
 
   /* ---------- ledger ---------- */
