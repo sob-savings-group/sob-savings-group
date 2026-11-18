@@ -14,12 +14,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     pg.on("pageerror", (e) => errs.push(e.message)); pg.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
     await pg.goto(base); await pg.waitForSelector("#demo-go");
     await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
-    ok((await pg.locator("#tiles .tile").count()) === 8 && (await pg.locator("#hero").count()) === 1, vp.name + ": Home shows the savings summary and 8 category tiles");
-    const catCards = {}; for (const k of ["savings", "loans", "income", "cash", "members", "reserve", "attention"]) { await pg.click('[data-tile="' + k + '"]'); await pg.waitForSelector("#cat-" + k); catCards[k] = await pg.locator("#cat-" + k + " .card").count(); await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero"); }
-    ok(Object.values(catCards).every((n) => n >= 1), vp.name + ": every category tile opens its own figures (" + JSON.stringify(catCards) + ")");
-    await pg.click('[data-tile="all"]'); await pg.waitForSelector("#kpis");
-    ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, vp.name + ": All figures: 6 balance + 9 activity KPI cards");
-    await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero");
+    ok((await pg.locator("#hero").count()) === 1 && (await pg.locator("#kpis .fig").count()) === 6 && (await pg.locator("#activity .fig").count()) === 9, vp.name + ": Home shows the focus figure and all 6 balance + 9 activity figures");
+    const catCards = {}; for (const k of ["savings", "loans", "income", "cash", "members", "governance"]) { await pg.click('[data-tile="' + k + '"]'); await pg.waitForSelector("#hero, #attention"); await pg.waitForSelector('.cat.on[data-tile="' + k + '"]'); catCards[k] = await pg.locator("#dash .fig, #dash .arow, #dash .allclear").count(); }
+    ok(Object.values(catCards).every((n) => n >= 1), vp.name + ": every category tab shows its own figures (" + JSON.stringify(catCards) + ")");
+    await pg.click('[data-tile="overview"]'); await pg.waitForSelector("#kpis");
     ok(await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": no horizontal page scroll");
     await pg.click('[data-nav="members"]'); ok((await pg.locator("#back-btn").count()) === 1, vp.name + ": a Back button is shown on inner screens"); if (await pg.locator("#back-btn").isVisible()) await pg.click("#back-btn"); else await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero"); ok((await pg.locator("#back-btn").count()) === 0, vp.name + ": Back returns to the dashboard");
     await pg.click('[data-nav="members"]'); await pg.click('[data-nav="loans"]'); await pg.goBack(); await pg.waitForTimeout(150); ok((await pg.locator('[data-nav="members"].active').count()) === 1 && (await pg.locator("#app").count()) === 1, vp.name + ": the browser/phone Back button steps back one screen");

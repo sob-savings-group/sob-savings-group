@@ -22,14 +22,13 @@
 
   /* ---------- login ---------- */
   function loginScreen() {
-    const box = h("div", { class: "card", style: "max-width:420px;margin:40px auto" }, h("h2", { class: "sec", style: "margin-top:0" }, "Sons of Bethel Savings Group"),
-      h("div", { class: "mute" }, st.live ? "Sign in" : "DEV preview — demo data, nothing is saved or sent anywhere."));
+    const box = h("div", { class: "card login" }, st.live ? null : h("div", { class: "lg-head" }, h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "DEV preview — demo data, nothing is saved or sent anywhere.")));
     if (!st.live) {
       const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
       const mem = h("select", { id: "demo-member" }, st.db.members.map((m) => h("option", { value: m.id }, m.id + " — " + m.name)));
-      box.append(h("label", null, "Role"), role, h("label", null, "Member (for Member role)"), mem,
+      box.append(h("div", { class: "lg-body" }, h("label", null, "Role"), role, h("label", null, "Member (for Member role)"), mem,
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
-          st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
+          st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter"))));
     } else {
       /* ONE sign-in for everybody: SOB ID, Staff ID or email + password. The server finds the role; render() then shows only what that role may use. */
       const mid = h("input", { id: "mid", placeholder: "SOB ID, Staff ID or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
@@ -101,7 +100,10 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Home", null, "home", "tab"], ["members", "Members", null, "users", "tab"], ["loans", "Loans", null, "loan", "tab"], ["ledger", "Money", null, "wallet", "tab"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
+  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
+  /* the four tabs on a phone's bottom bar depend on the role: each role sees its own most-used screens first, everything else is under More or Search */
+  const PHONE_TABS = { Admin: ["dash", "members", "loans", "ledger"], Chairperson: ["dash", "approvals", "loans", "reports"], Treasurer: ["dash", "ledger", "members", "loans"], Secretary: ["dash", "members", "reports", "ledger"], Committee: ["dash", "reports", "members", "loans"] };
+  const phoneTab = (k) => (PHONE_TABS[st.user && st.user.role] || PHONE_TABS.Admin).indexOf(k);
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -132,22 +134,25 @@
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
     const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
-    const active = (k) => st.view === k || (k === "dash" && st.view === "cat") || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
+    const active = (k) => st.view === k || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
     const shell = h("div", { class: "shell" });
     shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, h("img", { src: R.LOGO, alt: "BWOMI" }), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
+      h("button", { class: "searchbtn", id: "open-search", "aria-label": "Search", onclick: openSearch }, Icon("search", 18), h("span", null, staff ? "Search screens, members, loans" : "Search"), h("kbd", null, "/")),
+      h("div", { class: "hdr-actions" },
       staff && !st.live ? h("span", { class: "pill" }, "DEMO · DEV") : null,
       st.live && !st.user.readOnly ? h("button", { class: "iconbtn", id: "my-pin", "aria-label": "Change my password", title: "Change my password", onclick: () => Form("Change my password", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed"), "Save password") }, Icon("key")) : null,
       st.live ? h("button", { class: "iconbtn", id: "refresh", "aria-label": "Refresh", title: "Refresh", onclick: () => refresh(false) }, Icon("refresh")) : null,
-      h("button", { class: "iconbtn", id: "logout", "aria-label": "Sign out", title: "Sign out", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, Icon("logout"))));
+      h("button", { class: "iconbtn", id: "logout", "aria-label": "Sign out", title: "Sign out", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, Icon("logout")))));
     let lastGroup = ""; const items = [];
     nav.forEach(([k, l, , ic, cls]) => { const n = navBadge(k), g = staff ? NAV_GROUP[k] || "" : ""; if (g && g !== lastGroup) { items.push(h("div", { class: "nav-sec", "aria-hidden": "true" }, g)); lastGroup = g; }
-      items.push(h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null)); });
+      const pt = staff ? (k === "menu" ? 9 : phoneTab(k)) : -1; items.push(h("button", { class: (active(k) ? "active " : "") + (staff ? (pt >= 0 ? "tab " : "") + (k === "menu" ? "only-mobile" : "") : (cls || "")), style: staff && pt >= 0 ? "--o:" + pt : null, "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null)); });
     shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, items));
     const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
     if (!st.guarded) { st.guarded = true; try { history.replaceState({ sobBase: 1 }, ""); history.pushState({ sobView: st.view }, ""); } catch (e) {} }
-    if (st.view !== nav[0][0]) main.append(h("button", { class: "backbtn", id: "back-btn", "aria-label": "Back", onclick: () => go(st.prevView && st.prevView !== st.view && nav.some((n) => n[0] === st.prevView) ? st.prevView : nav[0][0]) }, Icon("chevron", 18), " Back"));
+    const backBtn = st.view !== nav[0][0] ? h("button", { class: "backbtn", id: "back-btn", "aria-label": "Back", onclick: () => go(st.prevView && st.prevView !== st.view && nav.some((n) => n[0] === st.prevView) ? st.prevView : nav[0][0]) }, Icon("chevron", 18), h("span", { class: "bl" }, " Back")) : null; let backPlaced = false;
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
-    if (staff) { const cur = nav.find((n) => n[0] === st.view); if (cur) main.append(h("div", { class: "pagetitle" }, h("h1", null, cur[1]))); }
+    if (staff) { const cur = nav.find((n) => n[0] === st.view); if (cur) { main.append(h("div", { class: "pagetitle" + (st.view === "dash" ? " hide-m" : "") }, backBtn, h("h1", null, cur[1]))); backPlaced = !!backBtn; } }
+    if (backBtn && !backPlaced) main.prepend(backBtn);
     try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
@@ -178,12 +183,15 @@
     const older = FYM.table(st.db).filter((c) => D.isISO(c.openedDate) && !have["Financial Year " + c.year]).sort((a, b) => b.year - a.year).map((c) => ["fy" + c.year, "Financial Year " + c.year]);
     const i = base.findIndex(([k]) => k === "lastYear"); return i < 0 ? base : base.slice(0, i + 1).concat(older, base.slice(i + 1)); };
   function periodBar() {
-    const p = periodNow(), custom = p.key === "custom" || st.customOpen;
+    const p = periodNow(), custom = p.key === "custom" || st.customOpen, opts = periodOptions();
+    const fyKeys = opts.filter(([k]) => k === "year" || k === "lastYear" || /^fy\d+$/.test(k)), other = opts.filter(([k]) => !fyKeys.includes([k]) && !(k === "year" || k === "lastYear" || /^fy\d+$/.test(k)) && k !== "custom");
+    const val = custom ? "custom" : p.key, mk = (arr) => arr.map(([k, l]) => h("option", { value: k, selected: k === val }, l));
+    const sel = h("select", { class: "pselect", id: "period-select", "aria-label": "Financial year or period", onchange: (e) => { const k = e.target.value; if (k === "custom") { st.customOpen = true; render(); } else if (/^fy\d+$/.test(k)) { const c = FYM.table(st.db).find((x) => "fy" + x.year === k); if (c) setPeriod(fyPeriod(c)); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); } },
+      fyKeys.length ? h("optgroup", { label: "Financial years" }, mk(fyKeys)) : null, h("optgroup", { label: "Other periods" }, mk(other)), h("option", { value: "custom", selected: val === "custom" }, "Custom dates…"));
     const from = h("input", { type: "date", id: "p-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "p-to", value: p.to, max: today(), "aria-label": "To date" });
-    return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Financial year / period"),
-      Chips(periodOptions(), custom ? "custom" : (p.fy && /^fy\d+$/.test(p.key || "") ? p.key : p.key), (k) => { if (k === "custom") { st.customOpen = true; render(); } else if (/^fy\d+$/.test(k)) { const c = FYM.table(st.db).find((x) => "fy" + x.year === k); if (c) setPeriod(fyPeriod(c)); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
-      custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
-      h("div", { class: "pb-note", id: "period-note" }, p.fy ? h("span", null, h("b", null, p.fyLabel), " (financial year from share-out to share-out) · ") : null, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
+    return h("section", { class: "periodbar", id: "periodbar" },
+      h("div", { class: "pb-note", id: "period-note" }, h("div", null, p.fy ? [h("b", null, p.fyLabel), " (share-out to share-out) · "] : null, "Balances as at ", h("b", null, D.longDate(p.to))), h("div", null, "Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))), sel,
+      custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null);
   }
   const kpiShow = (d) => d.unit === "%" ? (d.value == null ? "—" : d.value + "%") : d.unit === "count" ? String(d.value) : ugx(d.value);
   const download = (name, type, data) => { const a = h("a", { href: URL.createObjectURL(new Blob([data], { type })), download: name }); document.body.append(a); a.click(); a.remove(); };
@@ -210,82 +218,121 @@
   }
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
 
-  /* ---------- HOME: one summary, then category tiles. Tapping a tile opens that category with the chosen financial year / period. ---------- */
-  const CATS = [
-    { k: "savings", t: "Savings", ic: "wallet", tone: "avail", keys: ["totalSavings", "savingsReceived", "subscriptions"], head: (o) => ugx(o.totalSavings.value), sub: (o) => ugx(o.savingsReceived.value) + " received in this period" },
-    { k: "loans", t: "Loans", ic: "loan", tone: "loan", keys: ["outstandingLoans", "loanExposure", "loansDisbursed", "repaymentsReceived"], head: (o) => ugx(o.outstandingLoans.value), sub: (o) => pl(o.outstandingLoans.count, "loan") + " owed" },
-    { k: "income", t: "Interest and income", ic: "chart", tone: "interest", keys: ["interestReceivable", "interestReceived", "otherIncome", "profit"], head: (o) => ugx(o.interestReceived.value), sub: (o) => ugx(o.interestReceivable.value) + " interest still to collect" },
-    { k: "cash", t: "Cash and spending", ic: "book", tone: "profit", keys: ["availableCash", "withdrawals", "expenses"], head: (o) => ugx(o.availableCash.value), sub: (o) => ugx(o.withdrawals.value) + " paid out · " + ugx(o.expenses.value) + " expenses" },
-    { k: "members", t: "Members", ic: "users", tone: "avail", keys: ["members"], head: (o) => String(o.members.value), sub: () => "Active members and subscriptions" },
-    { k: "reserve", t: "Reserve and older loans", ic: "shield", tone: "commit", keys: [], head: (o, p) => ugx(RSV.balance(st.db, p.to)), sub: () => "General Reserve Fund and historical loans" },
-    { k: "attention", t: "Approvals and tasks", ic: "check", tone: "commit", keys: [], head: (o) => String(o.awaitingApproval), sub: (o) => o.awaitingApproval ? "waiting for the Chairperson" : "nothing waiting" },
-    { k: "all", t: "All figures", ic: "download", tone: "interest", keys: [], head: () => "Every figure", sub: () => "The full list, one place" }];
-  const catOf = (k) => CATS.find((c) => c.k === k) || CATS[0];
-  const openCat = (k) => { st.cat = k; go("cat"); };
+  /* ---------- HOME (mobile first). A dynamic dashboard: what it shows is computed from the signed-in role, the financial year chosen and the category chosen.
+     Nothing here is a fixed page: add a category, a figure or a role rule to the registries below and the screen follows. ---------- */
+  const FIG = {   // figure registry: label and the one-line explanation shown under it
+    totalSavings: ["Total Savings", () => "Members' savings"], availableCash: ["Available Cash", (o) => "Cash at the start of the period: " + num(o.availableCash.opening)],
+    outstandingLoans: ["Outstanding Loans", (o) => pl(o.outstandingLoans.count, "loan") + " owed"], interestReceivable: ["Interest Receivable", (o) => pl(o.interestReceivable.loans, "loan") + " · unpaid interest"],
+    loanExposure: ["Loan Exposure", (o) => "Guaranteed " + ugx(o.loanExposure.guaranteed)], members: ["Members", () => "Active"],
+    savingsReceived: ["Savings Received", (o) => pl(o.savingsReceived.count, "deposit")], withdrawals: ["Withdrawals & Share-Out", (o) => pl(o.withdrawals.count, "payment")],
+    loansDisbursed: ["Loans Paid Out", (o) => pl(o.loansDisbursed.count, "loan")], repaymentsReceived: ["Loan Repayments", (o) => pl(o.repaymentsReceived.count, "payment")],
+    interestReceived: ["Interest Received", () => "Interest part of repayments"], subscriptions: ["Subscriptions", (o) => o.subscriptions.count + " received"],
+    otherIncome: ["Other Income", (o) => o.otherIncome.count + " entries"], profit: ["Profit Recorded", () => "Profit entries in the period"], expenses: ["Expenses", (o) => o.expenses.count + " entries"] };
+  const STANDS = ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "loanExposure", "members"], HAPPENED = ["savingsReceived", "withdrawals", "loansDisbursed", "repaymentsReceived", "interestReceived", "subscriptions", "otherIncome", "profit", "expenses"];
+  /* category registry: lead figure (the big number), the figures listed, the colour that carries its meaning, and who may see it */
+  const DCATS = [
+    { k: "overview", t: "Overview", lead: "totalSavings", tone: "#0e8a5f" },
+    { k: "savings", t: "Savings", lead: "totalSavings", keys: ["totalSavings", "savingsReceived", "subscriptions"], tone: "#0e8a5f", recent: ["Savings"], recentT: "Recent savings" },
+    { k: "loans", t: "Loans", lead: "outstandingLoans", keys: ["outstandingLoans", "loanExposure", "loansDisbursed", "repaymentsReceived"], tone: "#0f2d52", recentT: "Largest loan balances" },
+    { k: "income", t: "Income", lead: "interestReceived", keys: ["interestReceived", "interestReceivable", "otherIncome", "profit"], tone: "#0e8a5f", recent: ["Loan Repayment"], recentT: "Recent repayments" },
+    { k: "cash", t: "Cash", lead: "availableCash", keys: ["availableCash", "withdrawals", "expenses"], tone: "#3b6ea5", recent: ["Withdraw", "Expense", "Bank Charge"], recentT: "Recent payments out" },
+    { k: "members", t: "Members", lead: "members", keys: ["members"], tone: "#0f2d52", recentT: "Subscriptions" },
+    { k: "governance", t: "Governance", roles: ["Admin", "Chairperson"], lead: null, tone: "#475569", recentT: "Latest audit entries" }];
+  const dcatsFor = () => DCATS.filter((c) => !c.roles || c.roles.includes(st.user.role));
+  const dcatNow = () => { const l = dcatsFor(); return l.find((c) => c.k === st.dcat) || l[0]; };
+  const compact = (n) => { n = Math.round(Number(n) || 0); const a = Math.abs(n), f = (v, u) => (n < 0 ? "-" : "") + (v >= 100 ? Math.round(v) : Math.round(v * 10) / 10) + u; return a >= 1e9 ? f(a / 1e9, "B") : a >= 1e6 ? f(a / 1e6, "M") : a >= 1e3 ? f(a / 1e3, "K") : String(n); };
+  const kcompact = (d) => d.unit === "%" ? kpiShow(d) : d.unit === "count" ? String(d.value) : compact(d.value);
+  let memo = { stamp: "", v: {} };
+  const ovFor = (p) => { const stamp = [(st.db.transactions || []).length, (st.db.loans || []).length, (st.db.auditLog || []).length, (st.db.yearCycles || []).length, today()].join("."); if (memo.stamp !== stamp) memo = { stamp, v: {} }; const k = p.from + "|" + p.to; return memo.v[k] || (memo.v[k] = K.overview(st.db, p)); };
+  const fyRows = () => FYM.table(st.db).filter((c) => D.isISO(c.openedDate));
+  /* attention: only what THIS role can act on. pending = orange, a problem that needs fixing = red, information = blue-grey */
+  function attnItems(o, pipe) {
+    const role = st.user.role, rows = [], isAdm = role === "Admin", isCh = role === "Chairperson", open = (st.db.discrepancies || []).filter((d) => d.status === "Open").length;
+    if (st.live && CFG.build && st.store.serverBuild !== CFG.build && isAdm) rows.push({ kind: "overdue", text: "The Google backend is out of date. Paste the latest Code.gs and redeploy.", go: "system" });
+    if (o.awaitingApproval && (isAdm || isCh)) rows.push({ kind: "pending", text: isCh ? "Waiting for your decision" : "Waiting for the Chairperson", n: o.awaitingApproval, go: "approvals" });
+    if (pipe.Pending && (isAdm || isCh)) rows.push({ kind: "pending", text: pipe.Pending === 1 ? "Loan application to review" : "Loan applications to review", n: pipe.Pending, go: "loans" });
+    if (pendingAirtime() && isAdm) rows.push({ kind: "pending", text: "Airtime requests", n: pendingAirtime(), go: "airtime" });
+    if (open && (isAdm || isCh)) rows.push({ kind: "overdue", text: "Open reconciliation differences", n: open, go: "recon" });
+    if (G.can(ctx(), "loan.repay")) { const cov = LN.settlementReview(st.db, today()).filter((r) => r.coveredToday); if (cov.length) rows.push({ kind: "info", text: cov.length === 1 ? "Loan the member's savings can settle" : "Loans the members' savings can settle", n: cov.length, go: "loans" }); }
+    return rows;
+  }
+  const attnPanel = (rows, max) => h("section", { class: "panel attn", id: "attention" }, h("h2", null, "Needs your attention"),
+    rows.length ? h("div", null, rows.slice(0, max || 4).map((r) => h("button", { class: "arow", "data-go": r.go, onclick: () => go(r.go) }, h("span", { class: "dot " + r.kind }), h("span", { class: "at" }, r.text), r.n ? h("span", { class: "ac" }, String(r.n)) : null, Icon("chevron", 16))))
+      : h("div", { class: "allclear" }, Icon("check", 20), "Nothing needs attention right now."));
+  const figRow = (key, o, prev) => {
+    const d = o[key], [label, subf] = FIG[key]; let dl = null;
+    if (prev && prev[key] && d.unit !== "%" && Number(prev[key].value)) { const pc = (Number(d.value) - Number(prev[key].value)) / Math.abs(Number(prev[key].value)) * 100; if (isFinite(pc)) dl = h("span", { class: "delta", title: "Compared with the previous financial year" }, (pc >= 0 ? "▲ " : "▼ ") + Math.abs(Math.round(pc * 10) / 10) + "%"); }
+    return h("button", { class: "fig", "data-card": label, onclick: () => openKpi(key) }, h("span", { class: "fm" }, h("span", { class: "fk" }, label), h("span", { class: "fd", style: "display:block" }, subf(o))), h("span", { class: "val" }, kpiShow(d)), dl, Icon("chevron", 16, "go"));
+  };
+  const figList = (id, title, keys, o, prev, note) => h("section", { class: "panel figs", id }, h("div", { class: "fh" }, h("h2", null, title), note ? h("span", null, note) : null), keys.map((k) => figRow(k, o, prev)));
+  /* the same figure across the financial years: bars you can tap. Shows the latest six; every year stays reachable */
+  function trendPanel(cat, p) {
+    const yrs = fyRows(); if (!yrs.length || !cat.lead) return null;
+    const all = !!st.allYears, shown = all ? yrs : yrs.slice(-6), vals = shown.map((c) => ({ c, d: ovFor(fyPeriod(c))[cat.lead] })), mx = Math.max.apply(null, vals.map((x) => Math.abs(Number(x.d.value) || 0)).concat([1]));
+    return h("div", { class: "trend", id: "year-bars", style: "--tone:" + cat.tone }, h("div", { class: "th" }, h("span", null, "Year by year"), yrs.length > 6 ? h("button", { class: "tmore", id: "all-years", onclick: () => { st.allYears = !st.allYears; render(); } }, all ? "Show latest 6" : "Show all " + yrs.length) : null),
+      h("div", { class: "bars", role: "group", "aria-label": FIG[cat.lead][0] + " by financial year" }, vals.map(({ c, d }) => h("button", { class: "bar1" + (p.fy === c.year ? " on" : ""), "data-year": c.year, "aria-label": "FY" + c.year + ": " + kpiShow(d.value == null ? d : d), onclick: () => { setPeriod(fyPeriod(c)); } },
+        h("span", { class: "bv" }, kcompact(d)), h("span", { class: "bb", style: "height:" + Math.max(3, Math.round(Math.abs(Number(d.value) || 0) / mx * 100)) + "px;max-height:84px" }), h("span", { class: "bl" }, "FY" + String(c.year).slice(-2))))));
+  }
+  function focusPanel(cat, o, p) {
+    const d = o[cat.lead], prevC = p.fy ? fyRows().filter((c) => c.year < p.fy).pop() : null, prev = prevC ? ovFor(fyPeriod(prevC)) : null; let dl = null;
+    if (prev && d.unit !== "%" && Number(prev[cat.lead].value)) { const pc = (Number(d.value) - Number(prev[cat.lead].value)) / Math.abs(Number(prev[cat.lead].value)) * 100; if (isFinite(pc)) dl = h("span", { class: "delta" }, (pc >= 0 ? "▲ " : "▼ ") + Math.abs(Math.round(pc * 10) / 10) + "% vs FY" + prevC.year); }
+    const t = trendPanel(cat, p);
+    return { prev, node: h("section", { class: "panel focus", id: "hero", style: "--tone:" + cat.tone }, h("div", { class: "fl" }, FIG[cat.lead][0], dl), h("div", { class: "fv", role: "button", tabindex: "0", "data-card-open": cat.lead, onclick: () => openKpi(cat.lead), onkeydown: (e) => { if (e.key === "Enter") openKpi(cat.lead); } }, kpiShow(d)), h("div", { class: "fs" }, FIG[cat.lead][1](o) + " · as at " + D.longDate(p.to)),
+      t ? h("details", { class: "trend-d", open: window.matchMedia("(min-width:700px)").matches }, h("summary", null, "Year by year"), t) : null) };
+  }
+  const recentTx = (types, n) => L.activeTransactions(st.db).filter((t) => types.includes(t.type)).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : String(b.timestamp || "") < String(a.timestamp || "") ? -1 : 1)).slice(0, n);
+  const txRow = (t) => h("button", { class: "rrow", onclick: () => openEntry(t.id) }, h("span", { class: "rm" }, h("div", { class: "rt" }, nameOf(t.memberId)), h("div", { class: "rs" }, t.type + " · " + D.toDisplay(t.date))), h("span", { class: "rv" + (Number(t.amount) < 0 || /Withdraw|Expense|Charge/.test(t.type) ? " out" : "") }, ugx(Math.abs(Number(t.amount)))));
+  const sectionD = (title, id, body, count) => h("details", { class: "panel recent sect-d", id, open: window.matchMedia("(min-width:1000px)").matches }, h("summary", null, h("span", null, title), count != null ? h("em", null, String(count)) : null), body);
+  function breakdown(cat, o, p) {
+    if (cat.k === "loans") { const b = K.loanBook(st.db, today()).filter((v) => v.status === "Active").sort((a, c) => c.balance - a.balance); return sectionD(cat.recentT, "recent", h("div", null, b.slice(0, 5).map((v) => h("button", { class: "rrow", onclick: () => openLoan(v.id) }, h("span", { class: "rm" }, h("div", { class: "rt" }, nameOf(st.db.loans.find((l) => l.id === v.id).memberId)), h("div", { class: "rs" }, v.id)), h("span", { class: "rv" }, ugx(v.balance)))), h("div", { class: "rrow-more" }, h("button", { onclick: () => go("loans") }, "All " + b.length + " active loans"))), b.length); }
+    if (cat.k === "members") { const cm = C.subscriptionCompliance(asAtDb(p.to), p.to.slice(0, 4)), pct = cm.expected ? Math.round(cm.collected / cm.expected * 100) : 0;
+      return sectionD("Subscriptions " + p.to.slice(0, 4), "recent", h("div", { class: "rbody" }, h("div", { class: "rs" }, ugx(cm.collected) + " collected of " + ugx(cm.expected) + " · " + pct + "%"), h("div", { class: "progbar" }, h("i", { style: "width:" + Math.min(100, pct) + "%" })), h("div", { class: "rrow-more" }, h("button", { onclick: () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)) }, cm.unpaid.length + " members unpaid"), h("button", { onclick: () => go("subs") }, "Open subscriptions"))), null); }
+    if (cat.k === "governance") { const a = (st.db.auditLog || []).slice(-6).reverse(); return sectionD(cat.recentT, "recent", h("div", null, a.map((e) => h("div", { class: "rrow" }, h("span", { class: "rm" }, h("div", { class: "rt" }, e.action || e.type || "Change"), h("div", { class: "rs" }, (e.by || e.actor || "") + " · " + D.toDisplay(String(e.date || e.timestamp || "").slice(0, 10)))))), h("div", { class: "rrow-more" }, h("button", { onclick: () => go("audit") }, "Open the audit trail"))), null); }
+    const types = cat.recent || ["Savings", "Loan Repayment", "Withdraw", "Loan Disbursement"], rows = recentTx(types, cat.k === "overview" ? 6 : 5);
+    return sectionD(cat.k === "overview" ? "Recent activity" : cat.recentT, "recent", rows.length ? h("div", null, rows.map(txRow), h("div", { class: "rrow-more" }, h("button", { onclick: () => go("ledger") }, "Open the ledger"))) : h("div", { class: "rbody mute" }, "Nothing recorded yet."), rows.length);
+  }
   function dashboard() {
-    const p = periodNow(), o = K.overview(st.db, p);
-    const mini = (l, v) => h("div", { class: "hm" }, h("div", { class: "hml" }, l), h("div", { class: "hmv" }, v));
-    const hero = h("section", { class: "hero2", id: "hero", tabindex: 0, role: "button", onclick: () => openKpi("totalSavings"), onkeydown: (e) => { if (e.key === "Enter") openKpi("totalSavings"); } },
-      h("div", { class: "h2l" }, "Total savings"), h("div", { class: "h2v" }, ugx(o.totalSavings.value)), h("div", { class: "h2s" }, "Members' savings · as at " + D.longDate(p.to)),
-      h("div", { class: "h2row" }, mini("Available cash", ugx(o.availableCash.value)), mini("Loans owed", ugx(o.outstandingLoans.value)), mini("Members", String(o.members.value))));
-    const tiles = h("div", { class: "tiles", id: "tiles" }, CATS.map((c) => h("button", { class: "tile tn-" + c.tone, "data-tile": c.k, onclick: () => openCat(c.k) },
-      h("span", { class: "tic" }, Icon(c.ic, 22)), h("span", { class: "tt" }, c.t), h("span", { class: "tv" }, c.head(o, p)), h("span", { class: "ts" }, c.sub(o, p)))));
-    return h("div", null, hero, periodBar(), h("h2", { class: "sec" }, "Explore"), tiles, h("h2", { class: "sec" }, "Needs attention"), attention(o.awaitingApproval, K.pipeline(st.db)));
-  }
-  /* the same figure for every financial year side by side: how the years compile */
-  function yearByYear(cat) {
-    const yrs = FYM.table(st.db).filter((c) => D.isISO(c.openedDate)); if (!yrs.length || !cat.keys.length) return null;
-    const rows = yrs.map((c) => { const o = K.overview(st.db, fyPeriod(c)); return { year: c.year, label: "FY" + c.year, status: c.closedDate ? "Closed" : "Open", o, c }; });
-    const head = cat.keys[0], mx = Math.max.apply(null, rows.map((r) => Math.abs(Number(r.o[head].value) || 0)).concat([1]));
-    const bars = h("div", { class: "yb", id: "year-bars" }, rows.map((r) => h("button", { class: "yb-row", "data-year": r.year, onclick: () => { setPeriod(fyPeriod(r.c)); window.scrollTo(0, 0); } }, h("span", { class: "yb-l" }, r.label), h("span", { class: "yb-t" }, h("i", { style: "width:" + Math.max(2, Math.round(Math.abs(Number(r.o[head].value) || 0) / mx * 100)) + "%" })), h("span", { class: "yb-v" }, kpiShow(r.o[head])))));
-    const cols = [{ label: "Year", render: (r) => r.label + (r.status === "Open" ? " (open)" : "") }].concat(cat.keys.map((k) => ({ label: heading(k), num: 1, render: (r) => kpiShow(r.o[k]) })));
-    return h("div", { id: "year-compile" }, h("h2", { class: "sec" }, "Year by year · " + (K.overview(st.db, periodNow())[cat.keys[0]].label || heading(cat.keys[0]))), bars, Table(cols, rows.slice().reverse(), (r) => { setPeriod(fyPeriod(r.c)); window.scrollTo(0, 0); }));
-  }
-  function categoryView() {
-    const cat = catOf(st.cat); if (cat.k === "all") return h("div", null, catHeader(cat), allFigures());
-    const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
-    const c = (key) => Card(heading(key), kpiShow(o[key]), o[key].period, () => openKpi(key), cat.tone === "avail" ? "avail" : cat.tone === "loan" ? "loan" : cat.tone === "interest" ? "interest" : cat.tone === "profit" ? "profit" : null);
-    const wrap = h("div", { id: "cat-" + cat.k }, catHeader(cat), periodBar());
-    if (cat.keys.length) wrap.append(h("h2", { class: "sec" }, p.fy ? p.fyLabel + " · " + cat.t : cat.t + " · " + (p.from ? D.longDate(p.from) + " – " : "to ") + D.longDate(p.to)), h("div", { class: "grid", id: "cat-kpis" }, cat.keys.map(c)));
-    if (cat.k === "loans") wrap.append(h("h2", { class: "sec" }, "Loan pipeline · right now"), h("div", { class: "grid", id: "pipeline" }, Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))));
-    if (cat.k === "members") { const cm = C.subscriptionCompliance(asAtDb(p.to), p.to.slice(0, 4)); wrap.append(h("h2", { class: "sec" }, "Subscription compliance " + p.to.slice(0, 4)), h("div", { class: "grid" }, Card("Collected", ugx(cm.collected), "of " + ugx(cm.expected) + " · as at " + D.longDate(p.to), () => go("subs")), Card("Unpaid members", String(cm.unpaid.length), "as at " + D.longDate(p.to), () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)))), h("div", { class: "row" }, h("button", { class: "primary", onclick: () => go("members") }, "Open the member list"))); }
-    if (cat.k === "reserve") { const hl = FRP.historicalLoans(st.db, p.to); wrap.append(h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => go("reserve"), "profit"), Card("Historical loans unpaid", ugx(hl.totals.principalUnpaid + hl.totals.interestUnpaid), "Principal " + num(hl.totals.principalUnpaid) + " + interest " + num(hl.totals.interestUnpaid) + " · kept apart from loans owed", () => drill(hl.title, null, tableFromReport(hl)), "loan"))); }
-    if (cat.k === "attention") wrap.append(attention(o.awaitingApproval, pipe), h("div", { class: "grid", id: "pipeline" }, Card("Awaiting approval", String(o.awaitingApproval), "Chairperson second approval", () => go("approvals")), Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))));
-    const yy = yearByYear(cat); if (yy) wrap.append(yy);
+    const p = periodNow(), o = ovFor(p), pipe = K.pipeline(st.db), cat = dcatNow(), fo = cat.lead ? focusPanel(cat, o, p) : { prev: null, node: null }, prev = fo.prev, wrap = h("div", { id: "dash" });
+    wrap.append(periodBar(), h("div", { class: "cats", role: "tablist", id: "tiles" }, dcatsFor().map((c) => h("button", { class: "cat" + (c.k === cat.k ? " on" : ""), role: "tab", "aria-selected": String(c.k === cat.k), "data-tile": c.k, onclick: () => { st.dcat = c.k; render(); } }, c.t))), fo.node);
+    const rows = attnItems(o, pipe), lists = h("div", { class: "dlists" });
+    const ap = attnPanel(rows, cat.k === "governance" ? 8 : 4); if (st.user.role === "Chairperson" && rows.length) ap.classList.add("first");
+    wrap.append(h("div", { class: "dgrid" + (cat.lead ? "" : " solo") }, cat.lead ? fo.node : null, ap), lists);
+    if (cat.k === "overview") {
+      lists.append(figList("kpis", "Where the group stands", STANDS, o, prev, "As at " + D.longDate(p.to)), figList("activity", "What happened", HAPPENED, o, prev, p.from ? D.toDisplay(p.from) + " – " + D.toDisplay(p.to) : "All records"));
+      const hl = FRP.historicalLoans(st.db, p.to);
+      lists.append(h("section", { class: "panel figs", id: "reserve-kpis" }, h("div", { class: "fh" }, h("h2", null, "Reserve and older loans")),
+        h("button", { class: "fig", "data-card": "General Reserve Fund", onclick: () => go("reserve") }, h("span", { class: "fm" }, h("span", { class: "fk" }, "General Reserve Fund"), h("span", { class: "fd", style: "display:block" }, "Group reserve")), h("span", { class: "val" }, ugx(RSV.balance(st.db, p.to))), Icon("chevron", 16, "go")),
+        h("button", { class: "fig", "data-card": "Historical loans unpaid", onclick: () => drill(hl.title, null, tableFromReport(hl)) }, h("span", { class: "fm" }, h("span", { class: "fk" }, "Historical loans unpaid"), h("span", { class: "fd", style: "display:block" }, "Kept apart from loans owed")), h("span", { class: "val" }, ugx(hl.totals.principalUnpaid + hl.totals.interestUnpaid)), Icon("chevron", 16, "go"))));
+    } else if (cat.keys) lists.append(figList("cat-kpis", cat.t + " figures", cat.keys, o, prev, p.fy ? p.fyLabel : ""));
+    lists.append(breakdown(cat, o, p));
     return wrap;
   }
-  const catHeader = (cat) => h("div", { class: "cathead" }, h("span", { class: "tic big tn-" + cat.tone }, Icon(cat.ic, 26)), h("div", null, h("h1", { class: "cath1" }, cat.t), h("div", { class: "mute" }, "Tap any figure to see the records behind it")));
-  /* MORE: every other screen, grouped by purpose and shown as tiles (this is the phone's second menu) */
+  /* MORE: every other screen as one grouped list, the way banking apps do it */
   function menuScreen() {
-    const nav = NAV_STAFF.filter((n) => (!n[2] || n[2] === st.user.role) && n[0] !== "menu" && !/\btab\b/.test(n[4] || "")), groups = [];
+    const nav = NAV_STAFF.filter((n) => (!n[2] || n[2] === st.user.role) && n[0] !== "menu" && phoneTab(n[0]) < 0), groups = [];
     nav.forEach((n) => { const g = NAV_GROUP[n[0]] || "Other"; let G2 = groups.find((x) => x.g === g); if (!G2) groups.push(G2 = { g, items: [] }); G2.items.push(n); });
-    return h("div", { id: "menu-screen" }, groups.map((g) => h("div", null, h("h2", { class: "sec" }, g.g), h("div", { class: "mgrid" }, g.items.map(([k, l, , ic]) => { const b = navBadge(k); return h("button", { class: "mtile", "data-menu": k, onclick: () => go(k) }, h("span", { class: "tic" }, Icon(ic, 22)), h("span", { class: "mt" }, l), b ? h("span", { class: "badge-n" }, String(b)) : null); })))));
+    return h("div", { id: "menu-screen" }, h("section", { class: "panel acct" }, h("span", { class: "avatar" }, (st.user.name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()), h("div", { class: "am" }, h("div", { class: "an" }, st.user.name), h("div", { class: "ar" }, roleLabel(st.user.role) + (st.live ? "" : " · demo")))), groups.map((g) => h("section", { class: "mgroup" }, h("h2", { class: "sec" }, g.g), h("div", { class: "mlist" }, g.items.map(([k, l, , ic]) => { const b = navBadge(k); return h("button", { class: "mrow", "data-menu": k, onclick: () => go(k) }, Icon(ic, 22), h("span", { class: "mt" }, l), b ? h("span", { class: "badge-n" }, String(b)) : null, Icon("chevron", 16, "go")); })))));
   }
-  function allFigures() {
-    const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
-    const hl = FRP.historicalLoans(st.db, p.to);
-    const c = (key, label, tone, sub) => Card(label, kpiShow(o[key]), sub || o[key].period, () => openKpi(key), tone);
-    const wrap = h("div", null, periodBar(),
-      h("h2", { class: "sec" }, "Where the group stands · as at " + D.longDate(p.to)),
-      h("div", { class: "grid", id: "kpis" },
-        c("totalSavings", "Total Savings", "avail", "Members' savings"), c("availableCash", "Available Cash", null, "Cash at the start of the period: " + num(o.availableCash.opening)),
-        c("outstandingLoans", "Outstanding Loans", "loan", pl(o.outstandingLoans.count, "loan") + " owed"), c("interestReceivable", "Interest Receivable", "interest", pl(o.interestReceivable.loans, "loan") + " · unpaid interest"),
-        c("loanExposure", "Loan Exposure", null, "Guaranteed " + ugx(o.loanExposure.guaranteed)), c("members", "Members", null, "Active")),
-      h("h2", { class: "sec" }, "What happened · " + (p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to))),
-      h("div", { class: "grid", id: "activity" },
-        c("savingsReceived", "Savings Received", "avail", pl(o.savingsReceived.count, "deposit")), c("withdrawals", "Withdrawals & Share-Out", null, pl(o.withdrawals.count, "payment")), c("loansDisbursed", "Loans Paid Out", "loan", pl(o.loansDisbursed.count, "loan")),
-        c("repaymentsReceived", "Loan Repayments", "loan", pl(o.repaymentsReceived.count, "payment")), c("interestReceived", "Interest Received", "interest", "Interest part of repayments"), c("subscriptions", "Subscriptions", null, o.subscriptions.count + " received"),
-        c("otherIncome", "Other Income", null, o.otherIncome.count + " entries"), c("profit", "Profit Recorded", "profit", "Profit entries in the period"), c("expenses", "Expenses", null, o.expenses.count + " entries")),
-      h("h2", { class: "sec" }, "General Reserve Fund and older loans"),
-      h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => { st.view = "reserve"; render(); }, "profit"),
-        Card("Historical loans unpaid", ugx(hl.totals.principalUnpaid + hl.totals.interestUnpaid), "Principal " + num(hl.totals.principalUnpaid) + " + interest " + num(hl.totals.interestUnpaid) + " · kept apart from loans owed", () => drill(hl.title, null, tableFromReport(hl)), "loan")),
-      h("h2", { class: "sec" }, "Needs attention · right now"), attention(o.awaitingApproval, pipe),
-      h("div", { class: "grid", id: "pipeline" }, Card("Awaiting approval", String(o.awaitingApproval), "Chairperson second approval", () => { st.view = "approvals"; render(); }), Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))),
-      h("h2", { class: "sec" }, "Subscription compliance " + p.to.slice(0, 4)));
-    const cm = C.subscriptionCompliance(asAtDb(p.to), p.to.slice(0, 4));
-    wrap.append(h("div", { class: "grid" }, Card("Collected", ugx(cm.collected), "of " + ugx(cm.expected) + " · as at " + D.longDate(p.to), () => { st.view = "subs"; render(); }), Card("Unpaid members", String(cm.unpaid.length), "as at " + D.longDate(p.to), () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)))));
-    return wrap;
+  /* SEARCH: reach any screen, member or loan from anywhere (press / or Ctrl+K on a computer) */
+  function openSearch() {
+    if (document.querySelector(".pal-bg")) return;
+    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && !["menu", "more"].includes(n[0]));
+    const input = h("input", { type: "search", id: "pal-input", placeholder: staff ? "Search screens, members, loans…" : "Where do you want to go?", "aria-label": "Search", autocomplete: "off", inputmode: "search" }), list = h("div", { class: "pal-list", id: "pal-list", role: "listbox" });
+    const bg = h("div", { class: "pal-bg", onclick: (e) => { if (e.target === bg) close(); } }, h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Search" }, input, list, h("div", { class: "pal-foot" }, h("span", null, "↑↓ to move"), h("span", null, "Enter to open"), h("span", null, "Esc to close"))));
+    let items = [], sel = 0; const close = () => { document.removeEventListener("keydown", key, true); bg.remove(); };
+    const run = (it) => { close(); it.run(); };
+    const draw = () => { list.replaceChildren(); if (!items.length) { list.append(h("div", { class: "pal-empty" }, "Nothing matches that. Try a name, an SOB ID or a screen.")); return; } let lastH = "";
+      items.forEach((it, i) => { if (it.h !== lastH) { list.append(h("div", { class: "pal-h" }, it.h)); lastH = it.h; } list.append(h("button", { class: "pal-i" + (i === sel ? " sel" : ""), role: "option", "data-pal": it.id, onclick: () => run(it) }, Icon(it.ic, 20), h("span", null, it.t, it.s ? h("small", null, it.s) : null))); });
+      const s = list.querySelector(".sel"); if (s && s.scrollIntoView) s.scrollIntoView({ block: "nearest" }); };
+    const build = (q) => { q = q.trim().toLowerCase(); const out = [];
+      nav.filter((n) => !q || n[1].toLowerCase().includes(q) || (NAV_GROUP[n[0]] || "").toLowerCase().includes(q)).slice(0, q ? 6 : 8).forEach((n) => out.push({ h: "Go to", id: n[0], ic: n[3], t: n[1], s: NAV_GROUP[n[0]] || "", run: () => go(n[0]) }));
+      if (staff && q.length >= 2) { (st.db.members || []).filter((m) => (m.name || "").toLowerCase().includes(q) || (m.id || "").toLowerCase().includes(q) || String(m.phone || "").replace(/\s/g, "").includes(q.replace(/\s/g, ""))).slice(0, 6).forEach((m) => out.push({ h: "Members", id: m.id, ic: "user", t: m.name, s: m.id, run: () => { go("members"); openMember(m.id); } }));
+        (st.db.loans || []).filter((l) => !l.voided && ((l.id || "").toLowerCase().includes(q) || nameOf(l.memberId).toLowerCase().includes(q))).slice(0, 5).forEach((l) => out.push({ h: "Loans", id: l.id, ic: "loan", t: nameOf(l.memberId), s: l.id + " · " + l.status, run: () => { go("loans"); openLoan(l.id); } })); }
+      items = out; sel = 0; draw(); };
+    const key = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } else if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); } else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); } else if (e.key === "Enter" && items[sel]) { e.preventDefault(); run(items[sel]); } };
+    document.addEventListener("keydown", key, true); input.addEventListener("input", () => build(input.value)); document.body.append(bg); build(""); input.focus();
   }
+  document.addEventListener("keydown", (e) => { if (!st.user || document.querySelector(".pal-bg")) return; const t = e.target, typing = t && /INPUT|TEXTAREA|SELECT/.test(t.tagName); if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !typing)) { e.preventDefault(); openSearch(); } });
   /* ---------- the full member statement: one account object feeds this screen, the PDF and the WhatsApp text ---------- */
   const SX = S.statements;
   const accountRep = (a) => ({ title: (a.audience === "admin" ? "Administrative " + (a.mode === "loan" ? "loan statement " + a.loanId : "account statement") : (a.mode === "loan" ? "Loan statement " + a.loanId : "Member account statement")) + " — " + a.member.name + " (" + a.member.id + ")", period: a.period.text, printHTML: (meta) => SX.toPrintHTML(a, meta) });
@@ -425,7 +472,7 @@
   const Searchable = (placeholder, build) => { let q = ""; const box = h("div"); const paint = () => box.replaceChildren(build(q.trim().toLowerCase())); const inp = h("input", { type: "search", class: "search", placeholder, "aria-label": placeholder, oninput: (e) => { q = e.target.value; paint(); } }); paint(); return h("div", null, inp, box); };
   function members() {
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "member.manage") ? h("button", { class: "primary", id: "add-member", onclick: () => Form("Add member", [{ name: "name", label: "Full name" }, { name: "phone", label: "Phone" }], act(async (v) => commit("addMember", { name: v.name, phone: v.phone }), "Member added")) }, "Add member") : null),
-      Searchable("Search members by name, ID or phone", (q) => Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Savings", num: 1, render: (m) => num(L.memberSavings(st.db, m.id)) }], st.db.members.filter((m) => !q || (m.id + " " + m.name + " " + (m.phone || "")).toLowerCase().includes(q)), (m) => openMember(m.id))));
+      Searchable("Search members by name, ID or phone", (q) => Table([{ label: "ID", key: "id", m: "s" }, { label: "Name", key: "name", m: "t" }, { label: "Savings", num: 1, m: "v", render: (m) => num(L.memberSavings(st.db, m.id)) }], st.db.members.filter((m) => !q || (m.id + " " + m.name + " " + (m.phone || "")).toLowerCase().includes(q)), (m) => openMember(m.id))));
   }
 
   /* ---------- loans ---------- */
@@ -527,8 +574,8 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function ledger() {
     const all = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
     return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
-      Searchable("Search the ledger by member, type, purpose or amount", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
-      return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Member", render: (t) => nameOf(t.memberId) }, { label: "Type", key: "type" }, { label: "Amount", num: 1, render: (t) => num(t.amount) }, { label: "State", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
+      Searchable("Search ledger", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
+      return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", m: "s2", render: (t) => D.toDisplay(t.date) }, { label: "Member", m: "t", render: (t) => nameOf(t.memberId) }, { label: "Type", m: "s", key: "type" }, { label: "Amount", num: 1, m: "v", render: (t) => num(t.amount) }, { label: "State", m: "b", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
   function openEntry(id) {
     const t = st.db.transactions.find((x) => x.id === id), c = ctx(), row = h("div", { class: "row" });
@@ -544,7 +591,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function subs() {
     const y = today().slice(0, 4), c = C.subscriptionCompliance(st.db, y);
     return h("div", null, h("div", { class: "grid" }, Card("Collected", ugx(c.collected), "of " + ugx(c.expected)), Card("Paid", String(c.paid.length)), Card("Unpaid", String(c.unpaid.length))),
-      Table([{ label: "Member", render: (m) => m.name }, { label: "Status", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); Form("Subscription — " + m.name, [{ name: "year", label: "Subscription year", type: "number", value: y }, dateF("date", "Date paid (today unless you change it)")], act(async (f) => commit("recordSubscription", { memberId: m.id, year: Number(f.year), date: f.date }), "Subscription recorded"), "Record UGX 5,000"); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
+      Table([{ label: "Member", m: "t", render: (m) => m.name }, { label: "Status", m: "b", render: (m) => c.paid.includes(m.id) ? badge("Paid", "ok") : badge("Unpaid", "bad") }, { label: "", m: "v", render: (m) => !c.paid.includes(m.id) && G.can(ctx(), "subscription.record") ? h("button", { "data-sub": m.id, onclick: (e) => { e.stopPropagation(); Form("Subscription — " + m.name, [{ name: "year", label: "Subscription year", type: "number", value: y }, dateF("date", "Date paid (today unless you change it)")], act(async (f) => commit("recordSubscription", { memberId: m.id, year: Number(f.year), date: f.date }), "Subscription recorded"), "Record UGX 5,000"); } }, "Record UGX 5,000") : null }], st.db.members.filter((m) => m.status !== "Inactive")));
   }
   function shareout() {
     const cur = FYM.current(st.db), y = cur ? cur.year : Number(today().slice(0, 4)), p = C.previewShareOut(st.db, y, today());
@@ -607,7 +654,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         h("button", { class: "danger", "data-reject": r.ref, onclick: (e) => { e.stopPropagation(); Form("Reject request", [reasonField("reason.Reject")], act(async (f) => commit("rejectRequest", { id: r.ref, reason: f.reason }), "Rejected")); } }, "Reject")) : "";
     return h("div", null, null,
       h("div", { class: "grid" }, Card("Waiting for the Chairperson", String(ap.totals.waiting))),
-      Table([{ label: "Kind", key: "kind" }, { label: "Member", key: "member" }, { label: "Detail", key: "detail" }, { label: "Entered by", key: "enteredBy" }, { label: "", render: btn }], rows, (r) => { if (r.kind === "Ledger entry") openEntry(r.ref); else if (reqOf(r.ref)) showRequest(r); else { const sec = (st.db.securities || []).find((x) => x.id === r.ref); openLoan(r.kind === "Loan" ? r.ref : sec.loanId); } }),
+      Table([{ label: "Kind", key: "kind", m: "s" }, { label: "Member", key: "member", m: "t" }, { label: "Detail", key: "detail", m: "s2" }, { label: "Entered by", key: "enteredBy", m: "x" }, { label: "", render: btn, m: "v" }], rows, (r) => { if (r.kind === "Ledger entry") openEntry(r.ref); else if (reqOf(r.ref)) showRequest(r); else { const sec = (st.db.securities || []).find((x) => x.id === r.ref); openLoan(r.kind === "Loan" ? r.ref : sec.loanId); } }),
       h("h2", { class: "sec" }, "Recently decided requests"), Table([{ label: "Action", key: "label" }, { label: "Detail", key: "summary" }, { label: "Requested by", key: "requestedBy" }, { label: "Decision", key: "status" }, { label: "Decided by", key: "decidedBy" }, { label: "Date", render: (x) => D.toDisplay(x.decidedDate || x.requestedDate) }], decided),
       h("h2", { class: "sec" }, "SOB rules in force"), Table([{ label: "Rule", key: "k" }, { label: "Now", key: "v" }], [
         { k: "Needs the Chairperson's second approval", v: "Loan approvals · exceptional security · voids and reversals · manual adjustments · final profit distribution · share-out posting" },
@@ -675,7 +722,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       Card("Data errors not in the register", String(un.length), un.length ? "Click to see" : "All accounted for", () => drill("Unaccounted data errors", "Errors the integrity check finds that no register item covers.", Table([{ label: "Code", key: "code" }, { label: "Detail", key: "detail" }], un))),
       Card("Integrity warnings", String(integ.warnings))),
       null,
-      Table([{ label: "Kind", key: "kind" }, { label: "Subject", key: "subject" }, { label: "Summary", key: "summary" }, { label: "Status", render: (d) => badge(d.status, d.status === "Open" ? "warn" : "ok") }], list, (d) => openDiscrepancy(d.id)));
+      Table([{ label: "Kind", key: "kind", m: "s" }, { label: "Subject", key: "subject", m: "t" }, { label: "Summary", key: "summary", m: "x" }, { label: "Status", m: "b", render: (d) => badge(d.status, d.status === "Open" ? "warn" : "ok") }], list, (d) => openDiscrepancy(d.id)));
   }
   function openDiscrepancy(id) {
     const d = st.db.discrepancies.find((x) => x.id === id), body = h("div", null, h("p", null, d.summary), h("p", { class: "mute" }, "Platform: " + (d.platformValue ?? "—") + " · Source: " + (d.sourceValue ?? "—") + " · " + (d.source || "")),
@@ -687,7 +734,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       act(async (f) => { await commit("resolveDiscrepancy", { id, decision: f.decision, reason: f.reason, evidence: f.evidence, entry: f.decision === "ACCEPT_SOURCE_WITH_ENTRY" ? { type: f.etype, amount: f.eamt, date: f.edate, memberId: f.emember } : undefined }); document.querySelector(".modal-bg") && document.querySelector(".modal-bg").remove(); }, "Resolved")) }, "Resolve"));
     drill("Discrepancy " + d.subject, null, body);
   }
-  function audit() { const all = (st.db.auditLog || []).slice().reverse(); return Searchable("Search the audit trail by action, person, record or reason", (q) => { const hit = all.filter((a) => !q || ((a.entityType || "") + " " + (a.entityId || "") + " " + (a.action || "") + " " + (a.by || "") + " " + (a.reason || "")).toLowerCase().includes(q)); return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > 200 ? "Showing the latest 200 of " + hit.length + " — search to narrow." : (hit.length === 1 ? "1 entry" : hit.length + " entries")), Table([{ label: "When", render: (a) => D.toDisplay(a.date) }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], hit.slice(0, 200), null, "No audit entries match")); }); }
+  function audit() { const all = (st.db.auditLog || []).slice().reverse(); return Searchable("Search audit trail", (q) => { const hit = all.filter((a) => !q || ((a.entityType || "") + " " + (a.entityId || "") + " " + (a.action || "") + " " + (a.by || "") + " " + (a.reason || "")).toLowerCase().includes(q)); return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > 200 ? "Showing the latest 200 of " + hit.length + " — search to narrow." : (hit.length === 1 ? "1 entry" : hit.length + " entries")), Table([{ label: "When", render: (a) => D.toDisplay(a.date) }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], hit.slice(0, 200), null, "No audit entries match")); }); }
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
@@ -1005,7 +1052,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { cat: categoryView, menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };

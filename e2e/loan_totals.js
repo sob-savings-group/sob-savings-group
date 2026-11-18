@@ -32,7 +32,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.fill('.modal input[name="amt"]', "200000"); await pg.fill('.modal input[name="date"]', "2025-12-01"); await pg.fill('.modal input[name="rate"]', "30000"); await pg.fill('.modal [name="remarks"]', "backdated test");
   await pg.click(".modal [data-submit]"); await pg.waitForTimeout(500); await pg.waitForFunction(() => !document.querySelector(".modal [data-submit]"));
   await pg.waitForTimeout(300);
-  ok(/LOAN-\S+\s+Demo Member 001\s+200,000\s+330,000/.test((await pg.locator("tbody tr").last().innerText()).replace(/\s+/g," ")), "the loan is listed at once, with interest running from the backdated date (11 months x 30,000 = 330,000)");
+  ok(/Demo Member 001\s*200,000\s*330,000/.test(await pg.locator("tbody tr").last().textContent()), "the loan is listed at once, with interest running from the backdated date (11 months x 30,000 = 330,000)");
   await pg.locator("tbody tr", { hasText: "backdated" }).count();
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
   const rows = pg.locator("#loan-totals ~ * tbody tr, tbody tr"); await rows.last().click(); await pg.waitForSelector(".modal");
