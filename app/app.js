@@ -101,7 +101,7 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_STAFF = [["dash", "Home", null, "home", "tab"], ["members", "Members", null, "users", "tab"], ["loans", "Loans", null, "loan", "tab"], ["ledger", "Money", null, "wallet", "tab"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -132,7 +132,7 @@
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
     const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
-    const active = (k) => st.view === k || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
+    const active = (k) => st.view === k || (k === "dash" && st.view === "cat") || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
     const shell = h("div", { class: "shell" });
     shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, h("img", { src: R.LOGO, alt: "BWOMI" }), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
       staff && !st.live ? h("span", { class: "pill" }, "DEMO · DEV") : null,
@@ -169,13 +169,19 @@
     return h("div", { id: "attention" }, items.length ? items.map(([kind, text, view, label]) => Banner(kind, text, { label, onclick: () => go(view) })) : Banner("ok", "Nothing needs attention right now."));
   }
   /* ---- the reporting period: ONE selector for the whole dashboard and the Reports page. Balances are read as at its last day; activity covers first to last day. ---- */
-  const periodNow = () => { if (!st.period) { try { const v = JSON.parse(sessionStorage.getItem("sob.period") || "null"); if (v && v.key) st.period = v.key === "custom" ? D.customPeriod(v.from, v.to, today()) : D.presetPeriod(v.key, today(), FYM.table(st.db)); } catch (e) { /* fall through to the default */ } } if (!st.period || st.period.to > today()) st.period = D.presetPeriod("year", today(), FYM.table(st.db)); else if (st.period.key !== "custom") st.period = D.presetPeriod(st.period.key, today(), FYM.table(st.db)); return st.period; };
+  const rebuildPeriod = (v) => { if (/^fy\d+$/.test(v.key || "")) { const c = FYM.table(st.db).find((x) => "fy" + x.year === v.key); return c ? fyPeriod(c) : null; } return v.key === "custom" ? D.customPeriod(v.from, v.to, today()) : D.presetPeriod(v.key, today(), FYM.table(st.db)); };
+  const periodNow = () => { if (!st.period) { try { const v = JSON.parse(sessionStorage.getItem("sob.period") || "null"); if (v && v.key) st.period = rebuildPeriod(v); } catch (e) { /* fall through to the default */ } } if (!st.period || st.period.to > today()) st.period = D.presetPeriod("year", today(), FYM.table(st.db)); else if (st.period.key !== "custom") st.period = rebuildPeriod(st.period) || D.presetPeriod("year", today(), FYM.table(st.db)); return st.period; };
   const setPeriod = (p) => { st.period = p; st.customOpen = false; try { sessionStorage.setItem("sob.period", JSON.stringify({ key: p.key, from: p.from, to: p.to })); } catch (e) { /* optional */ } render(); };
+  /* every registered financial year can be picked: this year and last year keep their presets, older ones are added as "Financial Year N" */
+  const fyPeriod = (c) => { const t = today(), to = c.closedDate && c.closedDate < t ? c.closedDate : t, p = D.customPeriod(c.openedDate, to, t); p.key = "fy" + c.year; p.fy = c.year; p.fyLabel = "FY" + c.year; p.fyOpened = c.openedDate; p.fyClosed = c.closedDate || null; p.label = "Financial Year " + c.year; return p; };
+  const periodOptions = () => { const base = D.presetOptions(today(), FYM.table(st.db)), have = {}; base.forEach(([k, l]) => { have[l] = 1; });
+    const older = FYM.table(st.db).filter((c) => D.isISO(c.openedDate) && !have["Financial Year " + c.year]).sort((a, b) => b.year - a.year).map((c) => ["fy" + c.year, "Financial Year " + c.year]);
+    const i = base.findIndex(([k]) => k === "lastYear"); return i < 0 ? base : base.slice(0, i + 1).concat(older, base.slice(i + 1)); };
   function periodBar() {
     const p = periodNow(), custom = p.key === "custom" || st.customOpen;
     const from = h("input", { type: "date", id: "p-from", value: p.from || "", max: today(), "aria-label": "From date" }), to = h("input", { type: "date", id: "p-to", value: p.to, max: today(), "aria-label": "To date" });
-    return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Reporting period"),
-      Chips(D.presetOptions(today(), FYM.table(st.db)), custom ? "custom" : p.key, (k) => { if (k === "custom") { st.customOpen = true; render(); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
+    return h("section", { class: "periodbar", id: "periodbar" }, h("div", { class: "pb-t" }, "Financial year / period"),
+      Chips(periodOptions(), custom ? "custom" : (p.fy && /^fy\d+$/.test(p.key || "") ? p.key : p.key), (k) => { if (k === "custom") { st.customOpen = true; render(); } else if (/^fy\d+$/.test(k)) { const c = FYM.table(st.db).find((x) => "fy" + x.year === k); if (c) setPeriod(fyPeriod(c)); } else setPeriod(D.presetPeriod(k, today(), FYM.table(st.db))); }),
       custom ? h("div", { class: "pb-custom" }, h("label", null, "From", from), h("label", null, "To", to), h("button", { class: "primary", id: "p-apply", onclick: () => { try { setPeriod(D.customPeriod(from.value, to.value, today())); } catch (e) { toast(e.message, true); } } }, "Show")) : null,
       h("div", { class: "pb-note", id: "period-note" }, p.fy ? h("span", null, h("b", null, p.fyLabel), " (financial year from share-out to share-out) · ") : null, h("span", null, "Balances are as at ", h("b", null, D.longDate(p.to))), h("span", null, " · Activity covers ", h("b", null, p.from ? D.longDate(p.from) + " – " + D.longDate(p.to) : "start of records – " + D.longDate(p.to)))));
   }
@@ -203,7 +209,59 @@
       tableFromReport(rep, (r) => openRow(r._open, p.to)), tie)); km.el.setAttribute("data-rep", "1");
   }
   const PIPE = { Pending: "Loans to review", AwaitingApproval: "Loans awaiting Chairperson", Approved: "Approved, not yet paid out", Active: "Active loans", Cleared: "Fully repaid loans", Declined: "Declined loans" };
+
+  /* ---------- HOME: one summary, then category tiles. Tapping a tile opens that category with the chosen financial year / period. ---------- */
+  const CATS = [
+    { k: "savings", t: "Savings", ic: "wallet", tone: "avail", keys: ["totalSavings", "savingsReceived", "subscriptions"], head: (o) => ugx(o.totalSavings.value), sub: (o) => ugx(o.savingsReceived.value) + " received in this period" },
+    { k: "loans", t: "Loans", ic: "loan", tone: "loan", keys: ["outstandingLoans", "loanExposure", "loansDisbursed", "repaymentsReceived"], head: (o) => ugx(o.outstandingLoans.value), sub: (o) => pl(o.outstandingLoans.count, "loan") + " owed" },
+    { k: "income", t: "Interest and income", ic: "chart", tone: "interest", keys: ["interestReceivable", "interestReceived", "otherIncome", "profit"], head: (o) => ugx(o.interestReceived.value), sub: (o) => ugx(o.interestReceivable.value) + " interest still to collect" },
+    { k: "cash", t: "Cash and spending", ic: "book", tone: "profit", keys: ["availableCash", "withdrawals", "expenses"], head: (o) => ugx(o.availableCash.value), sub: (o) => ugx(o.withdrawals.value) + " paid out · " + ugx(o.expenses.value) + " expenses" },
+    { k: "members", t: "Members", ic: "users", tone: "avail", keys: ["members"], head: (o) => String(o.members.value), sub: () => "Active members and subscriptions" },
+    { k: "reserve", t: "Reserve and older loans", ic: "shield", tone: "commit", keys: [], head: (o, p) => ugx(RSV.balance(st.db, p.to)), sub: () => "General Reserve Fund and historical loans" },
+    { k: "attention", t: "Approvals and tasks", ic: "check", tone: "commit", keys: [], head: (o) => String(o.awaitingApproval), sub: (o) => o.awaitingApproval ? "waiting for the Chairperson" : "nothing waiting" },
+    { k: "all", t: "All figures", ic: "download", tone: "interest", keys: [], head: () => "Every figure", sub: () => "The full list, one place" }];
+  const catOf = (k) => CATS.find((c) => c.k === k) || CATS[0];
+  const openCat = (k) => { st.cat = k; go("cat"); };
   function dashboard() {
+    const p = periodNow(), o = K.overview(st.db, p);
+    const mini = (l, v) => h("div", { class: "hm" }, h("div", { class: "hml" }, l), h("div", { class: "hmv" }, v));
+    const hero = h("section", { class: "hero2", id: "hero", tabindex: 0, role: "button", onclick: () => openKpi("totalSavings"), onkeydown: (e) => { if (e.key === "Enter") openKpi("totalSavings"); } },
+      h("div", { class: "h2l" }, "Total savings"), h("div", { class: "h2v" }, ugx(o.totalSavings.value)), h("div", { class: "h2s" }, "Members' savings · as at " + D.longDate(p.to)),
+      h("div", { class: "h2row" }, mini("Available cash", ugx(o.availableCash.value)), mini("Loans owed", ugx(o.outstandingLoans.value)), mini("Members", String(o.members.value))));
+    const tiles = h("div", { class: "tiles", id: "tiles" }, CATS.map((c) => h("button", { class: "tile tn-" + c.tone, "data-tile": c.k, onclick: () => openCat(c.k) },
+      h("span", { class: "tic" }, Icon(c.ic, 22)), h("span", { class: "tt" }, c.t), h("span", { class: "tv" }, c.head(o, p)), h("span", { class: "ts" }, c.sub(o, p)))));
+    return h("div", null, hero, periodBar(), h("h2", { class: "sec" }, "Explore"), tiles, h("h2", { class: "sec" }, "Needs attention"), attention(o.awaitingApproval, K.pipeline(st.db)));
+  }
+  /* the same figure for every financial year side by side: how the years compile */
+  function yearByYear(cat) {
+    const yrs = FYM.table(st.db).filter((c) => D.isISO(c.openedDate)); if (!yrs.length || !cat.keys.length) return null;
+    const rows = yrs.map((c) => { const o = K.overview(st.db, fyPeriod(c)); return { year: c.year, label: "FY" + c.year, status: c.closedDate ? "Closed" : "Open", o, c }; });
+    const head = cat.keys[0], mx = Math.max.apply(null, rows.map((r) => Math.abs(Number(r.o[head].value) || 0)).concat([1]));
+    const bars = h("div", { class: "yb", id: "year-bars" }, rows.map((r) => h("button", { class: "yb-row", "data-year": r.year, onclick: () => { setPeriod(fyPeriod(r.c)); window.scrollTo(0, 0); } }, h("span", { class: "yb-l" }, r.label), h("span", { class: "yb-t" }, h("i", { style: "width:" + Math.max(2, Math.round(Math.abs(Number(r.o[head].value) || 0) / mx * 100)) + "%" })), h("span", { class: "yb-v" }, kpiShow(r.o[head])))));
+    const cols = [{ label: "Year", render: (r) => r.label + (r.status === "Open" ? " (open)" : "") }].concat(cat.keys.map((k) => ({ label: heading(k), num: 1, render: (r) => kpiShow(r.o[k]) })));
+    return h("div", { id: "year-compile" }, h("h2", { class: "sec" }, "Year by year · " + (K.overview(st.db, periodNow())[cat.keys[0]].label || heading(cat.keys[0]))), bars, Table(cols, rows.slice().reverse(), (r) => { setPeriod(fyPeriod(r.c)); window.scrollTo(0, 0); }));
+  }
+  function categoryView() {
+    const cat = catOf(st.cat); if (cat.k === "all") return h("div", null, catHeader(cat), allFigures());
+    const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
+    const c = (key) => Card(heading(key), kpiShow(o[key]), o[key].period, () => openKpi(key), cat.tone === "avail" ? "avail" : cat.tone === "loan" ? "loan" : cat.tone === "interest" ? "interest" : cat.tone === "profit" ? "profit" : null);
+    const wrap = h("div", { id: "cat-" + cat.k }, catHeader(cat), periodBar());
+    if (cat.keys.length) wrap.append(h("h2", { class: "sec" }, p.fy ? p.fyLabel + " · " + cat.t : cat.t + " · " + (p.from ? D.longDate(p.from) + " – " : "to ") + D.longDate(p.to)), h("div", { class: "grid", id: "cat-kpis" }, cat.keys.map(c)));
+    if (cat.k === "loans") wrap.append(h("h2", { class: "sec" }, "Loan pipeline · right now"), h("div", { class: "grid", id: "pipeline" }, Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))));
+    if (cat.k === "members") { const cm = C.subscriptionCompliance(asAtDb(p.to), p.to.slice(0, 4)); wrap.append(h("h2", { class: "sec" }, "Subscription compliance " + p.to.slice(0, 4)), h("div", { class: "grid" }, Card("Collected", ugx(cm.collected), "of " + ugx(cm.expected) + " · as at " + D.longDate(p.to), () => go("subs")), Card("Unpaid members", String(cm.unpaid.length), "as at " + D.longDate(p.to), () => drill("Unpaid subscriptions", null, Table([{ label: "Member", render: (id) => nameOf(id) }], cm.unpaid, null)))), h("div", { class: "row" }, h("button", { class: "primary", onclick: () => go("members") }, "Open the member list"))); }
+    if (cat.k === "reserve") { const hl = FRP.historicalLoans(st.db, p.to); wrap.append(h("div", { class: "grid", id: "reserve-kpis" }, Card("General Reserve Fund", ugx(RSV.balance(st.db, p.to)), "Group reserve · as at " + D.longDate(p.to), () => go("reserve"), "profit"), Card("Historical loans unpaid", ugx(hl.totals.principalUnpaid + hl.totals.interestUnpaid), "Principal " + num(hl.totals.principalUnpaid) + " + interest " + num(hl.totals.interestUnpaid) + " · kept apart from loans owed", () => drill(hl.title, null, tableFromReport(hl)), "loan"))); }
+    if (cat.k === "attention") wrap.append(attention(o.awaitingApproval, pipe), h("div", { class: "grid", id: "pipeline" }, Card("Awaiting approval", String(o.awaitingApproval), "Chairperson second approval", () => go("approvals")), Object.keys(pipe).map((s) => Card(PIPE[s] || s, String(pipe[s]), "Loans · right now", () => drill((PIPE[s] || s) + " — loans", null, Table(loanCols, loanRows((v) => v.status === s), (v) => openLoan(v.id)))))));
+    const yy = yearByYear(cat); if (yy) wrap.append(yy);
+    return wrap;
+  }
+  const catHeader = (cat) => h("div", { class: "cathead" }, h("span", { class: "tic big tn-" + cat.tone }, Icon(cat.ic, 26)), h("div", null, h("h1", { class: "cath1" }, cat.t), h("div", { class: "mute" }, "Tap any figure to see the records behind it")));
+  /* MORE: every other screen, grouped by purpose and shown as tiles (this is the phone's second menu) */
+  function menuScreen() {
+    const nav = NAV_STAFF.filter((n) => (!n[2] || n[2] === st.user.role) && n[0] !== "menu" && !/\btab\b/.test(n[4] || "")), groups = [];
+    nav.forEach((n) => { const g = NAV_GROUP[n[0]] || "Other"; let G2 = groups.find((x) => x.g === g); if (!G2) groups.push(G2 = { g, items: [] }); G2.items.push(n); });
+    return h("div", { id: "menu-screen" }, groups.map((g) => h("div", null, h("h2", { class: "sec" }, g.g), h("div", { class: "mgrid" }, g.items.map(([k, l, , ic]) => { const b = navBadge(k); return h("button", { class: "mtile", "data-menu": k, onclick: () => go(k) }, h("span", { class: "tic" }, Icon(ic, 22)), h("span", { class: "mt" }, l), b ? h("span", { class: "badge-n" }, String(b)) : null); })))));
+  }
+  function allFigures() {
     const p = periodNow(), o = K.overview(st.db, p), pipe = K.pipeline(st.db);
     const hl = FRP.historicalLoans(st.db, p.to);
     const c = (key, label, tone, sub) => Card(label, kpiShow(o[key]), sub || o[key].period, () => openKpi(key), tone);
@@ -947,7 +1005,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { cat: categoryView, menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };

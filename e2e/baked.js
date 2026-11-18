@@ -1,5 +1,6 @@
 /* A member opens sob-app.html with NO address editing: the production backend is built in, no prompt appears,
    the sign-in screen shows, and the app talks to the built-in URL. Unconfigured builds say so in plain words. */
+require("./_nav");
 const { chromium } = require("playwright"), { execSync } = require("child_process"), path = require("path"), assert = require("assert"), root = path.join(__dirname, "..");
 const FAKE = "https://script.google.com/macros/s/AKfycbxTESTTESTTESTTEST/exec";
 const build = (env) => execSync("node " + path.join(root, "build/make-app-file.js"), { stdio: "pipe", env: Object.assign({}, process.env, env) });

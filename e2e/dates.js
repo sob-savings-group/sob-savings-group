@@ -1,5 +1,6 @@
 /* Drives the REAL app (browser UI + the bundled backend over HTTP) to prove automatic dates: default = today, an earlier genuine date can be chosen,
    the chosen date drives interest/principal split and the guarantor release, and future/invalid dates are refused. Synthetic members only. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), L = require("../src/core/ledger.js"), D = require("../src/core/dates.js");
@@ -27,7 +28,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
 (async () => {
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port, TODAY = D.todayISO();
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const pg = await b.newPage(); const errs = []; pg.on("pageerror", (e) => errs.push(e.message));
-  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   const closeAll = async () => { for (let i = 0; i < 20 && await pg.locator("[data-close]").count(); i++) { try { await pg.locator("[data-close]").last().click({ timeout: 3000 }); } catch (e) { await pg.waitForTimeout(250); } } };
   const openLoan = async () => { await closeAll(); await pg.click('[data-nav="loans"]'); await pg.waitForSelector("tbody tr.click"); await pg.click("tbody tr.click"); await pg.waitForSelector("text=Record repayment"); };
   const form = async (btn) => { await pg.click("text=" + btn); await pg.waitForSelector("[data-submit]"); };

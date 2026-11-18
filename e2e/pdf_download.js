@@ -1,3 +1,4 @@
+require("./_nav");
 /* Download PDF: builds real PDF files in the browser from the branded documents and validates every page. */
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const { execSync } = require("child_process"), fs = require("fs"), os = require("os"), path = require("path");

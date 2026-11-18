@@ -1,5 +1,6 @@
 /* Live-mode E2E: the real UI talks (over HTTP) to the real backend code running against a mock Sheet. Proves sign-in, server-side
    role enforcement even when the browser is tampered with, and that members only receive their own data. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.fill("#mid", id); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pin); } else { await pg.fill("#mid", id); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pin); } };
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
@@ -44,7 +45,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
     setStatus(mem.id, "Inactive"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified inactive member: exact inactive/restricted message")); setStatus(mem.id, "Restricted"); ok((await tryLogin(mem.id, "1234")) === INACTIVE, T("verified restricted member: exact inactive/restricted message")); setStatus(mem.id, "Active"); setStatus(newMem.id, "Active");
     await pg.fill("#mid", mem.id.toLowerCase().replace("-", "")); await pg.evaluate((v) => { document.getElementById("pin").value = v; }, "1234"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]', { timeout: 15000 });
     ok(true, T("SOB ID + password opens the member's own view")); await pg.click("#logout"); await pg.waitForSelector("#login-go");
-    await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+    await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
     /* mobile/desktop layout: no page ever scrolls sideways */
     const wide = async () => pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     const navTo = async (k) => { await pg.click('[data-nav="' + k + '"]').catch(async () => { await pg.click('[data-nav="more"]'); await pg.click('[data-nav="' + k + '"]'); }); await pg.waitForTimeout(250); };
@@ -85,7 +86,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
     await pg.uncheck('.modal [data-hide-names]'); await pg.waitForTimeout(300);
     ok((await pg.locator(".modal-bg").last().innerText()).includes(mem.name), T("switched off: full names are shown again"));
     ok(JSON.stringify(S.readCollection(env.ss, "members").map((m) => m.name)) === namesBefore, T("display only: the member register is unchanged"));
-    await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await navTo("dash"); await pg.click('[data-card="Total Savings"]'); await pg.waitForSelector(".modal tbody tr");
+    await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await navTo("dash"); await pg.click('[data-tile="savings"]'); await pg.waitForSelector('[data-card="Total Savings"]'); await pg.click('[data-card="Total Savings"]'); await pg.waitForSelector(".modal tbody tr");
     const allNames = db0.members.map((m) => m.name).filter((x) => x && x.length > 5), shownNames = (txt) => allNames.filter((n) => txt.includes(n));
     ok(shownNames(await pg.locator(".modal-bg").last().innerText()).length > 0, T("a report drill-down lists member names by default"));
     await pg.check('.modal [data-hide-names]'); await pg.waitForTimeout(300);

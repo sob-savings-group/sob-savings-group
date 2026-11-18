@@ -1,3 +1,4 @@
+require("./_nav");
 /* Layout audit on phone, tablet and computer sizes: no sideways page scroll, nothing cut off the screen edge, tap targets big enough, readable text, Back/Close always reachable. Demo mode. */
 const http = require("http"), fs = require("fs"), path = require("path");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }

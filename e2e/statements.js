@@ -1,5 +1,6 @@
 /* (harness shared with reminders.js) Statement E2E: the real Admin screen over HTTP against the real backend code on a mock Sheet. Synthetic members only. OFFLINE: no WhatsApp is contacted (wa.me is blocked in the browser).
    Proves: screen refuses without dates, preview/prepare/open/confirm flow and honest delivery states, bulk, live update after a repayment, backend-down behaviour, mobile width, confidentiality, audit. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), L = require("../src/core/ledger.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), D = require("../src/core/dates.js");
@@ -60,7 +61,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* 3. a tampered browser asking for more */
   ok(!API.handle(env, { action: "getLedger", token: lg.token }).db.users.length && API.handle(env, { action: "command", token: lg.token, name: "updateMemberContact", args: { memberId: M1.id, phone: "0772000000" } }).ok === false, "a member's login cannot fetch other data or change records");
   /* 4. the Super Admin: Member statement first, switch to the Administrative statement */
-  const ap = await sess({ width: 1100, height: 900 }); await ap.fill("#mid", "ADMIN"); await ap.fill("#pin", "admin-pin-1"); await ap.click("#login-go"); await ap.waitForSelector("#kpis");
+  const ap = await sess({ width: 1100, height: 900 }); await ap.fill("#mid", "ADMIN"); await ap.fill("#pin", "admin-pin-1"); await ap.click("#login-go"); await ap.waitForSelector("#hero");
   await ap.click('[data-nav="members"]'); await ap.fill("input.search", "Grace"); await ap.click("#main tbody tr"); await ap.waitForSelector("#stmt-view");
   let atxt = await ap.locator("#stmt-view").innerText(); ok(leaksIn(atxt + await ap.locator("#stmt-view").innerHTML()).length === 0, "officers start on the Member statement (safe to print or send): no internal material");
   ok((await ap.locator("text=Administrative statement (officers only)").count()) === 1, "the officer is offered the Administrative statement as a separate choice");

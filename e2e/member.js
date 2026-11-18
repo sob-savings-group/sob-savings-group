@@ -1,5 +1,6 @@
 /* Member journey in the REAL app (browser UI + bundled backend over HTTP); (originally dates harness) default = today, an earlier genuine date can be chosen,
    the chosen date drives interest/principal split and the guarantor release, and future/invalid dates are refused. Synthetic members only. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), L = require("../src/core/ledger.js"), D = require("../src/core/dates.js");

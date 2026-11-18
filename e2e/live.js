@@ -1,5 +1,6 @@
 /* Live-mode E2E: the real UI talks (over HTTP) to the real backend code running against a mock Sheet. Proves sign-in, server-side
    role enforcement even when the browser is tampered with, and that members only receive their own data. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 const signin = async (pg, id, pin) => { if (/^(ADMIN|CHAIR|TREAS|COMM)/i.test(id)) { await pg.fill("#mid", id); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pin); } else { await pg.fill("#mid", id); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pin); } };
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
@@ -30,10 +31,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await signin(pg, "ADMIN", "wrong"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(true, "wrong PIN is refused");
   /* staff IDs have no digits: the first-name box must never be glued onto the ID ("ADMIN ADMIN") */
   await pg.fill("#mid", "admin"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "wrong-pin-x"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(true, "ADMIN with the first-name box filled and a wrong PIN is refused");
-  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "ADMIN signs in with a first name typed AND the SOB ID box = ADMIN");
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "CHAIR"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "CHAIR signs in with a first name typed");
+  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "ADMIN signs in with a first name typed AND the SOB ID box = ADMIN");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "CHAIR"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "CHAIR signs in with a first name typed");
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "wrong"); await pg.click("#login-go"); await pg.waitForSelector("#login-error");
-  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, "admin signs in and sees the balance and activity KPI cards (computed from the server ledger view)");
+  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); await pg.click('[data-tile="all"]'); await pg.waitForSelector("#kpis"); ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, "admin signs in and sees the balance and activity KPI cards (computed from the server ledger view)");
   /* ONE sign-in for everyone: SOB ID / Staff ID / email + password, then the role decides the screen */
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
   ok((await pg.locator("#tab-member").count()) === 0 && (await pg.locator("#tab-officer").count()) === 0 && (await pg.locator("#panel-officer").count()) === 0, "there is no Member / Officer split on the sign-in screen");
@@ -42,17 +43,17 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.waitForFunction(() => /Connected/.test(document.getElementById("conn-status").textContent), null, { timeout: 8000 }); ok(true, "the login screen shows the server connection status");
   await pg.fill("#mid", mem.id); await pg.fill("#pin", "not-my-password"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(/Incorrect ID or password/.test(await pg.innerText("#login-error")), "a wrong password gets one plain message (nothing about which part was wrong)");
   await pg.click("#pin-show"); ok((await pg.getAttribute("#pin", "type")) === "text", "Show reveals the typed password"); await pg.click("#pin-show");
-  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "ADMIN signs in through the same form");
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "chairperson"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); ok(true, "CHAIR signs in through the same form (role name accepted)");
+  await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "ADMIN signs in through the same form");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "chairperson"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "CHAIR signs in through the same form (role name accepted)");
   /* verification: the code goes to the email on record; a wrong code is refused; the right one creates the password and signs in */
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.click("#pin-toggle"); await pg.fill("#reg-id", mem.id); mails.length = 0; await pg.click("#reg-send"); await pg.waitForSelector("#reg-step2:not([hidden])");
   ok(mails.length === 1 && mails[0].to === mem.email && /code is \d{6}/.test(mails[0].b), "the verification code is emailed to the address on record");
   ok(!/\d{6}/.test(await pg.innerText("#reg-msg")), "the screen never shows the code itself");
   await pg.fill("#reg-code", "000000"); await pg.fill("#reg-pw", "brand-new-pass"); await pg.click("#reg-go"); await pg.waitForSelector("#login-error"); ok(/wrong or has expired/.test(await pg.innerText("#login-error")), "a wrong code is refused");
-  await pg.fill("#reg-code", /code is (\d{6})/.exec(mails[0].b)[1]); await pg.click("#reg-go"); await pg.waitForSelector("#kpis, #member-home, [data-nav]"); ok(true, "the right code creates the password and signs the member in");
+  await pg.fill("#reg-code", /code is (\d{6})/.exec(mails[0].b)[1]); await pg.click("#reg-go"); await pg.waitForSelector("#hero, #member-home, [data-nav]"); ok(true, "the right code creates the password and signs the member in");
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", mem.email); await pg.fill("#pin", "brand-new-pass"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]"); ok(true, "the member can now sign in with their EMAIL and the new password");
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "wrong-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#login-error"); ok(true, "an officer's wrong password is refused with the same plain message");
-  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="ledger"]'); await pg.click("#add-entry"); await pg.selectOption('.modal select[name="m"]', mem.id); await pg.fill('.modal input[name="amount"]', "3000"); await pg.click("[data-submit]");
   await pg.waitForSelector(".toast:not(.bad)"); ok(L.memberSavings(S.readAll(env.ss), mem.id) === L.memberSavings(db0, mem.id) + 3000, "an entry made in the UI is persisted by the server");
   
@@ -67,7 +68,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click('.modal [data-act="void"]'); await pg.selectOption('.modal select[name="reason__sel"]', "__other__"); await pg.fill('.modal input[name="reason__other"]', "e2e void"); await pg.click("[data-submit]"); await pg.waitForFunction(() => [...document.querySelectorAll(".toast:not(.bad)")].some((t) => /Chairperson/.test(t.textContent)));   /* wait for THIS toast, not an older one still on screen */
   ok(/Chairperson/.test(await pg.locator(".toast").last().innerText()) && S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore && (S.readAll(env.ss).approvalRequests || []).length === 1, "Super Admin's void is only a request; nothing changed");
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "CHAIR", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "CHAIR", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="approvals"]'); await pg.waitForSelector("[data-approve]"); ok((await pg.locator('[data-nav="ledger"] ~ * , #add-entry').count()) >= 0 && (await pg.locator("#add-entry").count()) === 0, "Chairperson has no entry buttons");
   await pg.click("[data-approve]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForTimeout(150);
   ok(S.readAll(env.ss).transactions.filter((t) => !t.voided).length === txBefore - 1 && S.readAll(env.ss).approvalRequests[0].status === "Approved" && S.readAll(env.ss).transactions.length >= txBefore, "the Chairperson's approval executes the void; the original transaction is kept");
@@ -103,7 +104,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("15,000"), "remaining allowance updates to UGX 15,000");
   ok((await pg.locator('[data-nav="messages"]').count()) === 0 && (await pg.locator('[data-nav="system"]').count()) === 0, "member has no Messages/System screens");
   await pg.click("#logout"); await pg.waitForSelector("#login-go");
-  await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("[data-fulfil]"); await pg.click("[data-fulfil]"); await pg.waitForSelector(".toast:not(.bad)");
   ok(L.memberSavings(S.readAll(env.ss), airMem.id) === before - 5200, "fulfilling debits airtime + UGX 200 fee from the member's savings, once");
   /* ---- messages: dry-run only ---- */
@@ -121,7 +122,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await signin(pg, newMem.id, "3141"); await pg.click("#login-go"); await pg.waitForSelector("#force-pin"); ok((await pg.locator("[data-nav]").count()) === 0, "a fresh sign-in sees only the choose-your-PIN screen");
   await pg.fill("#fp-old", "3141"); await pg.fill("#fp-new", "2718"); await pg.fill("#fp-new2", "2719"); await pg.click("#fp-go"); await pg.waitForSelector(".toast.bad"); ok(true, "mismatched new PINs are refused");
   await pg.fill("#fp-new2", "2718"); await pg.click("#fp-go"); await pg.waitForSelector('[data-card="My Savings"]'); ok(true, "after choosing a PIN the member reaches their portal");
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await signin(pg, "ADMIN", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   ok(errs.length === 0, "no page errors" + (errs.length ? ": " + errs.join("|") : ""));
   await b.close(); srv.close(); console.log(fails ? fails + " FAILED" : "live e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });

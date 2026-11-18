@@ -1,5 +1,6 @@
 /* (harness shared with reminders.js) Financial-years E2E: the real Admin screen over HTTP against the real backend code on a mock Sheet. Synthetic members only. OFFLINE: no WhatsApp is contacted (wa.me is blocked in the browser).
    Proves: screen refuses without dates, preview/prepare/open/confirm flow and honest delivery states, bulk, live update after a repayment, backend-down behaviour, mobile width, confidentiality, audit. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), L = require("../src/core/ledger.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), D = require("../src/core/dates.js");
@@ -44,7 +45,7 @@ const pend = () => (server().approvalRequests || []).filter((q) => q.command ===
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const errs = [];
   const sess = async (viewport) => { const c = await b.newContext({ viewport }), pg = await c.newPage(); pg.on("pageerror", (e) => errs.push(e.message)); await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); return pg; };
-  const officer = async (pg, id, pin) => { await pg.fill("#mid", id); await pg.fill("#pin", pin); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); };
+  const officer = async (pg, id, pin) => { await pg.fill("#mid", id); await pg.fill("#pin", pin); await pg.click("#login-go"); await pg.waitForSelector("#hero"); };
   const ap = await sess({ width: 1200, height: 900 }); await officer(ap, "ADMIN", "admin-pin-1");
   const ledgerBefore = JSON.stringify(server().transactions) + JSON.stringify(server().loans);
   /* 1. the Financial Years screen: years stand alone */
@@ -57,7 +58,7 @@ const pend = () => (server().approvalRequests || []).filter((q) => q.command ===
   ok(FYM.openingOf(server(), 2026, M1.id) === 0, "nothing opens the year until it is approved");
   const ct = tok("CHAIR", "chair-pin-1"); const rr = cmd(ct, "approveRequest", { id: pend()[0].id }); ok(rr.ok !== false, "the Chairperson approves" + (rr.ok === false ? ": " + JSON.stringify(rr) : ""));
   ok(FYM.openingOf(server(), 2026, M1.id) === 60000, "after approval the member's Financial Year 2026 opens with exactly 60,000");
-  await ap.reload(); await ap.waitForSelector("#kpis"); await ap.click('[data-nav="fyears"]'); await ap.waitForSelector("#fy-span"); txt = await ap.locator("#main").innerText();
+  await ap.reload(); await ap.waitForSelector("#hero"); await ap.click('[data-nav="fyears"]'); await ap.waitForSelector("#fy-span"); txt = await ap.locator("#main").innerText();
   ok(/Authorised Balance Brought Forward/i.test(txt) && /60,000/.test(txt) && /40,000/.test(txt) && /AGM minute 4/.test(txt), "screen now shows the authorised 60,000, 40,000 left in the club position, and the evidence");
   ok(ledgerBefore === JSON.stringify(server().transactions) + JSON.stringify(server().loans), "no ledger entry or loan changed");
   /* 3. explicit period names everywhere */

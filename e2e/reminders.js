@@ -1,5 +1,6 @@
 /* Loan reminders E2E: the real Admin screen over HTTP against the real backend code on a mock Sheet. Synthetic members only. OFFLINE: no WhatsApp is contacted (wa.me is blocked in the browser).
    Proves: screen refuses without dates, preview/prepare/open/confirm flow and honest delivery states, bulk, live update after a repayment, backend-down behaviour, mobile width, confidentiality, audit. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const S = require("../src/backend/store.js"), A = require("../src/backend/auth.js"), API = require("../src/backend/api.js"), L = require("../src/core/ledger.js"), G = require("../src/core/governance.js"), LN = require("../src/core/loans.js"), D = require("../src/core/dates.js");
@@ -36,7 +37,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const ctxB = await b.newContext({ viewport: { width: 1100, height: 900 } }), pg = await ctxB.newPage(); const errs = [];
   pg.on("pageerror", (e) => errs.push(e.message)); await ctxB.route("https://wa.me/**", (r) => r.abort());     // NEVER reach WhatsApp from a test
-  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="reminders"]'); await pg.waitForSelector("#rem-asof");
   ok(await pg.locator("#rem-notset").isVisible(), "before the dates are configured the screen says no reminder can be prepared (nothing guessed)");
   ok(await pg.locator("#rem-bulk").isDisabled(), "bulk preparation is disabled until the dates are set");
@@ -95,7 +96,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* audit */
   ok(["Prepared", "WhatsApp opened", "Sent confirmed by officer", "Bulk prepared"].every((a) => server().auditLog.some((x) => x.entityType === "Reminder" && x.action === a)), "every step is in the audit log");
   /* mobile */
-  const mpg = await (await b.newContext({ viewport: { width: 390, height: 844 } })).newPage(); await mpg.context().route("https://wa.me/**", (r) => r.abort()); await mpg.goto(base + "/app/index.html"); await mpg.waitForSelector("#login-go"); await mpg.fill("#mid", "ADMIN"); await mpg.fill("#pin", "admin-pin-1"); await mpg.click("#login-go"); await mpg.waitForSelector("#kpis");
+  const mpg = await (await b.newContext({ viewport: { width: 390, height: 844 } })).newPage(); await mpg.context().route("https://wa.me/**", (r) => r.abort()); await mpg.goto(base + "/app/index.html"); await mpg.waitForSelector("#login-go"); await mpg.fill("#mid", "ADMIN"); await mpg.fill("#pin", "admin-pin-1"); await mpg.click("#login-go"); await mpg.waitForSelector("#hero");
   await mpg.click('[data-nav="reminders"]'); await mpg.waitForSelector("#rem-asof"); const w = await mpg.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth }));
   ok(w.sw <= w.iw + 1, "mobile 390px: the Reminders screen has no sideways scrolling (" + w.sw + " <= " + w.iw + ")");
   await mpg.locator("[data-prepare]").first().click().catch(() => {}); await mpg.waitForSelector("#rem-open-wa, .toast.bad", { timeout: 8000 }); const w2 = await mpg.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth })); ok(w2.sw <= w2.iw + 1, "mobile: the message window fits the phone (" + w2.sw + " <= " + w2.iw + ")");
@@ -121,7 +122,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
     const mv2 = g(memT).db; ok(!JSON.stringify(mv2).includes("0772555123") && !JSON.stringify(mv2).includes("ruth@example.org"), "another member's contact details never reach a member's own view"); }
   /* A Google deployment still on an earlier version: the exact live symptom ("setReminderDates" in red). It must be explained, and nothing may change. */
   { oldBackend = true; const before = JSON.stringify(g(adminTok).db.policy), opg = await (await b.newContext({ viewport: { width: 1100, height: 900 } })).newPage(); await opg.context().route("https://wa.me/**", (r) => r.abort());
-    await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.fill("#mid", "ADMIN"); await opg.fill("#pin", "admin-pin-1"); await opg.click("#login-go"); await opg.waitForSelector("#kpis");
+    await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.fill("#mid", "ADMIN"); await opg.fill("#pin", "admin-pin-1"); await opg.click("#login-go"); await opg.waitForSelector("#hero");
     await opg.click('[data-nav="reminders"]'); await opg.waitForSelector("#rem-asof");
     ok(/OLDBUILD001/.test(await opg.locator("#rem-backend-old").innerText()) && /NEWBUILD002/.test(await opg.locator("#rem-backend-old").innerText()), "an older Google backend is announced on the Reminders screen with both version ids");
     await opg.click("#rem-dates"); await opg.fill('.modal input[name="so"]', soYear + "-12-26"); await opg.fill('.modal input[name="dl"]', soYear + "-12-12"); await opg.fill('.modal input[name="reason"]', "test"); await opg.click("[data-submit]");

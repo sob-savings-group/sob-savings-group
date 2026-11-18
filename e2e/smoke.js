@@ -1,3 +1,4 @@
+require("./_nav");
 /* Browser smoke/E2E in DEMO mode. Run: node e2e/smoke.js  (needs playwright + a static server; starts its own). */
 const http = require("http"), fs = require("fs"), path = require("path");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
@@ -12,13 +13,18 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     const pg = await b.newPage({ viewport: { width: vp.width, height: vp.height } }); const errs = [];
     pg.on("pageerror", (e) => errs.push(e.message)); pg.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
     await pg.goto(base); await pg.waitForSelector("#demo-go");
-    await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
-    ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, vp.name + ": 6 balance + 9 activity KPI cards");
+    await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
+    ok((await pg.locator("#tiles .tile").count()) === 8 && (await pg.locator("#hero").count()) === 1, vp.name + ": Home shows the savings summary and 8 category tiles");
+    const catCards = {}; for (const k of ["savings", "loans", "income", "cash", "members", "reserve", "attention"]) { await pg.click('[data-tile="' + k + '"]'); await pg.waitForSelector("#cat-" + k); catCards[k] = await pg.locator("#cat-" + k + " .card").count(); await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero"); }
+    ok(Object.values(catCards).every((n) => n >= 1), vp.name + ": every category tile opens its own figures (" + JSON.stringify(catCards) + ")");
+    await pg.click('[data-tile="all"]'); await pg.waitForSelector("#kpis");
+    ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, vp.name + ": All figures: 6 balance + 9 activity KPI cards");
+    await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero");
     ok(await pg.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), vp.name + ": no horizontal page scroll");
-    await pg.click('[data-nav="members"]'); ok((await pg.locator("#back-btn").count()) === 1, vp.name + ": a Back button is shown on inner screens"); if (await pg.locator("#back-btn").isVisible()) await pg.click("#back-btn"); else await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#kpis"); ok((await pg.locator("#back-btn").count()) === 0, vp.name + ": Back returns to the dashboard");
+    await pg.click('[data-nav="members"]'); ok((await pg.locator("#back-btn").count()) === 1, vp.name + ": a Back button is shown on inner screens"); if (await pg.locator("#back-btn").isVisible()) await pg.click("#back-btn"); else await pg.click('[data-nav="dash"]'); await pg.waitForSelector("#hero"); ok((await pg.locator("#back-btn").count()) === 0, vp.name + ": Back returns to the dashboard");
     await pg.click('[data-nav="members"]'); await pg.click('[data-nav="loans"]'); await pg.goBack(); await pg.waitForTimeout(150); ok((await pg.locator('[data-nav="members"].active').count()) === 1 && (await pg.locator("#app").count()) === 1, vp.name + ": the browser/phone Back button steps back one screen");
     await pg.goBack(); await pg.waitForTimeout(150); await pg.goBack(); await pg.waitForTimeout(150); ok((await pg.locator("#logout").count()) === 1, vp.name + ": Back never drops a signed-in user out of the app");
-    await pg.click('[data-nav="dash"]');
+    await pg.click('[data-nav="dash"]'); await pg.click('[data-tile="loans"]'); await pg.waitForSelector('[data-card="Outstanding Loans"]');
     await pg.click('[data-card="Outstanding Loans"]'); await pg.waitForSelector(".modal tbody tr"); await pg.click(".modal tbody tr"); await pg.waitForSelector('.modal [data-act="Change interest"]'); await pg.click('.modal [data-act="Change interest"]'); await pg.fill('.modal input[name="reason"]', "typed work"); await pg.mouse.click(3, 3); ok((await pg.locator('.modal input[name="reason"]').count()) === 1, vp.name + ": tapping outside a form does not lose typed work"); await pg.click(".modal-bg:last-of-type [data-cancel]"); ok((await pg.locator(".modal-bg").count()) === 2, vp.name + ": Cancel closes only the form, the loan window stays"); await pg.goBack(); await pg.waitForTimeout(200); ok((await pg.locator(".modal-bg").count()) === 1, vp.name + ": phone Back closes one window at a time"); await pg.goBack(); await pg.waitForTimeout(200); ok((await pg.locator(".modal-bg").count()) === 0 && (await pg.locator("#logout").count()) === 1, vp.name + ": Back closes the last window and stays in the app");
     await pg.click('[data-card="Outstanding Loans"]'); await pg.waitForSelector(".modal");
     ok((await pg.locator(".modal tbody tr").count()) >= 10, vp.name + ": Outstanding Loans drill-down lists the 10 loans");
@@ -34,21 +40,21 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
     await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#rc-report"); await pg.selectOption("#rc-report", "trial"); await pg.waitForSelector("#rc-result .rc-title"); ok(/Trial Balance/.test(await pg.innerText("#rc-result")) && /Total/.test(await pg.innerText("#rc-result tbody")), vp.name + ": the Trial Balance opens with a Total line");
     await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
     await pg.click('[data-nav="shareout"]'); ok(/To withdraw now/i.test(await pg.locator("#main").innerText()), vp.name + ": share-out shows what each member withdraws");
-    await pg.click('[data-nav="dash"]'); await pg.click('[data-card="Interest Receivable"]'); await pg.waitForSelector(".modal tbody tr"); ok((await pg.locator(".modal tbody tr").count()) >= 1, vp.name + ": Interest Receivable drills down to loans"); await pg.keyboard.press("Escape"); if (await pg.locator(".modal-bg").count()) await pg.locator(".modal-bg").first().click({ position: { x: 2, y: 2 } });
+    await pg.click('[data-nav="dash"]'); await pg.click('[data-tile="income"]'); await pg.click('[data-card="Interest Receivable"]'); await pg.waitForSelector(".modal tbody tr"); ok((await pg.locator(".modal tbody tr").count()) >= 1, vp.name + ": Interest Receivable drills down to loans"); await pg.keyboard.press("Escape"); if (await pg.locator(".modal-bg").count()) await pg.locator(".modal-bg").first().click({ position: { x: 2, y: 2 } });
     await pg.click('[data-nav="profit"]'); await pg.waitForTimeout(100);
     ok((await pg.locator("#profit-cycle").count()) === 1 && /Cycle inputs/i.test(await pg.locator("#main").innerText()) && !/Approved factors/i.test(await pg.locator("#main").innerText()), vp.name + ": Profit shows audited cycle inputs (pool and measurement date are Admin inputs)");
     await pg.click('[data-nav="approvals"]'); await pg.waitForTimeout(100);
     { const tx = await pg.locator("#main").innerText(); ok(/unpaid interest first/i.test(tx) && !/PENDING SOB DECISION|whole loan/i.test(tx), vp.name + ": the fixed repayment rule (interest first) is shown, nothing is pending"); }
     for (const role of ["Chairperson", "Secretary", "Treasurer"]) {
-      await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", role); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
+      await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", role); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
       await pg.click('[data-nav="loans"]'); ok((await pg.locator("#apply, #new-loan, #record-loan").count()) === 0, vp.name + ": " + role + " has no loan-entry buttons");
       await pg.click('[data-nav="ledger"]'); ok((await pg.locator("#add-entry, #new-entry, #record-entry").count()) === (role === "Treasurer" ? 1 : 0), vp.name + ": " + role + (role === "Treasurer" ? " can record a ledger entry" : " has no ledger-entry buttons"));
-      await pg.click('[data-nav="dash"]'); await pg.click('[data-card="Savings Received"]'); await pg.waitForSelector(".modal");
+      await pg.click('[data-nav="dash"]'); await pg.click('[data-tile="savings"]'); await pg.click('[data-card="Savings Received"]'); await pg.waitForSelector(".modal");
       ok((await pg.locator(".modal [data-export]").count()) === (role === "Secretary" ? 0 : 1) && (await pg.locator(".modal [data-dlpdf], .modal [data-print]").count()) === 0, vp.name + ": " + role + (role === "Secretary" ? " (view-only) has no Export / Share" : " has ONE Export / Share button"));
       ok((await pg.locator(".modal .closebtn").count()) === 1 && /Close/.test(await pg.locator(".modal .closebtn").innerText()), vp.name + ": every window has a visible Close button");
       await pg.click(".modal .closebtn"); ok((await pg.locator(".modal").count()) === 0, vp.name + ": Close closes the window");
     }
-    await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
+    await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
     await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Member"); await pg.click("#demo-go"); await pg.waitForSelector('[data-card="My Savings"]');
     ok((await pg.locator("[data-nav]").count()) === 8 && (await pg.locator('[data-nav="members"], [data-nav="approvals"], [data-nav="system"]').count()) === 0, vp.name + ": member sees only member navigation");
     ok((await pg.locator('[data-nav="ledger"]').count()) === 0, vp.name + ": member has no ledger/admin access in UI");

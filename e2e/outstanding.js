@@ -1,5 +1,6 @@
 /* E2E: the Admin "Enter outstanding transactions" screen (derived from records.js). Original: "Load SOB records" screen drives the real backend (bundled Code_Ledger.gs on a mock Sheet) through a real browser:
    pick the records file, check, load, see the reconciliation report, re-load (no duplicates), create sign-ins. Synthetic pack unless PACK=<private pack> is given. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path"), os = require("os"), { execSync } = require("child_process");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const root = path.join(__dirname, ".."); execSync("node " + path.join(root, "build/build-gs.js"));
@@ -19,7 +20,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }), ctx = await b.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } }), pg = await ctx.newPage(), errs = []; pg.on("pageerror", (e) => errs.push(e.message));
   await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
   await pg.fill("#mid", "ADMIN"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "Adm1n-Setup-77"); await pg.click("#login-go");
-  await pg.waitForSelector('[data-nav="system"], #kpis, #pin-new', { timeout: 20000 });
+  await pg.waitForSelector('[data-nav="system"], #hero, #pin-new', { timeout: 20000 });
   if (await pg.locator("#pin-new").count()) { await pg.fill("#pin-old", "Adm1n-Setup-77").catch(() => {}); }
   await pg.click('[data-nav="system"]');
   const packj = JSON.parse(fs.readFileSync(packFile, "utf8")), m0 = packj.legacy.members[0].id;

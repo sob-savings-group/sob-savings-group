@@ -1,5 +1,6 @@
 /* Quality gate: every screen, for every role and many members, on phone AND desktop. Opens every tappable card/row, and fails on page errors,
    "undefined"/"NaN"/"[object" text, empty screens, dead taps (a tap that changes nothing) and horizontal page scroll. Demo data only. */
+require("./_nav");
 const http = require("http"), fs = require("fs"), path = require("path");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
 const root = path.join(__dirname, ".."), mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };

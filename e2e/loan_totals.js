@@ -1,3 +1,4 @@
+require("./_nav");
 /* Loans screen: totals with tap-to-view details, and the interest lock buttons (DEMO data, offline). Run: node e2e/loan_totals.js */
 const http = require("http"), fs = require("fs"), path = require("path");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
@@ -10,7 +11,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] });
   const pg = await b.newPage({ viewport: { width: 390, height: 800 } }); const errs = [];
   pg.on("pageerror", (e) => errs.push(e.message)); pg.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
-  await pg.goto(base); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="loans"]'); await pg.waitForSelector("#loan-totals");
   ok((await pg.locator('#loan-totals [data-card="Total loan amount"]').count()) === 1 && (await pg.locator('#loan-totals [data-card="Total interest"]').count()) === 1, "Loans screen shows Total loan amount and Total interest");
   await pg.screenshot({ path: path.join(root, "shots", "loans-totals.png") });

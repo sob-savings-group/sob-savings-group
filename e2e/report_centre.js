@@ -1,3 +1,4 @@
+require("./_nav");
 /* Report Centre (DEMO data, offline): filters change the report, the totals tie, PDF and Excel files download. Run: node e2e/report_centre.js */
 const http = require("http"), fs = require("fs"), path = require("path");
 let chromium; try { ({ chromium } = require("playwright")); } catch (e) { ({ chromium } = require(process.env.PW_PATH || "/home/claude/.npm-global/lib/node_modules/@playwright/mcp/node_modules/playwright")); }
@@ -9,7 +10,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] });
   const ctx = await b.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true }), pg = await ctx.newPage(), errs = [];
   pg.on("pageerror", (e) => errs.push(e.message)); pg.on("console", (m) => { if (m.type() === "error") errs.push(m.text()); });
-  await pg.goto(base); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
   await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#rc-report");
   const ids = await pg.$$eval("#rc-report optgroup:not(:last-child) option", (o) => o.map((x) => x.value));
   for (const id of ["savings", "loans", "interest", "withdrawals", "deposits", "profit", "shareout", "fysummary", "balances", "outstanding", "repayments", "ledger", "cash", "trial", "audit"]) ok(ids.includes(id), "the Report Centre lists " + id);

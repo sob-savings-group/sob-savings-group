@@ -1,5 +1,6 @@
 /* The dashboard period selector, in a real browser against the real server code: picking a period changes every KPI, a card opens its drill-down,
    the drill-down ties to the card, the PDF carries the same period and total, and entries/loans open at the chosen date. */
+require("./_nav");
 const assert = require("assert"), fs = require("fs"), path = require("path"), http = require("http");
 const { chromium } = require("playwright"), root = path.join(__dirname, ".."), mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 const FYM = require("../src/core/fy.js"), D = require("../src/core/dates.js"), L = require("../src/core/ledger.js"), K = require("../src/core/kpis.js");
@@ -9,7 +10,7 @@ let fails = 0; const ok = (c, m) => { if (c) console.log("  ok  " + m); else { f
   const srv = http.createServer((q, r) => { let u = decodeURIComponent(q.url.split("?")[0]); if (u === "/") u = "/app/index.html"; const f = path.join(root, u); if (!f.startsWith(root) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { r.writeHead(404); return r.end(); } r.writeHead(200, { "Content-Type": mime[path.extname(f)] || "text/plain" }); r.end(fs.readFileSync(f)); });
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const br = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const ctx = await br.newContext({ viewport: { width: 390, height: 844 } }), pg = await ctx.newPage(); const errs = []; pg.on("pageerror", (e) => errs.push(e.message));
-  await pg.goto(base + "/app/index.html"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero"); await pg.click('[data-tile="all"]'); await pg.waitForSelector("#kpis");
   const val = async (label) => (await pg.locator('[data-card="' + label + '"] .val').first().innerText()).replace(/\D/g, "");
   const live = await pg.evaluate(() => window.__SOB.db); const today = D.todayISO(); const YRS = FYM.table(live);
   ok((await pg.locator("#kpis .card").count()) === 6 && (await pg.locator("#activity .card").count()) === 9, "6 balance KPIs and 9 activity KPIs, each with its own basis");
