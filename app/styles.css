@@ -672,3 +672,10 @@ body:has(.login)::before{filter:none}
 .qi{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;color:#fff}
 .qa .ql{font-size:12.5px;font-weight:600;line-height:1.15;text-align:center;color:#fff}
 .focus .trend-d{order:2}
+/* member home balance card: same royal-blue card as the staff dashboard */
+.hero-card{background:linear-gradient(145deg,var(--h1),var(--h2));border:0;box-shadow:0 14px 34px var(--hs);color:#fff}
+.hero-card::before{display:none}
+.hero-card .hl,.hero-card .hs{color:rgba(255,255,255,.8)}.hero-card .hv{color:#fff}
+.hero-card .kv,.hero-card .kv span,.hero-card .kv b,.hero-card div,.hero-card span{color:#fff}
+.hero-card .mini{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.18)}.hero-card .mini .ml,.hero-card .mini .mv{color:#fff}
+.hero-card .lg .ll,.hero-card .lg b{color:#fff}.hero-card .stack .bar{background:rgba(255,255,255,.25)}
