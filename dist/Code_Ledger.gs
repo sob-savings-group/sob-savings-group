@@ -1314,6 +1314,8 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
 })(typeof self !== "undefined" ? self : this, function (G, D) {
   const CHANNELS = ["SMS", "WHATSAPP"];
   const MAX_ATTEMPTS = 3;
+  const RECEIPT_TEMPLATES = ["receipt", "repaymentReceived", "loanDisbursed", "transactionReceipt"];
+  const receiptsOn = (db) => { const r = ((db && db.policy) || []).find((p) => p.id === "reminders"); return !!(r && r.receipts && r.receipts.enabled === true); };
   const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
   const TEMPLATES = {
     receipt: (v) => "SOB: we received " + money(v.amount) + " (" + v.type + ") on " + D.toDisplay(v.date) + ". Ref " + v.ref + ".",
@@ -1329,6 +1331,7 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
     loanReminderSms: (v) => String(v.text || ""),
+    transactionReceipt: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -1366,8 +1369,10 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
     const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
-    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS))).slice(0, limit);
     todo.forEach((m) => {
+      /* A receipt is only worth sending while it is fresh: an old queued one (made while no gateway was live) is cancelled, never sent late, so members are not flooded with old news. */
+      if (RECEIPT_TEMPLATES.includes(m.template) && Date.parse(ctx.now) - Date.parse(m.createdAt) > 3 * 86400000) { m.status = "CANCELLED"; m.reason = "STALE_RECEIPT: older than 3 days, not sent"; out.skipped++; return; }
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
       m.lastAttemptAt = ctx.now;
@@ -1414,6 +1419,7 @@ __M['core/notify'] = (function(){ const module = {exports:{}}; const require = _
   function onCommand(db, ctx, name, args, result) {
     try {
       const q = (memberId, template, vars, key) => queue(db, ctx, { memberId, template, vars, dedupeKey: key });
+      if (receiptsOn(db) && (name === "createEntry" || name === "repayLoan" || name === "disburseLoan")) return;   // the SMS receipt feature (reminders.js) replaces the plain receipts
       if (name === "createEntry" && result && result.memberId && result.approvalStatus === "Approved" && ["Savings", "Repayment", "Subscription", "Withdraw"].includes(result.type)) {
         q(result.memberId, "receipt", { amount: result.amount, type: result.type === "Withdraw" ? "Withdrawal" : result.type, date: result.date, ref: result.id }, "receipt:" + result.id);
       } else if (name === "approveLoan" || name === "declineLoan" || name === "disburseLoan") {
@@ -2383,6 +2389,46 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
+  /* ---------- TRANSACTION SMS RECEIPTS ----------
+     When switched ON (Chairperson-approved) every successful transaction sends the member ONE short SMS: what it was, the amount, the new savings balance and, if the member has an active loan,
+     the loan balance. It goes out automatically, only when the SMS gateway is live. A withdrawal is sent only after a person other than the one who entered it has approved it.
+     Imported historical or outstanding entries never send a receipt. Every message, sent or not, is recorded in the audit trail. A receipt never changes a ledger entry or a balance. */
+  const RECEIPT_MAX = 160, RECEIPT_KIND = { "Savings": ["Savings", "received"], "Subscription": ["Subscription", "received"], "Loan Repayment": ["Loan repayment", "received"], "Withdraw": ["Withdrawal", "paid"], "Loan Disbursement": ["Loan", "paid out"] };
+  function getReceipts(db) { const r = (((db && db.policy) || []).find((p) => p.id === KEY) || {}).receipts || {}; return { enabled: r.enabled === true, updatedBy: r.updatedBy || "", updatedDate: r.updatedDate || "" }; }
+  function setReceipts(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); if (a.enabled === undefined) throw new Error("REQUIRED: enabled");
+    const on = a.enabled === true || a.enabled === "true" || a.enabled === "yes"; db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(getReceipts(db)); rec.receipts = { enabled: on, updatedBy: ctx.by, updatedDate: ctx.today }; G.audit(db, ctx, "ReceiptSms", KEY, "Changed", before, clone(getReceipts(db)), a.reason); return getReceipts(db);
+  }
+  function receiptText(db, e, asOf) {
+    const k = RECEIPT_KIND[e.type], amount = money(e.amount), day = D.isISO(e.date) ? Number(e.date.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(e.date.slice(5, 7)) - 1] : "";
+    const sav = Math.round(L.memberPosition(db, e.memberId).savings), loans = L.activeLoans(db).filter((l) => !l.voided && l.memberId === e.memberId && /^Active$/i.test(String(l.status))), owed = Math.round(loans.reduce((x, l) => x + L.loanOutstanding(l, db, asOf), 0));
+    const head = (d) => "SOB: " + k[0] + " " + amount + " " + k[1] + (d && day ? " " + day : "") + ".", sb = " Savings bal " + money(sav) + ".", lb = owed > 0 ? " Loan bal " + money(owed) + "." : (e.type === "Loan Repayment" ? " Loan cleared." : "");
+    for (const t of [head(true) + sb + lb, head(false) + sb + lb, head(false) + sb, head(false)]) if (t.length <= RECEIPT_MAX) return t;
+    return head(false);
+  }
+  /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
+  function receiptAfter(db, ctx, name, args, result) {
+    try {
+      if (!getReceipts(db).enabled) return; args = args || {}; let e = null;
+      if (name === "createEntry" || name === "recordSubscription" || name === "approveEntry") e = result;
+      else if (name === "repayLoan" || name === "settleLoanFromSavings") e = (db.transactions || []).slice().reverse().find((t) => t.loanId === args.loanId && t.type === "Loan Repayment");
+      else if (name === "disburseLoan") e = (db.transactions || []).slice().reverse().find((t) => t.loanId === args.loanId && t.type === "Loan Disbursement");
+      if (!e || !e.memberId || !RECEIPT_KIND[e.type] || e.approvalStatus !== "Approved" || e.voided) return;
+      if (e.importBatch || e.historical || e.sourceRef || e.splitFrom || e.correctsId) return;              // imported / corrected entries never send receipts
+      if (e.type === "Withdraw" && !(ctx.approvedRequest || (e.approvedBy && e.approvedBy !== e.createdBy))) { G.audit(db, ctx, "ReceiptSms", e.id, "Not sent", null, { memberId: e.memberId, type: e.type }, "Withdrawal receipt waits for approval by someone other than the person who entered it"); return; }
+      N.queue(db, ctx, { memberId: e.memberId, template: "transactionReceipt", vars: { text: receiptText(db, e, ctx.today) }, dedupeKey: "rcpt:" + e.id, channel: "SMS" });
+    } catch (x) { /* a notification problem must never block a financial command */ }
+  }
+  /* sends the receipts just queued, if the SMS gateway is live; otherwise they are cancelled with the reason (never left to go out late); each outcome is audited */
+  function sendReceipts(db, ctx, gateways, ids) {
+    const live = !!(gateways && gateways.SMS && gateways.SMS.live === true), mine = (db.outbox || []).filter((m) => ids.includes(m.id) && m.status === "QUEUED");
+    if (!live) mine.forEach((m) => { m.status = "CANCELLED"; m.reason = "SMS gateway is not live: receipt not sent"; });
+    else if (mine.length) N.dispatch(db, ctx, gateways, { ids: mine.map((m) => m.id) });
+    (db.outbox || []).filter((m) => ids.includes(m.id)).forEach((m) => G.audit(db, ctx, "ReceiptSms", m.id, m.status === "SENT" ? "Sent" : m.status === "SKIPPED" ? "Skipped" : m.status === "FAILED" ? "Failed" : "Not sent", null,
+      { memberId: m.memberId, to: m.to ? m.to.slice(0, -3).replace(/\d/g, "*") + m.to.slice(-3) : "", status: m.status, reason: m.reason || "", text: m.body }, "Automatic transaction receipt"));
+  }
+
   /* ---------- AUTOMATIC REMINDERS (SMS, sent by the daily schedule) ----------
      Three stages, all measured from the approved repayment deadline and configurable (db.policy "reminders".auto; the Chairperson approves any change):
        REGULAR  before the deadline, every `regularEveryDays` days, to members who still owe;
@@ -2440,7 +2486,7 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
     return out;
   }
-  return { getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { getReceipts, setReceipts, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 return module.exports; })();
@@ -2633,6 +2679,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     retireListItem: (db, ctx, a) => G.retireListItem(db, ctx, { list: a.list, label: a.label, reason: a.reason }),
     recordBroughtForward: (db, ctx, a) => FYR.recordBroughtForward(db, ctx, { year: a.year, memberId: a.memberId, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     voidBroughtForward: (db, ctx, a) => FYR.voidBroughtForward(db, ctx, { id: a.id, reason: a.reason }),
+    setReceiptSms: (db, ctx, a) => RM.setReceipts(db, ctx, { enabled: a.enabled, reason: a.reason }),
     setAutoReminders: (db, ctx, a) => RM.setAuto(db, ctx, { enabled: a.enabled, regularEveryDays: a.regularEveryDays, adminAfterDays: a.adminAfterDays, bishopDaysBefore: a.bishopDaysBefore, reason: a.reason }),
     setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
@@ -2658,6 +2705,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
     recordBroughtForward: { perm: "reconcile.manage", label: "Record a member's Balance Brought Forward into a financial year" }, voidBroughtForward: { perm: "reconcile.manage", label: "Void a Balance Brought Forward record" },
     setEscalation: { perm: "policy.manage", label: "Set who is told about overdue loans (church administrator and bishop) and when" },
+    setReceiptSms: { perm: "policy.manage", label: "Switch automatic SMS receipts on or off" },
     setAutoReminders: { perm: "policy.manage", label: "Change the automatic reminder schedule" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
@@ -2681,6 +2729,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "setReceiptSms") return "Automatic SMS receipts to members: " + (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF");
     if (name === "setAutoReminders") return "Automatic reminders " + (a.enabled === undefined ? "settings" : (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF")) + ": regular every " + a.regularEveryDays + " days; Church Administration notice after " + a.adminAfterDays + " days unpaid; Bishop notice " + a.bishopDaysBefore + " days before the deadline";
     if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");
     return a.id || "";
@@ -2712,7 +2761,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     }
     const exec = Object.assign(G.makeCtx({ name: req.requester.name, id: req.requester.id, role: req.requester.role, memberId: req.requester.memberId }, { today: ctx.today, now: ctx.now }), { approvedRequest: req.id, approvedBy: ctx.by });
     const result = COMMANDS[req.command](db, exec, clone(req.args));
-    N.onCommand(db, exec, req.command, clone(req.args), result);                  // the same best-effort notices an ordinary run would queue
+    N.onCommand(db, exec, req.command, clone(req.args), result); RM.receiptAfter(db, exec, req.command, clone(req.args), result);                  // the same best-effort notices an ordinary run would queue
     Object.assign(req, { status: "Approved", decidedBy: ctx.by, decidedDate: ctx.today, decidedAt: ctx.now, decisionNote: String(a.note || "").trim() });
     G.audit(db, ctx, "ApprovalRequest", req.id, "Approved and executed", { status: "Pending" }, { status: "Approved", command: req.command }, "Initiated by " + req.requestedBy + ", approved by " + ctx.by + (a.note ? ": " + a.note : ""));
     return { request: req, result };
@@ -2742,6 +2791,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     const gate = GATED[name];
     if (gate && !ctx.approvedRequest && (!gate.when || gate.when(args))) return requestApproval(db, ctx, name, args || {});
     const result = COMMANDS[name](db, ctx, args || {});
+    if (name !== "approveRequest") RM.receiptAfter(db, ctx, name, args || {}, result);
     N.onCommand(db, ctx, name, args || {}, result);   // best-effort outbox notices; never blocks the command
     return result;
   }
@@ -4128,9 +4178,9 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup, isNode ? require("../core/reminders.js") : root.SOB.reminders);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B, RM) {
   const fail = (error) => ({ ok: false, error });
   const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
@@ -4208,6 +4258,11 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
           const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });  // identity from the SESSION only
           const before = JSON.parse(JSON.stringify(db));
           const result = CMD.run(db, ctx, body.name, body.args);
+          /* automatic SMS receipts: any receipt this command queued is sent now if the SMS gateway is live (otherwise cancelled with the reason). Never blocks or undoes the financial command. */
+          try {
+            const had = new Set((before.outbox || []).map((m) => m.id)), fresh = (db.outbox || []).filter((m) => !had.has(m.id) && m.template === "transactionReceipt").map((m) => m.id);
+            if (fresh.length) RM.sendReceipts(db, G.makeCtx({ id: "AUTO", name: "SMS receipts", role: "Admin" }), env.gateways || {}, fresh);
+          } catch (e) { /* receipts are best-effort */ }
           S.guardNoLoss(before, db);
           const changedSheets = S.writeChanged(env.ss, before, db);
           const rev = Number(S.readMeta(env.ss).revision || 0) + 1;
@@ -4374,7 +4429,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "8fdeb82ea0";
+var SOB_BUILD = "6a7cdedb17";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

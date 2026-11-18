@@ -350,6 +350,46 @@
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
+  /* ---------- TRANSACTION SMS RECEIPTS ----------
+     When switched ON (Chairperson-approved) every successful transaction sends the member ONE short SMS: what it was, the amount, the new savings balance and, if the member has an active loan,
+     the loan balance. It goes out automatically, only when the SMS gateway is live. A withdrawal is sent only after a person other than the one who entered it has approved it.
+     Imported historical or outstanding entries never send a receipt. Every message, sent or not, is recorded in the audit trail. A receipt never changes a ledger entry or a balance. */
+  const RECEIPT_MAX = 160, RECEIPT_KIND = { "Savings": ["Savings", "received"], "Subscription": ["Subscription", "received"], "Loan Repayment": ["Loan repayment", "received"], "Withdraw": ["Withdrawal", "paid"], "Loan Disbursement": ["Loan", "paid out"] };
+  function getReceipts(db) { const r = (((db && db.policy) || []).find((p) => p.id === KEY) || {}).receipts || {}; return { enabled: r.enabled === true, updatedBy: r.updatedBy || "", updatedDate: r.updatedDate || "" }; }
+  function setReceipts(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); if (a.enabled === undefined) throw new Error("REQUIRED: enabled");
+    const on = a.enabled === true || a.enabled === "true" || a.enabled === "yes"; db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(getReceipts(db)); rec.receipts = { enabled: on, updatedBy: ctx.by, updatedDate: ctx.today }; G.audit(db, ctx, "ReceiptSms", KEY, "Changed", before, clone(getReceipts(db)), a.reason); return getReceipts(db);
+  }
+  function receiptText(db, e, asOf) {
+    const k = RECEIPT_KIND[e.type], amount = money(e.amount), day = D.isISO(e.date) ? Number(e.date.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(e.date.slice(5, 7)) - 1] : "";
+    const sav = Math.round(L.memberPosition(db, e.memberId).savings), loans = L.activeLoans(db).filter((l) => !l.voided && l.memberId === e.memberId && /^Active$/i.test(String(l.status))), owed = Math.round(loans.reduce((x, l) => x + L.loanOutstanding(l, db, asOf), 0));
+    const head = (d) => "SOB: " + k[0] + " " + amount + " " + k[1] + (d && day ? " " + day : "") + ".", sb = " Savings bal " + money(sav) + ".", lb = owed > 0 ? " Loan bal " + money(owed) + "." : (e.type === "Loan Repayment" ? " Loan cleared." : "");
+    for (const t of [head(true) + sb + lb, head(false) + sb + lb, head(false) + sb, head(false)]) if (t.length <= RECEIPT_MAX) return t;
+    return head(false);
+  }
+  /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
+  function receiptAfter(db, ctx, name, args, result) {
+    try {
+      if (!getReceipts(db).enabled) return; args = args || {}; let e = null;
+      if (name === "createEntry" || name === "recordSubscription" || name === "approveEntry") e = result;
+      else if (name === "repayLoan" || name === "settleLoanFromSavings") e = (db.transactions || []).slice().reverse().find((t) => t.loanId === args.loanId && t.type === "Loan Repayment");
+      else if (name === "disburseLoan") e = (db.transactions || []).slice().reverse().find((t) => t.loanId === args.loanId && t.type === "Loan Disbursement");
+      if (!e || !e.memberId || !RECEIPT_KIND[e.type] || e.approvalStatus !== "Approved" || e.voided) return;
+      if (e.importBatch || e.historical || e.sourceRef || e.splitFrom || e.correctsId) return;              // imported / corrected entries never send receipts
+      if (e.type === "Withdraw" && !(ctx.approvedRequest || (e.approvedBy && e.approvedBy !== e.createdBy))) { G.audit(db, ctx, "ReceiptSms", e.id, "Not sent", null, { memberId: e.memberId, type: e.type }, "Withdrawal receipt waits for approval by someone other than the person who entered it"); return; }
+      N.queue(db, ctx, { memberId: e.memberId, template: "transactionReceipt", vars: { text: receiptText(db, e, ctx.today) }, dedupeKey: "rcpt:" + e.id, channel: "SMS" });
+    } catch (x) { /* a notification problem must never block a financial command */ }
+  }
+  /* sends the receipts just queued, if the SMS gateway is live; otherwise they are cancelled with the reason (never left to go out late); each outcome is audited */
+  function sendReceipts(db, ctx, gateways, ids) {
+    const live = !!(gateways && gateways.SMS && gateways.SMS.live === true), mine = (db.outbox || []).filter((m) => ids.includes(m.id) && m.status === "QUEUED");
+    if (!live) mine.forEach((m) => { m.status = "CANCELLED"; m.reason = "SMS gateway is not live: receipt not sent"; });
+    else if (mine.length) N.dispatch(db, ctx, gateways, { ids: mine.map((m) => m.id) });
+    (db.outbox || []).filter((m) => ids.includes(m.id)).forEach((m) => G.audit(db, ctx, "ReceiptSms", m.id, m.status === "SENT" ? "Sent" : m.status === "SKIPPED" ? "Skipped" : m.status === "FAILED" ? "Failed" : "Not sent", null,
+      { memberId: m.memberId, to: m.to ? m.to.slice(0, -3).replace(/\d/g, "*") + m.to.slice(-3) : "", status: m.status, reason: m.reason || "", text: m.body }, "Automatic transaction receipt"));
+  }
+
   /* ---------- AUTOMATIC REMINDERS (SMS, sent by the daily schedule) ----------
      Three stages, all measured from the approved repayment deadline and configurable (db.policy "reminders".auto; the Chairperson approves any change):
        REGULAR  before the deadline, every `regularEveryDays` days, to members who still owe;
@@ -407,5 +447,5 @@
     G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
     return out;
   }
-  return { getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { getReceipts, setReceipts, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });

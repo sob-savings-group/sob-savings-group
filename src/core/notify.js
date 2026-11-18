@@ -8,6 +8,8 @@
 })(typeof self !== "undefined" ? self : this, function (G, D) {
   const CHANNELS = ["SMS", "WHATSAPP"];
   const MAX_ATTEMPTS = 3;
+  const RECEIPT_TEMPLATES = ["receipt", "repaymentReceived", "loanDisbursed", "transactionReceipt"];
+  const receiptsOn = (db) => { const r = ((db && db.policy) || []).find((p) => p.id === "reminders"); return !!(r && r.receipts && r.receipts.enabled === true); };
   const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
   const TEMPLATES = {
     receipt: (v) => "SOB: we received " + money(v.amount) + " (" + v.type + ") on " + D.toDisplay(v.date) + ". Ref " + v.ref + ".",
@@ -23,6 +25,7 @@
     repaymentReminder: (v) => "SOB: reminder - loan " + v.ref + " balance is " + money(v.amount) + " as of " + D.toDisplay(v.date) + ".",
     signIn: (v) => "SOB: your sign-in has been set up. Member ID " + v.id + ". Ask the Admin for your PIN in person.",
     loanReminderSms: (v) => String(v.text || ""),
+    transactionReceipt: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
@@ -60,8 +63,10 @@
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
     const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
-    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS)).slice(0, limit);
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS))).slice(0, limit);
     todo.forEach((m) => {
+      /* A receipt is only worth sending while it is fresh: an old queued one (made while no gateway was live) is cancelled, never sent late, so members are not flooded with old news. */
+      if (RECEIPT_TEMPLATES.includes(m.template) && Date.parse(ctx.now) - Date.parse(m.createdAt) > 3 * 86400000) { m.status = "CANCELLED"; m.reason = "STALE_RECEIPT: older than 3 days, not sent"; out.skipped++; return; }
       const ad = gateways[m.channel];
       const to = m.to === "ADMIN" ? normalizePhone(gateways.adminPhone) : m.to;
       m.lastAttemptAt = ctx.now;
@@ -108,6 +113,7 @@
   function onCommand(db, ctx, name, args, result) {
     try {
       const q = (memberId, template, vars, key) => queue(db, ctx, { memberId, template, vars, dedupeKey: key });
+      if (receiptsOn(db) && (name === "createEntry" || name === "repayLoan" || name === "disburseLoan")) return;   // the SMS receipt feature (reminders.js) replaces the plain receipts
       if (name === "createEntry" && result && result.memberId && result.approvalStatus === "Approved" && ["Savings", "Repayment", "Subscription", "Withdraw"].includes(result.type)) {
         q(result.memberId, "receipt", { amount: result.amount, type: result.type === "Withdraw" ? "Withdrawal" : result.type, date: result.date, ref: result.id }, "receipt:" + result.id);
       } else if (name === "approveLoan" || name === "declineLoan" || name === "disburseLoan") {
