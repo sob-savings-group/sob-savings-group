@@ -4,9 +4,9 @@
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup, isNode ? require("../core/reminders.js") : root.SOB.reminders);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B, RM) {
   const fail = (error) => ({ ok: false, error });
   const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
@@ -84,6 +84,11 @@
           const ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });  // identity from the SESSION only
           const before = JSON.parse(JSON.stringify(db));
           const result = CMD.run(db, ctx, body.name, body.args);
+          /* automatic SMS receipts: any receipt this command queued is sent now if the SMS gateway is live (otherwise cancelled with the reason). Never blocks or undoes the financial command. */
+          try {
+            const had = new Set((before.outbox || []).map((m) => m.id)), fresh = (db.outbox || []).filter((m) => !had.has(m.id) && m.template === "transactionReceipt").map((m) => m.id);
+            if (fresh.length) RM.sendReceipts(db, G.makeCtx({ id: "AUTO", name: "SMS receipts", role: "Admin" }), env.gateways || {}, fresh);
+          } catch (e) { /* receipts are best-effort */ }
           S.guardNoLoss(before, db);
           const changedSheets = S.writeChanged(env.ss, before, db);
           const rev = Number(S.readMeta(env.ss).revision || 0) + 1;

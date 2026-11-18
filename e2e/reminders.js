@@ -51,6 +51,8 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   ok(server().approvalRequests.some((r) => r.command === "setAutoReminders" && r.status === "Pending"), "automatic reminders are switched on only through the Chairperson (pending), never by the Admin alone");
   { const rq = server().approvalRequests.find((r) => r.command === "setAutoReminders"), a2 = API.handle(env, { action: "command", token: chair, name: "approveRequest", args: { id: rq.id } }); ok(a2.ok, "the Chairperson approves the automatic schedule"); }
   await pg.click("#rem-recalc"); await pg.waitForFunction(() => /Automatic reminders: ON/.test((document.getElementById("rem-auto") || {}).textContent || "")); ok(true, "the screen shows Automatic reminders: ON");
+  await pg.click("#rem-receipts"); await pg.selectOption('.modal select[name="enabled"]', "true"); await pg.fill('.modal input[name="reason"]', "committee resolution (test)"); await pg.click("[data-submit]"); await pg.waitForTimeout(600);
+  ok(server().approvalRequests.some((r) => r.command === "setReceiptSms" && r.status === "Pending"), "SMS receipts are switched on only through the Chairperson (pending)");
   const rows = () => pg.locator("#main tbody tr").filter({ has: pg.locator("[data-prepare], [data-problem]") });
   ok((await pg.locator("[data-prepare]").count()) === 2 && (await pg.locator("[data-problem]").count()) === 1, "two loans can be reminded, one is blocked (no WhatsApp number) and the settled loan is left out automatically"); void rows;
   ok(/Ruth|No valid Uganda|WhatsApp number/i.test(await pg.locator("[data-problem]").innerText()), "the blocked loan states why");
