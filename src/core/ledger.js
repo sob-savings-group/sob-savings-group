@@ -206,6 +206,10 @@
     if (p.quarter && dates.quarterOf(t.date) !== p.quarter) return false;
     if (p.from && t.date < p.from) return false;
     if (p.to && t.date > p.to) return false;
+    /* SOB boundary rule: on a share-out day D, the share-out and any withdrawal belong to the year that is CLOSING; every other entry dated D belongs to the NEW year. */
+    if (p.fy) { const settle = t.type === "Share-Out" || t.type === "Withdraw";
+      if (p.fyOpened && p.from === p.fyOpened && t.date === p.fyOpened && settle) return false;
+      if (p.fyClosed && p.to === p.fyClosed && t.date === p.fyClosed && !settle) return false; }
     return true;
   }
   function memberLifetimeHistory(db, memberId, period) {

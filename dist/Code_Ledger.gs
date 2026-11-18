@@ -307,6 +307,10 @@ __M['core/ledger'] = (function(){ const module = {exports:{}}; const require = _
     if (p.quarter && dates.quarterOf(t.date) !== p.quarter) return false;
     if (p.from && t.date < p.from) return false;
     if (p.to && t.date > p.to) return false;
+    /* SOB boundary rule: on a share-out day D, the share-out and any withdrawal belong to the year that is CLOSING; every other entry dated D belongs to the NEW year. */
+    if (p.fy) { const settle = t.type === "Share-Out" || t.type === "Withdraw";
+      if (p.fyOpened && p.from === p.fyOpened && t.date === p.fyOpened && settle) return false;
+      if (p.fyClosed && p.to === p.fyClosed && t.date === p.fyClosed && !settle) return false; }
     return true;
   }
   function memberLifetimeHistory(db, memberId, period) {
@@ -3656,10 +3660,12 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
     const audience = opts.audience === "admin" || (opts.audience !== "member" && opts.internal) ? "admin" : "member";   // a Member statement is the default; the Administrative statement must be asked for
     const m = (db.members || []).find((x) => x.id === memberId); if (!m) throw new Error("NOT_FOUND: member " + memberId);
     const today = opts.today || dates.todayISO(), to = period.to && period.to < today ? period.to : today, from = period.from || "", dd = asAt(db, to);
-    const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to), inP = hist.filter((t) => !from || t.date >= from);
+    const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to);
     /* A financial-year statement (the period starts on the day a year opened) is INDEPENDENT: it opens with the recorded Balance Brought Forward only, never with an inherited balance.
        Any other period (lifetime, a month, custom dates) is a running balance of the ledger and is labelled as such. */
     const fyc = from ? FY.table(dd).find((c) => c.openedDate === from && to <= (c.closedDate || "9999-12-31")) : null;
+    /* a financial-year statement follows the share-out-day rule: the share-out belongs to the year that closes, every other entry of that day to the year that opens */
+    const tbl = fyc ? FY.table(dd) : null, inP = fyc ? hist.filter((t) => FY.yearOfEntry(dd, t, tbl) === fyc.year) : hist.filter((t) => !from || t.date >= from);
     let opening, closing, fyInfo = null;
     if (fyc) { const pos = FY.position(dd, fyc.year).rows.find((x) => x.memberId === memberId) || { opening: 0, previousClosing: 0, notBroughtForward: 0 }; opening = pos.opening; fyInfo = { label: fyc.label, previousClosing: pos.previousClosing, notBroughtForward: pos.notBroughtForward, hasPrevious: FY.table(dd).some((c) => c.year < fyc.year) }; }
     else opening = from ? L.memberSavingsAsOf(dd, memberId, dates.addDays(from, -1)) : 0;
@@ -4447,7 +4453,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "3f6af86ad9";
+var SOB_BUILD = "8333447b0c";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

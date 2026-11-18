@@ -15,13 +15,17 @@
 
   /* ---- the period every report uses: a financial year (from share-out to share-out), or the dates typed, or "start of records to today" ---- */
   function periodOf(db, f, today) {
-    f = f || {}; let from = "", to = today, label = "";
-    if (f.year) { const c = FYM.byYear(db, f.year); if (c) { from = c.openedDate || ""; to = c.closedDate && c.closedDate < today ? c.closedDate : today; label = c.label + " · "; } }
-    if (f.from) from = f.from; if (f.to) to = f.to > today ? today : f.to;
+    f = f || {}; let from = "", to = today, label = "", fy = null;
+    if (f.year) { const c = FYM.byYear(db, f.year); if (c) { from = c.openedDate || ""; to = c.closedDate && c.closedDate < today ? c.closedDate : today; label = c.label + " · "; fy = { fy: c.year, fyOpened: c.openedDate || "", fyClosed: c.closedDate || null }; } }
+    if (f.from) { from = f.from; fy = null; } if (f.to) { to = f.to > today ? today : f.to; fy = null; }
     if (from && to < from) throw new Error("INVALID: the end date is before the start date");
-    return { from, to, text: label + (from ? D.longDate(from) + " – " + D.longDate(to) : "Start of records – " + D.longDate(to)) };
+    return Object.assign({ from, to, text: label + (from ? D.longDate(from) + " – " + D.longDate(to) : "Start of records – " + D.longDate(to)) }, fy || {});
   }
-  const inP = (p) => (t) => (!p.from || t.date >= p.from) && t.date <= p.to;
+  const inP = (p) => (t) => L.inPeriod(t, p);
+  /* the date an entry counts on for this period: a share-out/withdrawal on the opening share-out day belongs to the year before (so it is before the start); anything else on the closing share-out day belongs to the next year (so it is after the end) */
+  const SETT = ["Share-Out", "Withdraw"];
+  const effDate = (p, t) => { if (p.fy && p.fyOpened && p.from === p.fyOpened && t.date === p.fyOpened && SETT.includes(t.type)) return D.addDays(t.date, -1); if (p.fy && p.fyClosed && p.to === p.fyClosed && t.date === p.fyClosed && !SETT.includes(t.type)) return D.addDays(t.date, 1); return t.date; };
+  const upToP = (db, p) => Object.assign({}, db, { transactions: (db.transactions || []).filter((t) => effDate(p, t) <= p.to) });
   const mk = (title, columns, labels, rows, o) => Object.assign({ title, columns, labels, rows, totals: {}, notes: [] }, o || {});
   const totalsOf = (rows, cols) => { const o = {}; cols.forEach((c) => { o[c] = sum(rows, c); }); return o; };
   const live = (db) => L.activeTransactions(db);
@@ -34,7 +38,7 @@
 
   /* wrap a dashboard figure so its report, the dashboard card and the PDF all come from one calculation */
   const kpi = (key, sumCols, memberKey) => (db, f, p) => {
-    const r = K.report(db, key, { from: p.from, to: p.to }), mf = memberOk(f), id = f.memberId;
+    const r = K.report(db, key, p.fy ? { from: p.from, to: p.to, fy: p.fy, fyOpened: p.fyOpened, fyClosed: p.fyClosed } : { from: p.from, to: p.to }), mf = memberOk(f), id = f.memberId;
     let rows = r.rows; const filtered = !!id;
     if (id) rows = rows.filter((x) => (memberKey || ["memberId"]).some((k) => x[k] === id || x[k] === nm(db, id)) || (x.loanId && (db.loans || []).some((l) => l.id === x.loanId && l.memberId === id)));
     return mk(r.title.replace(/ — .*$/, ""), r.columns, r.labels, rows, { totals: Object.assign({}, filtered ? {} : r.totals, totalsOf(rows, sumCols || [])), notes: [r.definition].filter(Boolean) });
@@ -44,7 +48,7 @@
   def("Savings and members", "savings", "Savings Report", "Every member's savings as at the end date.", ["period", "member"], (db, f, p) => {
     const r = kpi("totalSavings", ["savings"])(db, f, p); r.title = "Savings Report"; return r; });
   def("Savings and members", "balances", "Member Balances", "Savings, loan still owed and the net position of every member as at the end date.", ["period", "member", "status"], (db, f, p) => {
-    const d = upTo(db, p.to), out = {}; L.activeLoansAsAt(d, p.to).forEach((l) => { out[l.memberId] = (out[l.memberId] || 0) + Math.max(0, L.loanOutstanding(l, d, p.to)); });
+    const d = upToP(db, p), out = {}; L.activeLoansAsAt(d, p.to).forEach((l) => { out[l.memberId] = (out[l.memberId] || 0) + Math.max(0, L.loanOutstanding(l, d, p.to)); });
     const sav = {}; live(d).forEach((t) => { const e = L.classifyTransaction(t); if (e.savings && t.memberId) sav[t.memberId] = (sav[t.memberId] || 0) + e.savings; });
     const rows = (db.members || []).filter((m) => (!f.memberId || m.id === f.memberId) && (!f.status || m.status === f.status)).map((m) => ({ memberId: m.id, member: m.name, status: m.status || "", savings: sav[m.id] || 0, loanOwed: out[m.id] || 0, net: (sav[m.id] || 0) - (out[m.id] || 0) }));
     return mk("Member Balances", ["memberId", "member", "status", "savings", "loanOwed", "net"], { memberId: "Member ID", member: "Member", status: "Status", savings: "Savings (UGX)", loanOwed: "Loan owed (UGX)", net: "Savings less loan (UGX)" }, rows, { totals: totalsOf(rows, ["savings", "loanOwed", "net"]), notes: ["Loan owed is the loan plus interest charged to the date, less repayments."] }); });
@@ -54,13 +58,13 @@
 
   /* Loans and interest */
   def("Loans and interest", "loans", "Loan Report", "Every loan with its amount, interest, repayments and balance as at the end date.", ["period", "member", "status"], (db, f, p) => {
-    const d = upTo(db, p.to), rows = K.loanBook(d, p.to).filter((v) => { const l = db.loans.find((x) => x.id === v.id); return l && l.date <= p.to && (!f.memberId || l.memberId === f.memberId) && (!f.status || v.status === f.status); })
+    const d = upToP(db, p), rows = K.loanBook(d, p.to).filter((v) => { const l = db.loans.find((x) => x.id === v.id); return l && l.date <= p.to && (!f.memberId || l.memberId === f.memberId) && (!f.status || v.status === f.status); })
       .map((v) => { const l = db.loans.find((x) => x.id === v.id); return { loanId: v.id, memberId: l.memberId, member: nm(db, l.memberId), date: kd(l.date), principal: v.principal, interest: v.accumulatedInterest, repaid: v.repaid, balance: v.balance, status: v.status, locked: v.interestLocked ? "Interest locked" : "" }; });
     return mk("Loan Report", ["loanId", "member", "date", "principal", "interest", "repaid", "balance", "status", "locked"], { loanId: "Loan", member: "Member", date: "Paid out", principal: "Loan amount (UGX)", interest: "Interest charged (UGX)", repaid: "Repaid (UGX)", balance: "Balance (UGX)", status: "Status", locked: "Interest" }, rows, { totals: totalsOf(rows, ["principal", "interest", "repaid", "balance"]) }); });
   def("Loans and interest", "outstanding", "Outstanding Loans", "Loans still owed at the end date.", ["period", "member"], (db, f, p) => { const r = kpi("outstandingLoans", ["principal", "interestCharged", "penalties", "repaid", "balance"], ["member"])(db, f, p); r.title = "Outstanding Loans"; return r; });
   def("Loans and interest", "repayments", "Loan Repayments", "Repayments received in the period.", ["period", "member"], (db, f, p) => kpi("repaymentsReceived", ["amount"], ["memberId", "member"])(db, f, p));
   def("Loans and interest", "interest", "Interest Report", "Interest charged, interest received and interest still unpaid, loan by loan, as at the end date.", ["period", "member", "status"], (db, f, p) => {
-    const d = upTo(db, p.to), rows = L.activeLoansAsAt(d, p.to).filter((l) => (!f.memberId || l.memberId === f.memberId) && (!f.status || l.status === f.status)).map((l) => { const w = L.loanInterestPosition(l, d, p.to);
+    const d = upToP(db, p), rows = L.activeLoansAsAt(d, p.to).filter((l) => (!f.memberId || l.memberId === f.memberId) && (!f.status || l.status === f.status)).map((l) => { const w = L.loanInterestPosition(l, d, p.to);
       return { loanId: l.id, member: nm(db, l.memberId), charged: w.accruedInterest, received: w.interestPaid, unpaid: w.unpaidInterest, locked: L.loanInterestLocked(l) ? "Locked" : "" }; });
     return mk("Interest Report", ["loanId", "member", "charged", "received", "unpaid", "locked"], { loanId: "Loan", member: "Member", charged: "Interest charged (UGX)", received: "Interest received (UGX)", unpaid: "Interest unpaid (UGX)", locked: "Interest" }, rows, { totals: totalsOf(rows, ["charged", "received", "unpaid"]), notes: ["Each repayment clears unpaid interest first, then the loan."] }); });
   def("Loans and interest", "disbursed", "Loans Paid Out", "Loans paid out in the period.", ["period", "member"], (db, f, p) => kpi("loansDisbursed", ["amount"], ["memberId", "member"])(db, f, p));
@@ -82,7 +86,7 @@
   /* Accounts */
   def("Accounts", "cash", "Cash Position", "Cash at the start, money in, money out and cash at the end of the period, by kind of entry.", ["period"], (db, f, p) => {
     const tx = live(db).filter((t) => L.classifyTransaction(t).cashflow !== 0); let open = 0; const inn = {}, out = {};
-    tx.forEach((t) => { const c = L.classifyTransaction(t).cashflow; if (p.from && t.date < p.from) open += c; else if (t.date <= p.to) { if (c > 0) inn[t.type] = (inn[t.type] || 0) + c; else out[t.type] = (out[t.type] || 0) - c; } });
+    tx.forEach((t) => { const c = L.classifyTransaction(t).cashflow; if (p.from && effDate(p, t) < p.from) open += c; else if (effDate(p, t) <= p.to) { if (c > 0) inn[t.type] = (inn[t.type] || 0) + c; else out[t.type] = (out[t.type] || 0) - c; } });
     const rows = [{ line: "Cash at the start", moneyIn: 0, moneyOut: 0, balance: open }]; let run = open;
     Object.keys(inn).sort().forEach((k) => { run += inn[k]; rows.push({ line: k, moneyIn: inn[k], moneyOut: 0, balance: run }); });
     Object.keys(out).sort().forEach((k) => { run -= out[k]; rows.push({ line: k, moneyIn: 0, moneyOut: out[k], balance: run }); });
@@ -90,13 +94,13 @@
     return mk("Cash Position", ["line", "moneyIn", "moneyOut", "balance"], { line: "Line", moneyIn: "Money in (UGX)", moneyOut: "Money out (UGX)", balance: "Cash (UGX)" }, rows, { totals: { cashAtTheStart: open, cashAtTheEnd: run } }); });
   def("Accounts", "ledger", "General Ledger", "Every entry in date order, with the effect on cash, savings and loans.", ["period", "member"], (db, f, p) => {
     let cash = 0, sv = 0, rows = []; const all = live(db).slice().sort(byDate);
-    all.forEach((t) => { const e = L.classifyTransaction(t); if (f.memberId && t.memberId === f.memberId && t.date <= p.to) sv += e.savings; if (p.from && t.date < p.from) { cash += e.cashflow; return; } if (t.date > p.to) return; cash += e.cashflow;
+    all.forEach((t) => { const e = L.classifyTransaction(t); if (f.memberId && t.memberId === f.memberId && effDate(p, t) <= p.to) sv += e.savings; if (p.from && effDate(p, t) < p.from) { cash += e.cashflow; return; } if (effDate(p, t) > p.to) return; cash += e.cashflow;
       if (f.memberId && t.memberId !== f.memberId) return;
       rows.push({ savingsAfter: sv, date: kd(t.date), entry: t.id, member: t.memberId ? nm(db, t.memberId) : "Group", type: t.type, details: t.purpose || "", moneyIn: e.cashflow > 0 ? e.cashflow : 0, moneyOut: e.cashflow < 0 ? -e.cashflow : 0, savings: e.savings, loan: e.loan, cash }); });
     const cols = ["date", "entry", "member", "type", "details", "moneyIn", "moneyOut", "savings", "loan"].concat(f.memberId ? ["savingsAfter"] : ["cash"]);
     return mk("General Ledger", cols, { date: "Date", entry: "Entry", member: "Member", type: "Type", details: "Details", moneyIn: "Money in (UGX)", moneyOut: "Money out (UGX)", savings: "Savings effect (UGX)", loan: "Loan effect (UGX)", cash: "Cash after (UGX)", savingsAfter: "Member savings after (UGX)" }, rows, { totals: totalsOf(rows, ["moneyIn", "moneyOut", "savings", "loan"]), notes: ["Only approved entries are shown; cancelled entries and entries awaiting approval count nowhere."] }); });
   def("Accounts", "trial", "Trial Balance", "Every account with its debit or credit balance as at the end date. Debits must equal credits.", ["period"], (db, f, p) => {
-    const d = upTo(db, p.to), tx = live(d); let cash = 0, savings = 0, exp = 0, subs = 0, other = 0, ip = 0, princ = 0;
+    const d = upToP(db, p), tx = live(d); let cash = 0, savings = 0, exp = 0, subs = 0, other = 0, ip = 0, princ = 0;
     tx.forEach((t) => { const e = L.classifyTransaction(t); cash += e.cashflow; savings += e.savings; if (t.type === "Expense") exp += Number(t.amount) || 0; if (t.type === "Subscription") subs += Number(t.amount) || 0; if (t.type === "Income") other += Number(t.amount) || 0; });
     L.activeLoansAsAt(d, p.to).forEach((l) => { const w = L.loanInterestPosition(l, d, p.to); ip += w.interestPaid + w.penaltiesPaid; princ += Math.max(0, w.principalOutstanding); });
     const lines = [["Cash", cash, 0], ["Loans receivable (principal)", princ, 0], ["Expenses", exp, 0], ["Members' savings", 0, savings], ["Interest and penalties received", 0, ip], ["Subscriptions", 0, subs], ["Other income", 0, other]];
@@ -105,7 +109,7 @@
     if (diff !== 0) { rows.push({ account: "Difference not yet explained", debit: diff < 0 ? -diff : 0, credit: diff > 0 ? diff : 0 }); notes.push("The debits and credits differ by UGX " + Math.abs(diff).toLocaleString("en-US") + ". Nothing has been adjusted to hide it."); }
     rows.push({ account: "Total", debit: sum(rows, "debit"), credit: sum(rows, "credit") });
     return mk("Trial Balance", ["account", "debit", "credit"], { account: "Account", debit: "Debit (UGX)", credit: "Credit (UGX)" }, rows, { totals: { difference: diff }, notes, balanced: diff === 0 }); });
-  def("Accounts", "income", "Income and Expenses", "Income and expenses recorded in the period.", ["period"], (db, f, p) => { const r = R.incomeExpenses(db, { from: p.from, to: p.to }); return mk("Income and Expenses", r.columns, r.labels || {}, r.rows, { totals: r.totals }); });
+  def("Accounts", "income", "Income and Expenses", "Income and expenses recorded in the period.", ["period"], (db, f, p) => { const r = R.incomeExpenses(db, p.fy ? { from: p.from, to: p.to, fy: p.fy, fyOpened: p.fyOpened, fyClosed: p.fyClosed } : { from: p.from, to: p.to }); return mk("Income and Expenses", r.columns, r.labels || {}, r.rows, { totals: r.totals }); });
 
   /* Records */
   def("Records", "audit", "Audit Report", "Every recorded action: who did it, when, to what, and why.", ["period", "member"], (db, f, p) => {

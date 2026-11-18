@@ -51,10 +51,12 @@
     const audience = opts.audience === "admin" || (opts.audience !== "member" && opts.internal) ? "admin" : "member";   // a Member statement is the default; the Administrative statement must be asked for
     const m = (db.members || []).find((x) => x.id === memberId); if (!m) throw new Error("NOT_FOUND: member " + memberId);
     const today = opts.today || dates.todayISO(), to = period.to && period.to < today ? period.to : today, from = period.from || "", dd = asAt(db, to);
-    const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to), inP = hist.filter((t) => !from || t.date >= from);
+    const hist = L.memberLifetimeHistory(dd, memberId, null).filter((t) => t.date <= to);
     /* A financial-year statement (the period starts on the day a year opened) is INDEPENDENT: it opens with the recorded Balance Brought Forward only, never with an inherited balance.
        Any other period (lifetime, a month, custom dates) is a running balance of the ledger and is labelled as such. */
     const fyc = from ? FY.table(dd).find((c) => c.openedDate === from && to <= (c.closedDate || "9999-12-31")) : null;
+    /* a financial-year statement follows the share-out-day rule: the share-out belongs to the year that closes, every other entry of that day to the year that opens */
+    const tbl = fyc ? FY.table(dd) : null, inP = fyc ? hist.filter((t) => FY.yearOfEntry(dd, t, tbl) === fyc.year) : hist.filter((t) => !from || t.date >= from);
     let opening, closing, fyInfo = null;
     if (fyc) { const pos = FY.position(dd, fyc.year).rows.find((x) => x.memberId === memberId) || { opening: 0, previousClosing: 0, notBroughtForward: 0 }; opening = pos.opening; fyInfo = { label: fyc.label, previousClosing: pos.previousClosing, notBroughtForward: pos.notBroughtForward, hasPrevious: FY.table(dd).some((c) => c.year < fyc.year) }; }
     else opening = from ? L.memberSavingsAsOf(dd, memberId, dates.addDays(from, -1)) : 0;
