@@ -40,7 +40,7 @@ window.SOBMember = function (E) {
   }
   const statementButtons = () => h("div", { class: "row" }, h("button", { class: "primary", id: "open-statement", onclick: () => openStatement(me(), false) }, Icon("book", 18), " View full statement"));
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
-  const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name: you can view balances and statements. Sign in with your PIN to request a loan or change your PIN.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
+  const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name: you can view balances and statements. Sign in with your password to request a loan or change your password.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
   /* ---------- HOME ---------- */
   function home() {
@@ -101,8 +101,8 @@ window.SOBMember = function (E) {
   /* ---------- LOANS ---------- */
   function applyForm() {
     const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
-    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }],
-      act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt) }); }, "Application sent. We will update you here."), "Send application");
+    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
+      act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt), purpose: f.purpose }); }, "Application sent. We will update you here."), "Send application");
   }
   function loans() {
     const list = myLoans(), el = h("div", null, signInfo());
@@ -114,7 +114,7 @@ window.SOBMember = function (E) {
         h("div", { class: "row", style: "justify-content:space-between;align-items:center;margin:0" }, h("div", { class: "lbl" }, ugx(l.loanAmount) + " loan"), badge(lbl, kind)),
         live ? h("div", null, h("div", { class: "val t-loan" }, ugx(s.v.balance)), h("div", { class: "sub" }, l.status === "Cleared" ? "Fully repaid" : "You owe"), Progress(s.paid, "c-avail", "Principal repaid"), h("div", { class: "sub" }, s.paid + "% of the loan repaid")) : h("div", { class: "sub", style: "margin-top:8px" }, nextStep(l))));
     });
-    el.append(h("p", { class: "mute", style: "font-size:13px" }, "Interest is set per loan and grows monthly. Each repayment clears interest first, then the loan."));
+    el.append(null);
     return el;
   }
   const nextStep = (l) => ({ Pending: "The Admin is reviewing your application and any guarantors.", AwaitingApproval: "Reviewed. Waiting for the Chairperson's approval.", Approved: "Approved. The payout will be recorded by the Admin.", Declined: "This application was declined." + (l.declineReason ? " Reason: " + l.declineReason : "") }[l.status] || "");
@@ -140,7 +140,7 @@ window.SOBMember = function (E) {
     if (reqs.length) {
       el.append(h("div", { id: "guarantee-requests" }, Section("Waiting for your answer"), h("p", { class: "mute" }, "If you accept, the amount is held from your savings until the loan is repaid.")));
       reqs.forEach((g) => el.lastChild.append(h("div", { class: "card", style: "margin-bottom:12px" }, h("div", { class: "lbl" }, who(loanOf(g).memberId) + " asks you to guarantee"), h("div", { class: "val t-commit" }, ugx(g.amount)), h("div", { class: "sub" }, "On a loan of " + ugx(loanOf(g).loanAmount || 0) + " · you have " + ugx(pos.available) + " available"),
-        viewOnly() ? h("p", { class: "mute" }, "Sign in with your PIN to answer.") : h("div", { class: "row" }, h("button", { class: "primary", "data-accept-guarantee": g.id, onclick: () => Confirm("Accept this guarantee?", ugx(g.amount) + " of your savings will be set aside until the loan is repaid.", "Yes, accept", act(async () => commit("acceptGuarantee", { id: g.id, evidence: "Accepted by the guarantor in the member portal" }), "Accepted — " + ugx(g.amount) + " is now set aside")) }, "Accept"),
+        viewOnly() ? h("p", { class: "mute" }, "Sign in with your password to answer.") : h("div", { class: "row" }, h("button", { class: "primary", "data-accept-guarantee": g.id, onclick: () => Confirm("Accept this guarantee?", ugx(g.amount) + " of your savings will be set aside until the loan is repaid.", "Yes, accept", act(async () => commit("acceptGuarantee", { id: g.id, evidence: "Accepted by the guarantor in the member portal" }), "Accepted — " + ugx(g.amount) + " is now set aside")) }, "Accept"),
           h("button", { class: "danger", "data-decline-guarantee": g.id, onclick: () => Form("Decline guarantee", [{ name: "reason", label: "Reason (optional)" }], act(async (f) => commit("declineGuarantee", { id: g.id, reason: f.reason }), "Declined"), "Decline") }, "Decline")))));
     }
     el.append(Hero({ label: "Held for loans you guarantee", value: ugx(pos.committed), sub: "Part of your savings, set aside until borrowers repay", cls: "", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }, { label: "Held", value: pos.committed, cls: "c-commit" }]) }));
@@ -149,13 +149,21 @@ window.SOBMember = function (E) {
     return el;
   }
 
+  /* Add or change the email on record: a 6-digit code goes to the NEW address and only that code makes it the email on record. */
+  function changeEmail() {
+    Form("Email on record", [{ name: "email", label: "Your email address", type: "email" }], act(async (f) => {
+      await st.store.call({ action: "emailStart", email: String(f.email || "").trim() });
+      Form("Enter the code we emailed", [{ name: "code", label: "6-digit code", inputmode: "numeric" }], act(async (g) => { await st.store.call({ action: "emailVerify", code: String(g.code || "").trim() }); await st.store.load(); st.db = st.store.db; }, "Email saved"), "Confirm");
+    }, "Code sent. Check your inbox."), "Send code");
+  }
   /* ---------- MORE / SUBSCRIPTIONS / SHARE-OUT ---------- */
   function more() {
     const m = st.db.members.find((x) => x.id === me()) || {}, off = !!m.notifyOptOut;
     return h("div", null, signInfo(), List([
       Row({ icon: "receipt", title: "Annual subscription", sub: ugx(S.cycle.SUBSCRIPTION_AMOUNT) + " a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
       viewOnly() ? null : Row({ icon: "bell", title: "SMS / WhatsApp notices", sub: off ? "Off — tap to switch on" : "On — tap to switch off", onOpen: act(async () => commit("setNotifyOptOut", { memberId: me(), optOut: !off }), off ? "Notices switched on" : "Notices switched off") }),
-      viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my PIN", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
+      viewOnly() || !st.live ? null : Row({ icon: "mail", title: "Email on record", sub: m.email ? m.email + " · tap to change" : "None yet · tap to add (used to recover your password)", onOpen: changeEmail }),
+      viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my password", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
       Section("Need help?"), List(help().map((o) => h("a", { class: "li click", href: "tel:" + o[2].replace(/\s/g, ""), style: "text-decoration:none;color:inherit" }, h("div", { class: "lic" }, Icon("phone")), h("div", { class: "lm" }, h("div", { class: "lt" }, o[0]), h("div", { class: "ls" }, o[1])), h("div", { class: "lr" }, h("b", null, o[2]))))));
   }
   function subs() {

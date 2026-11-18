@@ -188,7 +188,7 @@
   }
 
   /* --- workflow --- */
-  function applyForLoan(db, ctx, memberId, amount) {
+  function applyForLoan(db, ctx, memberId, amount, purpose) {
     G.require(ctx, "loan.apply");
     if (ctx.role === "Member" && ctx.memberId !== memberId) throw new Error("FORBIDDEN: members apply only for themselves");
     if (!db.members.some((m) => m.id === memberId)) throw new Error("UNKNOWN_MEMBER: " + memberId);
@@ -196,7 +196,7 @@
     if (!(L.memberSavings(db, memberId) > 0)) throw new Error("NO_SAVINGS: a member must have savings before applying");
     if (L.memberHasOutstandingLoan(db, memberId)) throw new Error("HAS_OUTSTANDING_LOAN: clear the existing loan first");
     if ((db.loans || []).some((l) => l.memberId === memberId && !l.voided && PRE_DISBURSE.includes(l.status))) throw new Error("ALREADY_APPLIED");
-    const loan = { id: G.uid("LOAN"), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
+    const loan = { id: G.uid("LOAN"), purpose: String(purpose || "").trim().slice(0, 80), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
       applicationDate: ctx.today, appliedBy: ctx.by, graceMonths: 0 };
     db.loans.push(loan);
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });

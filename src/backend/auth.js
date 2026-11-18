@@ -52,7 +52,7 @@
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    let u = findUser(db, id) || roleAlias(db, id), byName = false;
+    let u = String(id || "").indexOf("@") > 0 ? (resolveByEmail(db, id) || {}).user : (findUser(db, id) || roleAlias(db, id)), byName = false;
     if (!u) { u = memberByFullName(db, id); byName = !!u; }
     /* identity is verified here: PIN, or the SOB ID + one of the member's own names (the same trust as the view-only sign-in) */
     if (!u) {
@@ -74,23 +74,65 @@
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
-  /* SELF-SERVICE PASSWORD. A member whose account still has an officer-issued temporary PIN proves who they are with the SOB ID + the phone number
-     on record, then chooses their own password. Refused once the member has made their own (an officer's reset re-opens it). Shares the sign-in lock-out. */
-  const digits = (x) => String(x || "").replace(/\D+/g, "");
+  /* VERIFICATION CODES. A member creates (or recovers) their own password by proving they control the contact the group holds for them: first the EMAIL on record,
+     and only when there is none, the PHONE on record (SMS). The code is 6 digits, valid 10 minutes, 5 tries, one request a minute and 5 an hour. Only a hash of it is stored.
+     The reply never reveals whether an ID or email exists. These functions are pure: the caller sends the message. */
+  const OTP_TTL = 600, OTP_TRIES = 5, OTP_GAP = 60, OTP_HOURLY = 5, digits = (x) => String(x || "").replace(/\D+/g, "");
+  const lc = (x) => String(x || "").trim().toLowerCase(), isEmail = (x) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(x || "").trim());
+  const mask = (e) => { const p = String(e).split("@"); return p[0].slice(0, 1) + "***@" + p[1]; };
+  function resolveByEmail(db, email) {
+    const e = lc(email), ms = (db.members || []).filter((m) => lc(m.email) === e);
+    const us = (db.users || []).filter((x) => x.status !== "Disabled" && (lc(x.email) === e || ms.some((m) => m.id === x.memberId)));
+    return us.length === 1 ? { user: us[0], member: (db.members || []).find((m) => m.id === us[0].memberId) || null } : null;
+  }
+  function resolve(db, ident) {
+    const r = String(ident || "").indexOf("@") > 0 ? resolveByEmail(db, ident) : (() => { const u = findUser(db, ident); return u ? { user: u, member: (db.members || []).find((m) => m.id === u.memberId) || null } : null; })();
+    return r && r.user.role === "Member" && r.member && !statusKind(r.member.status) ? r : null;
+  }
+  const newCode = (env) => String(parseInt(env.hash(env.randomToken() + env.randomToken()).slice(0, 8), 16) % 1000000).padStart(6, "0");
   const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
-  function claim(env, db, id, phone, newPassword) {
-    const k = "fail:" + String(id || "").toUpperCase(), fails = Number(env.cache.get(k) || 0);
-    if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    const u = findUser(db, id), m = u && u.role === "Member" && (db.members || []).find((x) => x.id === u.memberId);
-    const phones = u ? [u.phone, m && m.phone, m && m.contact].filter(Boolean) : [];
-    if (!u || u.role !== "Member" || !phones.some((p) => samePhone(p, phone))) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "NOT_VERIFIED: we could not match that SOB ID and phone number" }; }
-    const kind = statusKind(m && m.status); if (kind) return blockedError(kind);
-    if (!(u.mustChange === true || u.mustChange === "true")) return { ok: false, error: "ALREADY_SET: you already created a password. Sign in, or ask an officer to reset it" };
+  /* Returns { ok:true, send:{channel,to,subject,body} | null }. send is null when nothing should go out (unknown member, no contact, too soon): the caller replies identically. */
+  function otpStart(env, db, ident) {
+    const out = { ok: true, send: null }, r = resolve(db, ident); if (!r) return out;
+    const id = r.user.id, gap = "otpgap:" + id, cnt = "otpcnt:" + id;
+    if (env.cache.get(gap) || Number(env.cache.get(cnt) || 0) >= OTP_HOURLY) return out;
+    const email = [r.member.email, r.user.email].find(isEmail), phone = [r.member.phone, r.user.phone, r.member.contact].find((p) => digits(p).length >= 9);
+    if (!email && !phone) return out;
+    const code = newCode(env), channel = email ? "email" : "sms", to = email ? String(email).trim() : phone;
+    env.cache.put("otp:" + id, JSON.stringify({ h: env.hash(code + ":" + id), n: 0 }), OTP_TTL); env.cache.put(gap, "1", OTP_GAP); env.cache.put(cnt, Number(env.cache.get(cnt) || 0) + 1, 3600);
+    const text = "Your Sons of Bethel Savings Group code is " + code + ". It works for 10 minutes. Never share it with anyone.";
+    out.send = { channel, to, subject: "Your Sons of Bethel verification code", body: channel === "email" ? text + "\n\nIf you did not ask for this code, ignore this message; your account is unchanged." : text };
+    return out;
+  }
+  /* The code proves the contact; the member then chooses a password (at least 6 characters). The same flow serves first-time sign-up and a forgotten password. */
+  function otpVerify(env, db, ident, code, newPassword) {
+    const r = resolve(db, ident), bad = { ok: false, error: "BAD_CODE: that code is wrong or has expired" };
+    if (!r) return bad; const id = r.user.id, k = "fail:" + id.toUpperCase();
+    if (Number(env.cache.get(k) || 0) >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
     if (String(newPassword || "").length < MIN_OWN) return { ok: false, error: "WEAK_PIN: use at least " + MIN_OWN + " characters" };
-    u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
-    env.cache.remove(k);
+    let e = null; try { e = JSON.parse(env.cache.get("otp:" + id) || "null"); } catch (x) { e = null; }
+    if (!e || e.n >= OTP_TRIES) return bad;
+    if (!safeEq(env.hash(String(code || "").trim() + ":" + id), e.h)) { e.n++; env.cache.put("otp:" + id, JSON.stringify(e), OTP_TTL); env.cache.put(k, Number(env.cache.get(k) || 0) + 1, LOCK_SECONDS); return bad; }
+    const u = r.user; u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
+    env.cache.remove("otp:" + id); env.cache.remove(k);
     const token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
     return { ok: true, token, user: publicUser(u), updated: u };
+  }
+  /* Adding or changing the email on record (signed in): a code goes to the NEW address and nothing is saved until it is entered. */
+  function emailStart(env, db, user, email) {
+    email = String(email || "").trim(); if (!isEmail(email)) return { ok: false, error: "INVALID: enter a valid email address" };
+    const taken = (db.members || []).some((m) => lc(m.email) === lc(email) && m.id !== user.memberId) || (db.users || []).some((x) => lc(x.email) === lc(email) && x.id !== user.id);
+    if (taken) return { ok: false, error: "INVALID: that email address cannot be used" };
+    const gap = "emailgap:" + user.id; if (env.cache.get(gap)) return { ok: false, error: "WAIT: please wait a minute before asking for another code" };
+    const code = newCode(env); env.cache.put(gap, "1", OTP_GAP);
+    env.cache.put("emailotp:" + user.id, JSON.stringify({ h: env.hash(code + ":" + lc(email)), email, n: 0 }), OTP_TTL);
+    return { ok: true, send: { channel: "email", to: email, subject: "Confirm your email for Sons of Bethel", body: "Your Sons of Bethel Savings Group code is " + code + ". It works for 10 minutes. Never share it with anyone." } };
+  }
+  function emailVerify(env, db, user, code) {
+    let e = null; try { e = JSON.parse(env.cache.get("emailotp:" + user.id) || "null"); } catch (x) { e = null; }
+    const bad = { ok: false, error: "BAD_CODE: that code is wrong or has expired" }; if (!e || e.n >= OTP_TRIES) return bad;
+    if (!safeEq(env.hash(String(code || "").trim() + ":" + lc(e.email)), e.h)) { e.n++; env.cache.put("emailotp:" + user.id, JSON.stringify(e), OTP_TTL); return bad; }
+    env.cache.remove("emailotp:" + user.id); return { ok: true, email: e.email };
   }
   /* ADMIN PIN recovery. Pure rule, called only from the Apps Script editor (never from the web app). It can change ONE thing: the PIN of the single Super Admin.
      It has no user-id parameter, so it cannot be pointed at the Chairperson, Treasurer, a member or anyone else. Returns the updated users list; the caller audits and saves. */
@@ -125,5 +167,5 @@
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, claim, publicUser, findUser, recoverAdminPin };
+  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, otpStart, otpVerify, emailStart, emailVerify, publicUser, findUser, recoverAdminPin };
 });

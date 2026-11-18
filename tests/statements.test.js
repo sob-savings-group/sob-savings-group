@@ -15,6 +15,11 @@ const tx = (db, id, date, type, amount, extra) => db.transactions.push(Object.as
     const p = S.memberAccount(db, "SOB-900", { from: "2025-03-01", to: "2025-12-31" }, { today: "2026-10-10" }).savings; assert.equal(p.opening, 105000); assert.equal(p.closing, 35000); assert.ok(p.checks.movementsAddUp);
     const past = S.memberAccount(db, "SOB-900", { to: "2025-02-28" }, { today: "2026-10-10" }); assert.equal(past.savings.closing, 105000); assert.equal(past.transactions.length, 2);
   });
+  await t("accounting presentation: a negative amount in a statement is in brackets and red; positives are plain", () => {
+    const db = mk(); tx(db, "T1", "2025-01-10", "Savings", 100000); tx(db, "T3", "2025-03-10", "Withdraw", 20000);
+    const html = S.toPrintHTML(S.memberAccount(db, "SOB-900", {}, { today: "2026-10-10" }));
+    assert.ok(!/>\s*(UGX\s*)?[-\u2212]\s*\d/.test(html), "no raw minus sign is left in a figure cell"); assert.ok(/td\.neg\{color:#b3261e\}/.test(html), "the red rule is in the print stylesheet");
+  });
   await t("a loan: the working is calendar months (less any grace the Chairperson authorised), and the parts add up to what is owed", () => {
     const db = mk(); tx(db, "TXN-L1", "2025-12-21", "Loan Disbursement", 2000000, { loanId: "LOAN-X" });
     db.loans.push({ id: "LOAN-X", date: "2025-12-21", memberId: "SOB-900", loanAmount: 2000000, assignedMonthlyInterest: 60000, graceMonths: 3, graceAuthorisedBy: "Chairperson (test)", status: "Active", dueDate: "2026-03-21", interestHistory: [], dateUnknown: true, placeholderDate: "2025-12-21" });

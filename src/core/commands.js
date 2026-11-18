@@ -7,6 +7,53 @@
 })(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
+
+    /* OUTSTANDING ENTRIES: records the owner has confirmed but not yet entered, supplied as a PRIVATE file (never in the repository). Everything goes through the
+       existing rules: Savings and Loan Repayment post with their original date (repayments through repayLoan, so the loan, its owner, its start date and the outstanding
+       balance are all checked); every Withdraw is stored as a request the Chairperson must approve. Each entry carries a unique sourceRef, so a second run adds nothing.
+       The whole batch is trial-run on a copy first: if any line fails, nothing at all is posted. */
+    processOutstandingEntries: (db, ctx, a) => {
+      G.require(ctx, "ledger.create"); G.require(ctx, "loan.repay");
+      const batch = String(a.batchId || "").trim(), approvedBy = String(a.approvedBy || "").trim(), list = a.entries;
+      if (!/^[A-Za-z0-9._-]{3,40}$/.test(batch)) throw new Error("INVALID: batchId");
+      G.need(approvedBy, "approvedBy"); if (!Array.isArray(list) || !list.length || list.length > 100) throw new Error("INVALID: entries must be a list of 1 to 100 lines");
+      const refs = new Set(), plan = list.map((e, i) => {
+        const ref = "OUTSTANDING|" + batch + "|" + (e.ref || i + 1); if (refs.has(ref)) throw new Error("INVALID: line " + (i + 1) + " repeats reference " + ref); refs.add(ref);
+        const amount = Number(e.amount); if (!Number.isInteger(amount) || amount <= 0) throw new Error("INVALID: line " + (i + 1) + " amount");
+        if (!isRealDate(String(e.date || ""))) throw new Error("INVALID: line " + (i + 1) + " needs a real date YYYY-MM-DD"); if (e.date > ctx.today) throw new Error("INVALID: line " + (i + 1) + " is dated in the future");
+        if (!["Savings", "Loan Repayment", "Withdraw"].includes(e.type)) throw new Error("INVALID: line " + (i + 1) + " type must be Savings, Loan Repayment or Withdraw");
+        if (!db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: line " + (i + 1) + " " + e.memberId);
+        if (e.type === "Loan Repayment") { if (!e.loanId) throw new Error("REQUIRED: line " + (i + 1) + " needs the loan ID"); } else if (e.loanId) throw new Error("INVALID: line " + (i + 1) + " must not carry a loan ID");
+        return { i, ref, date: e.date, memberId: e.memberId, type: e.type, amount, loanId: e.loanId || "" };
+      }).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.i - y.i));
+      const exec = (work) => plan.map((p) => {
+        const row = { line: p.i + 1, ref: p.ref, date: p.date, memberId: p.memberId, type: p.type, amount: p.amount, loanId: p.loanId };
+        const dup = work.transactions.find((t) => t.sourceRef === p.ref) || (work.approvalRequests || []).find((r) => r.command === "postOutstandingWithdrawal" && r.args && r.args.sourceRef === p.ref);
+        if (dup) return Object.assign(row, { result: "already processed", detail: dup.id });
+        const tag = { sourceRef: p.ref, importBatch: batch, importNote: "Outstanding entry confirmed by " + approvedBy };
+        if (p.type === "Savings") { const e = G.createEntry(work, ctx, Object.assign({ date: p.date, memberId: p.memberId, amount: p.amount, type: "Savings", purpose: "Savings" }, tag)); return Object.assign(row, { result: "posted", detail: e.id }); }
+        if (p.type === "Loan Repayment") {
+          const loan = work.loans.find((l) => l.id === p.loanId); if (!loan) throw new Error("LOAN_NOT_FOUND: line " + row.line + " " + p.loanId);
+          if (loan.memberId !== p.memberId) throw new Error("LOAN_MISMATCH: line " + row.line + " loan " + p.loanId + " belongs to " + loan.memberId + ", not " + p.memberId);
+          const n = work.transactions.length; LN.repayLoan(work, ctx, p.loanId, p.amount, p.date);
+          const e = work.transactions[work.transactions.length - 1]; if (work.transactions.length !== n + 1 || e.type !== "Loan Repayment" || e.loanId !== p.loanId) throw new Error("INTERNAL: repayment line " + row.line + " was not recorded as expected");
+          Object.assign(e, tag); return Object.assign(row, { result: "posted", detail: e.id });
+        }
+        const r = run(work, ctx, "postOutstandingWithdrawal", Object.assign({ date: p.date, memberId: p.memberId, amount: p.amount }, tag));
+        return Object.assign(row, { result: "awaiting Chairperson approval", detail: r.requestId });
+      });
+      const trial = clone(db), rows = exec(trial);                                // any failure here stops everything before the real ledger is touched
+      const summary = { posted: rows.filter((r) => r.result === "posted").length, awaitingApproval: rows.filter((r) => r.result.startsWith("awaiting")).length, alreadyProcessed: rows.filter((r) => r.result === "already processed").length };
+      if (a.dryRun) return Object.assign({ dryRun: true, batchId: batch, rows }, summary);
+      const done = exec(db);
+      G.audit(db, ctx, "OutstandingBatch", batch, "Outstanding entries processed", null, { posted: summary.posted, awaitingApproval: summary.awaitingApproval, alreadyProcessed: summary.alreadyProcessed, refs: done.map((r) => r.ref) }, "Confirmed by " + approvedBy + "; original dates kept");
+      return Object.assign({ dryRun: false, batchId: batch, rows: done }, summary);
+    },
+    postOutstandingWithdrawal: (db, ctx, a) => {
+      G.require(ctx, "ledger.create"); if (!a.sourceRef) throw new Error("REQUIRED: sourceRef");
+      if (db.transactions.some((t) => t.sourceRef === a.sourceRef)) throw new Error("DUPLICATE: " + a.sourceRef + " was already posted");
+      return G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: "Withdraw", purpose: "Member withdrawal", sourceRef: a.sourceRef, importBatch: a.importBatch, importNote: a.importNote });
+    },
     splitRepayment: (db, ctx, a) => {
       G.require(ctx, "reconcile.manage"); G.need(a.reason, "reason"); G.need(a.evidence, "evidence");
       const t = db.transactions.find((x) => x.id === a.id); if (!t) throw new Error("NOT_FOUND: entry " + a.id);
@@ -40,7 +87,7 @@
     approveEntry: (db, ctx, a) => { const t = G.approveEntry(db, ctx, a.id, a.decision, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
     updateMemberContact: (db, ctx, a) => G.updateMemberContact(db, ctx, { memberId: a.memberId, phone: a.phone, email: a.email, location: a.location, allowShared: !!a.allowShared, reason: a.reason }),
-    applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
+    applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount, a.purpose),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
     acceptGuarantee: (db, ctx, a) => LN.acceptGuarantee(db, ctx, a.id, { evidence: a.evidence }),
     declineGuarantee: (db, ctx, a) => LN.declineGuarantee(db, ctx, a.id, a.reason),
@@ -128,6 +175,8 @@
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
+    queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
     syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
@@ -137,6 +186,7 @@
     retireListItem: (db, ctx, a) => G.retireListItem(db, ctx, { list: a.list, label: a.label, reason: a.reason }),
     recordBroughtForward: (db, ctx, a) => FYR.recordBroughtForward(db, ctx, { year: a.year, memberId: a.memberId, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     voidBroughtForward: (db, ctx, a) => FYR.voidBroughtForward(db, ctx, { id: a.id, reason: a.reason }),
+    setAutoReminders: (db, ctx, a) => RM.setAuto(db, ctx, { enabled: a.enabled, regularEveryDays: a.regularEveryDays, adminAfterDays: a.adminAfterDays, bishopDaysBefore: a.bishopDaysBefore, reason: a.reason }),
     setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
@@ -151,6 +201,7 @@
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
     closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
+    postOutstandingWithdrawal: { perm: "ledger.create", label: "Post a confirmed withdrawal that was not yet entered" },
     settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
@@ -159,6 +210,8 @@
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
     transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
     recordBroughtForward: { perm: "reconcile.manage", label: "Record a member's Balance Brought Forward into a financial year" }, voidBroughtForward: { perm: "reconcile.manage", label: "Void a Balance Brought Forward record" },
+    setEscalation: { perm: "policy.manage", label: "Set who is told about overdue loans (church administrator and bishop) and when" },
+    setAutoReminders: { perm: "policy.manage", label: "Change the automatic reminder schedule" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
@@ -170,6 +223,8 @@
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
     if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
+    if (name === "postOutstandingWithdrawal") return "Withdrawal UGX " + a.amount + " for " + a.memberId + " dated " + a.date + " (outstanding entry, batch " + (a.importBatch || "") + ")";
+    if (name === "setEscalation") return "Overdue-loan escalation: church administrator after " + ((a.steps || {}).ADMIN || {}).afterDays + " day(s), bishop after " + ((a.steps || {}).BISHOP || {}).afterDays + " day(s) past the approved deadline";
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
@@ -179,6 +234,7 @@
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "setAutoReminders") return "Automatic reminders " + (a.enabled === undefined ? "settings" : (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF")) + ": regular every " + a.regularEveryDays + " days; Church Administration notice after " + a.adminAfterDays + " days unpaid; Bishop notice " + a.bishopDaysBefore + " days before the deadline";
     if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");
     return a.id || "";
   };

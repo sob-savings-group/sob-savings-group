@@ -38,6 +38,7 @@
       members: (db.members || []).filter((m) => related[m.id]).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),   // only the member and the people tied to their own loans/guarantees: no other member is disclosed
       transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
       loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
+      loanPurposes: G.listOptions(db, "loan.Purpose"),   // only the wording of the loan purposes on offer: no other configuration is sent
       yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
@@ -47,10 +48,19 @@
     try {
       if (body.action === "ping") return { ok: true, pong: true };
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
-      if (body.action === "claim") {   // a member creates their own password (SOB ID + phone number on record)
+      /* Verification codes (public, no session): sent to the email on record, or by SMS when there is no email. The reply is the same whether or not the details matched. */
+      if (body.action === "otpStart") {
+        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id);
+        const generic = { ok: true, message: "If those details match a member, a code has been sent to the email on record (or by SMS if there is no email). It works for 10 minutes." };
+        if (!r.send) return generic;
+        if (r.send.channel === "email") { try { if (!env.mail) throw new Error("no mail"); env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); } }
+        else { const sms = env.gateways && env.gateways.SMS, to = N.normalizePhone(r.send.to); if (!sms || !sms.live || !to) return fail("SMS_UNAVAILABLE: the text message could not be sent. Ask the Secretary for help"); const x = sms.send({ to, body: r.send.body }); if (!x || !x.ok) return fail("SMS_UNAVAILABLE: the text message could not be sent. Ask the Secretary for help"); }
+        return generic;
+      }
+      if (body.action === "otpVerify") {   // the code proves the contact; the member chooses a password (first time or forgotten)
         env.lock.waitLock(20000);
         try {
-          const users = S.readCollection(env.ss, "users"), r = A.claim(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.phone, body.password);
+          const users = S.readCollection(env.ss, "users"), r = A.otpVerify(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.code, body.password);
           if (!r.ok) return r;
           S.writeCollection(env.ss, "users", users);
           return { ok: true, token: r.token, user: r.user };
@@ -103,6 +113,22 @@
           if (body.action === "listBackups") return { ok: true, backups: B.list(env.ss) };
           if (body.action === "exportBackup") return { ok: true, backup: B.makeExport(env, S.readAll(env.ss), "export by " + user.id) };
           const r = B.read(env.ss, env, body.id); return r.ok ? { ok: true, id: r.id, revision: r.revision, counts: r.counts } : fail(r.error);
+        } finally { env.lock.releaseLock(); }
+      }
+      if (body.action === "emailStart") {
+        const r = A.emailStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, user, body.email); if (!r.ok) return r;
+        try { env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); }
+        return { ok: true, message: "A code was sent to " + r.send.to };
+      }
+      if (body.action === "emailVerify") {
+        env.lock.waitLock(20000);
+        try {
+          const members = S.readCollection(env.ss, "members"), users = S.readCollection(env.ss, "users"), r = A.emailVerify(env, { users, members }, user, body.code); if (!r.ok) return r;
+          const db = S.readAll(env.ss), before = JSON.parse(JSON.stringify(db)), ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
+          const m = db.members.find((x) => x.id === user.memberId), u = db.users.find((x) => x.id === user.id), old = (m && m.email) || (u && u.email) || "";
+          if (m) m.email = r.email; else if (u) u.email = r.email; else return fail("NOT_FOUND");
+          G.audit(db, ctx, "Member", user.memberId || user.id, "Email on record changed", { email: old }, { email: r.email }, "Verified by code sent to the new address");
+          S.writeChanged(env.ss, before, db); return { ok: true, email: r.email };
         } finally { env.lock.releaseLock(); }
       }
       if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone

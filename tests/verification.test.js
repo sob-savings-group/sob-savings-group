@@ -1,0 +1,28 @@
+/* Registration and password recovery by verification code: email first, SMS only when there is no email. Sign-in by email. */
+const assert = require("assert"), crypto = require("crypto"), A = require("../src/backend/auth.js");
+const store = {}; let n = 0;
+const env = { hash: (s) => crypto.createHash("sha256").update(s).digest("hex"), randomToken: () => crypto.randomBytes(6).toString("hex") + (++n), cache: { get: (k) => (k in store ? store[k] : null), put: (k, v) => { store[k] = v; }, remove: (k) => { delete store[k]; } } };
+const mk = (id, pin, mc) => A.makeUser(env, { id, role: "Member", memberId: id, name: id, pin, mustChange: mc });
+const db = { members: [{ id: "SOB-001", name: "Aaron", phone: "0772 123 456", email: "Aaron@Example.com", status: "Active" }, { id: "SOB-002", name: "Grace", phone: "0772000222", email: "", status: "Active" }, { id: "SOB-003", name: "Peter", phone: "0701000333", email: "peter@example.com", status: "Inactive" }, { id: "SOB-004", name: "Ruth", phone: "", email: "", status: "Active" }],
+  users: [mk("SOB-001", "123456", true), mk("SOB-002", "222222", true), mk("SOB-003", "333333", true), mk("SOB-004", "444444", true), A.makeUser(env, { id: "ADMIN", role: "Admin", name: "Admin", pin: "adminpin1" })] };
+const reset = () => Object.keys(store).forEach((k) => delete store[k]);
+const code = (r) => String(r.error).split(":")[0]; let ok = 0; const t = (_, f) => { reset(); f(); ok++; };
+const sent = (id) => { const r = A.otpStart(env, db, id); assert.ok(r.ok); return r.send; };
+const digitsOf = (s) => /code is (\d{6})/.exec(s.body)[1];
+t("a member with an email gets the code by EMAIL, even if a phone is also on record", () => { const s = sent("SOB-001"); assert.strictEqual(s.channel, "email"); assert.strictEqual(s.to, "Aaron@Example.com"); });
+t("a member with no email gets it by SMS to the phone on record", () => { const s = sent("SOB-002"); assert.strictEqual(s.channel, "sms"); assert.strictEqual(s.to, "0772000222"); });
+t("no contact, unknown ID, and an inactive member: nothing is sent, and the reply looks the same", () => { ["SOB-004", "SOB-099", "SOB-003", ""].forEach((i) => assert.strictEqual(A.otpStart(env, db, i).send, null)); });
+t("the member can ask by email address instead of the SOB ID", () => assert.strictEqual(sent("aaron@example.com").channel, "email"));
+t("one request a minute: the second is silently not sent", () => { assert.ok(sent("SOB-001")); assert.strictEqual(A.otpStart(env, db, "SOB-001").send, null); });
+t("the right code sets the password, signs in, and clears the first-time flag", () => { const c = digitsOf(sent("SOB-001")); const r = A.otpVerify(env, db, "SOB-001", c, "my-new-pass"); assert.ok(r.ok && r.token); assert.ok(!db.users[0].mustChange); assert.ok(A.login(env, db, "SOB-001", "my-new-pass").ok);
+  assert.strictEqual(code(A.otpVerify(env, db, "SOB-001", c, "again-again")), "BAD_CODE", "a code works once"); db.users[0] = mk("SOB-001", "123456", true); });
+t("a wrong code is refused and nothing changes", () => { sent("SOB-001"); const before = db.users[0].pinHash; assert.strictEqual(code(A.otpVerify(env, db, "SOB-001", "000000", "my-new-pass")), "BAD_CODE"); assert.strictEqual(db.users[0].pinHash, before); });
+t("a short password is refused and does not use up the code", () => { const c = digitsOf(sent("SOB-001")); assert.strictEqual(code(A.otpVerify(env, db, "SOB-001", c, "abc")), "WEAK_PIN"); assert.ok(A.otpVerify(env, db, "SOB-001", c, "long-enough").ok); db.users[0] = mk("SOB-001", "123456", true); });
+t("five wrong codes lock the account, even for the right code afterwards", () => { const c = digitsOf(sent("SOB-001")); for (let i = 0; i < 5; i++) A.otpVerify(env, db, "SOB-001", "111111", "long-enough"); assert.strictEqual(code(A.otpVerify(env, db, "SOB-001", c, "long-enough")), "LOCKED"); });
+t("forgotten password works the same way for a member who already has one", () => { db.users[1] = mk("SOB-002", "oldpass22", false); const c = digitsOf(sent("SOB-002")); assert.ok(A.otpVerify(env, db, "SOB-002", c, "brand-new-1").ok); assert.ok(A.login(env, db, "SOB-002", "brand-new-1").ok); assert.ok(!A.login(env, db, "SOB-002", "oldpass22").ok); db.users[1] = mk("SOB-002", "222222", true); });
+t("staff accounts cannot be recovered by code (the Admin does that)", () => assert.strictEqual(A.otpStart(env, db, "ADMIN").send, null));
+t("sign-in by email address and password", () => { db.users[0] = mk("SOB-001", "secret-pw1", false); const r = A.login(env, db, "aaron@example.com", "secret-pw1"); assert.ok(r.ok); assert.strictEqual(r.user.id, "SOB-001"); assert.ok(!A.login(env, db, "aaron@example.com", "wrong-one").ok); db.users[0] = mk("SOB-001", "123456", true); });
+t("an email shared by two members signs nobody in", () => { db.members[1].email = "aaron@example.com"; assert.ok(!A.login(env, db, "aaron@example.com", "222222").ok); db.members[1].email = ""; });
+t("adding an email on record: nothing is saved until the code from that address is entered", () => { const u = { id: "SOB-002", memberId: "SOB-002" }; const r = A.emailStart(env, db, u, "grace@example.com"); assert.ok(r.ok); const c = digitsOf(r.send); assert.strictEqual(code(A.emailVerify(env, db, u, "000000")), "BAD_CODE"); const v = A.emailVerify(env, db, u, c); assert.ok(v.ok); assert.strictEqual(v.email, "grace@example.com"); });
+t("an email already used by another member is refused", () => assert.strictEqual(code(A.emailStart(env, db, { id: "SOB-002", memberId: "SOB-002" }, "peter@example.com")), "INVALID"));
+console.log(ok + " verification tests passed");

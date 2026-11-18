@@ -31,78 +31,57 @@
         h("div", { class: "row" }, h("button", { class: "primary", id: "demo-go", onclick: () => { const r = role.value; const m = st.db.members.find((x) => x.id === mem.value);
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter")));
     } else {
-      /* ONE sign-in for everybody. The server identifies the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB005", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Your password", inputmode: "text", autocomplete: "current-password", enterkeyhint: "go" });
+      /* ONE sign-in for everybody: SOB ID, Staff ID or email + password. The server finds the role; render() then shows only what that role may use. */
+      const mid = h("input", { id: "mid", placeholder: "SOB ID, Staff ID or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Password", autocomplete: "current-password", enterkeyhint: "go" });
+      const show = h("button", { type: "button", id: "pin-show", class: "ghost", "aria-label": "Show or hide password", onclick: () => { const on = pin.type === "password"; pin.type = on ? "text" : "password"; show.textContent = on ? "Hide" : "Show"; } }, "Show");
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
-      const MSG = { NOT_VERIFIED: "We could not match that SOB ID and phone number. Ask the Treasurer or Secretary to check the number the group has for you.", ALREADY_SET: "You already created a password. Sign in with it, or ask an officer to reset it.", WEAK_PIN: "Choose a password of at least 6 characters.", BAD_CREDENTIALS: "Access denied. We could not verify your membership details. Please confirm your SOB ID or contact the Administrator.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator for assistance.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator for assistance." };
-      const OFFICER_ID = /^(admin|administrator|superadmin|chair|chairperson|chairman|treas|treasurer|sec|secr|secretary)$/i;
-      /* ONE place that runs a sign-in and shows the outcome; "produce" returns the store.login() promise (or throws a format message). */
-      const attempt = async (produce, kind, typedId) => {
+      const MSG = { BAD_CREDENTIALS: "Incorrect ID or password. Please check and try again.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator.", BAD_CODE: "That code is wrong or has expired. Request a new one.", WEAK_PIN: "Choose a password of at least 6 characters.", EMAIL_UNAVAILABLE: "We could not send the email. Please contact the Secretary.", SMS_UNAVAILABLE: "We could not send the text message. Please contact the Secretary." };
+      const normId = (v) => { v = String(v || "").trim(); return v.indexOf("@") > 0 ? v : v.replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")); };
+      const attempt = async (produce) => {
         if (working) return; working = true; problem.replaceChildren();
         try {
-          const u = await produce();
-          st.user = u; st.view = null;
+          const u = await produce(); st.user = u; st.view = null;
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
         } catch (e) {
-          const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || "");
-          problem.replaceChildren();
-          if (conn) connBanner(problem, e);   /* a connection/deployment problem is never hidden in a disappearing toast: it stays on screen with the exact cause and who to call */
-          else if (e.code === "BAD_CREDENTIALS" && kind === "officer") problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Access denied. Check your Staff ID and PIN. If you are a member, use the Member login instead."));
-          else if (MSG[e.code]) {
-            problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code]));
-            if (e.code === "BAD_CREDENTIALS" && kind === "member" && OFFICER_ID.test(String(typedId || "").trim())) problem.append(h("div", { class: "hint", id: "login-officer-hint" }, "Officers (ADMIN, CHAIR, TREASURER, SECRETARY): please use the Officer login tab."));
-          } else toast(e.code === "LOCKED" ? "Too many attempts. Try again in 15 minutes." : friendly(e), true);
-        }
-        finally { working = false; }
+          const conn = /^(ENDPOINT_|NETWORK|TIMEOUT|SERVER_ERROR|SIGNIN_CONTRACT)/.test(e.code || ""); problem.replaceChildren();
+          if (conn) connBanner(problem, e);
+          else if (MSG[e.code]) problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code]));
+          else problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, e.code === "LOCKED" ? "Too many attempts. Please try again in 15 minutes." : friendly(e)));
+        } finally { working = false; }
       };
       const go = () => attempt(async () => {
-        /* SOB IDs are forgiving: "sob5", "SOB 005", "sob-05" and "SOB005" all mean SOB-005 */
-        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0")), secret = pin.value.trim();
-        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
+        const id = normId(mid.value), secret = pin.value.trim();
+        if (!id) throw Object.assign(new Error("Enter your SOB ID, Staff ID or email"), { code: "FORMAT" });
         if (!secret) throw Object.assign(new Error("Enter your password"), { code: "FORMAT" });
         return st.store.login(id, secret);
-      }, "member", mid.value);
-      /* First time: the member proves who they are (SOB ID + phone number on record) and chooses their own password. */
-      const cphone = h("input", { id: "cphone", type: "tel", placeholder: "07…", autocomplete: "tel", inputmode: "tel" }), cpw = h("input", { id: "cpw", type: "password", placeholder: "At least 6 characters", autocomplete: "new-password" });
-      const createGo = () => attempt(async () => {
-        const id = mid.value.trim().replace(/^sob[\s\-_.]*0*(\d{1,3})(?!\d)/i, (_, n) => "SOB-" + n.padStart(3, "0"));
-        if (!id) throw Object.assign(new Error("Enter your SOB ID"), { code: "FORMAT" });
-        if (!cphone.value.trim()) throw Object.assign(new Error("Enter the phone number the group has for you"), { code: "FORMAT" });
-        if (cpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "FORMAT" });
-        return st.store.login(id, null, { action: "claim", phone: cphone.value.trim(), password: cpw.value });
-      }, "member", mid.value);
-      /* Officer login: Staff ID + PIN only (no first name, no member SOB ID). The PIN box has no browser auto-fill and a Show button, so a wrong or old saved PIN can never go in unseen. */
-      const sid = h("input", { id: "sid", placeholder: "ADMIN, CHAIR, TREAS or SECRETARY", autocapitalize: "characters", autocomplete: "off", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const spin = h("input", { type: "password", id: "spin", placeholder: "Your officer PIN", autocomplete: "new-password", autocorrect: "off", autocapitalize: "off", spellcheck: "false", enterkeyhint: "go" });
-      const showPin = h("button", { type: "button", id: "spin-show", class: "ghost", "aria-label": "Show or hide PIN", onclick: () => { const on = spin.type === "password"; spin.type = on ? "text" : "password"; showPin.textContent = on ? "Hide" : "Show"; } }, "Show");
-      const officerGo = () => attempt(async () => {
-        const id = sid.value.trim(), secret = spin.value.trim();
-        if (!id) throw Object.assign(new Error("Enter your Staff ID"), { code: "FORMAT" });
-        if (!secret) throw Object.assign(new Error("Enter your PIN"), { code: "FORMAT" });
-        return st.store.login(id, secret);
-      }, "officer", sid.value);
+      });
       [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
-      [sid, spin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") officerGo(); }));
-      [cphone, cpw].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") createGo(); }));
+      /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
+      const rid = h("input", { id: "reg-id", placeholder: "SOB ID or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rcode = h("input", { id: "reg-code", placeholder: "6-digit code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
+      const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "New password (6+ characters)", autocomplete: "new-password" });
+      const rmsg = h("div", { id: "reg-msg", class: "ok-note", role: "status" });
+      const step2 = h("div", { id: "reg-step2", hidden: true }, h("label", { for: "reg-code" }, "Verification code"), rcode, h("label", { for: "reg-pw" }, "Choose a password"), rpw,
+        h("button", { class: "primary big", id: "reg-go", onclick: () => attempt(async () => {
+          if (!/^\d{6}$/.test(rcode.value.trim())) throw Object.assign(new Error("Enter the 6-digit code"), { code: "FORMAT" });
+          if (rpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "WEAK_PIN" });
+          return st.store.login(normId(rid.value), null, { action: "otpVerify", code: rcode.value.trim(), password: rpw.value });
+        }) }, "Create password and sign in"));
+      const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value);
+        if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID or email"));
+        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; rcode.focus(); }
+        catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
+      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "Create or reset your password"), h("label", { for: "reg-id" }, "SOB ID or email"), rid,
+        h("button", { class: "secondary big", id: "reg-send", onclick: sendCode }, "Send verification code"), rmsg, step2);
+      const signBox = h("div", { id: "sign-box" }, h("label", { for: "mid" }, "SOB ID, Staff ID or email"), mid, h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show), h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign in"));
+      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time, or forgot your password?"; if (c) rid.value = mid.value; } }, "First time, or forgot your password?");
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
-      /* A member needs two things: SOB ID + password. First time: "Create my password". */
-      const pinRow = h("div", { id: "pin-row" }, h("label", { for: "pin" }, "Password"), pin);
-      const createBox = h("div", { id: "create-box", hidden: true }, h("p", { class: "hint" }, "First time? Enter your SOB ID above, the phone number the group has for you, and choose a password."),
-        h("label", { for: "cphone" }, "Phone number"), cphone, h("label", { for: "cpw" }, "New password"), cpw, h("button", { class: "primary big", id: "create-go", onclick: createGo }, "Create my password"));
-      const signBox = h("div", { id: "sign-box" }, pinRow, h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign In"));
-      const pinToggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = createBox.hidden; createBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); pinToggle.textContent = c ? "Back to sign in" : "First time? Create my password"; } }, "First time? Create my password");
-      const memberPanel = h("div", { id: "panel-member" }, h("label", { for: "mid" }, "SOB ID"), mid, signBox, createBox, pinToggle);
-      const officerPanel = h("div", { id: "panel-officer", hidden: true }, h("label", { for: "sid" }, "Staff ID"), sid, h("label", { for: "spin" }, "PIN"), h("div", { class: "pinrow" }, spin, showPin),
-        h("button", { class: "primary big", id: "officer-go", onclick: officerGo }, "Officer Sign In"), h("p", { class: "hint" }, "Officers: ADMIN, CHAIR, TREASURER or SECRETARY. No first name or SOB ID needed."));
-      const tabM = h("button", { type: "button", id: "tab-member", class: "tab on", role: "tab", onclick: () => setMode("member") }, "Member login"), tabO = h("button", { type: "button", id: "tab-officer", class: "tab", role: "tab", onclick: () => setMode("officer") }, "Officer login");
-      const setMode = (m) => { problem.replaceChildren(); memberPanel.hidden = m !== "member"; officerPanel.hidden = m !== "officer"; tabM.classList.toggle("on", m === "member"); tabO.classList.toggle("on", m === "officer"); (m === "member" ? mid : sid).focus(); };
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("div", { class: "eyebrow" }, "SONS OF BETHEL"), h("h1", { class: "hero" }, "Savings Group"), h("div", { class: "tag" }, "Every shilling accounted for."),
-        h("div", { class: "tabs", role: "tablist" }, tabM, tabO), memberPanel, officerPanel, problem,
-        h("div", { id: "conn-status", class: "hint", role: "status" }, "Checking connection…"),
-        h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2]))));
+      box.replaceChildren(h("div", { class: "lg-head" }, h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in to your account")),
+        h("div", { class: "lg-body" }, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
+          h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
     }
     if (st.conn) setTimeout(() => paintConn(st.conn), 0);
     return box;
@@ -111,18 +90,18 @@
   /* A PIN printed on a slip (or set by an Admin) is known to someone else: its owner must replace it before anything else is possible (enforced by the server too). */
   function forcePinScreen() {
     const o = h("input", { type: "password", id: "fp-old", autocomplete: "current-password" }), n = h("input", { type: "password", id: "fp-new", autocomplete: "new-password" }), c = h("input", { type: "password", id: "fp-new2", autocomplete: "new-password" });
-    return h("div", { class: "card login", id: "force-pin" }, h("img", { class: "logo", src: R.LOGO, alt: "" }), h("h1", { class: "hero", style: "font-size:28px" }, "Choose your own PIN"),
-      h("p", { class: "tag" }, "Choose a private PIN: at least 4 characters (members) or 6 (staff)."),
-      h("label", null, "Current PIN (from your slip)"), o, h("label", null, "New PIN"), n, h("label", null, "Repeat new PIN"), c,
+    return h("div", { class: "card login", id: "force-pin" }, h("img", { class: "logo", src: R.LOGO, alt: "" }), h("h1", { class: "hero", style: "font-size:28px" }, "Choose your own password"),
+      h("p", { class: "tag" }, "Choose a private password: at least 4 characters (members) or 6 (staff)."),
+      h("label", null, "Current password (from your slip)"), o, h("label", null, "New password"), n, h("label", null, "Repeat new password"), c,
       h("div", { class: "row" }, h("button", { class: "primary", id: "fp-go", onclick: async () => {
         if (n.value !== c.value) return toast("The two new PINs do not match", true);
-        try { await st.store.setPin(n.value, o.value); st.user.mustChangePin = false; await st.store.load(); st.db = st.store.db; st.view = null; toast("PIN changed"); render(); } catch (e) { toast(friendly(e), true); }
-      } }, "Save PIN"), h("button", { onclick: async () => { await st.store.logout(); st.user = null; render(); } }, "Sign out")));
+        try { await st.store.setPin(n.value, o.value); st.user.mustChangePin = false; await st.store.load(); st.db = st.store.db; st.view = null; toast("Password changed"); render(); } catch (e) { toast(friendly(e), true); }
+      } }, "Save password"), h("button", { onclick: async () => { await st.store.logout(); st.user = null; render(); } }, "Sign out")));
   }
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["airtime", "Airtime", null, "phone"], ["shareout", "Share-Out", null, "gift"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["reports", "Reports", null, "download"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
+  const NAV_STAFF = [["dash", "Dashboard", null, "chart"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "book"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"]];
   const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
@@ -143,6 +122,7 @@
   });
   window.addEventListener("beforeunload", (e) => { if (document.querySelector(".modal-bg form, .modal-bg input[name]")) { e.preventDefault(); e.returnValue = ""; } });
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
+  const NAV_GROUP = { dash: "Overview", members: "Members and loans", loans: "Members and loans", ledger: "Accounts", subs: "Accounts", fyears: "Year-end", profit: "Year-end", shareout: "Year-end", reserve: "Year-end", approvals: "Governance", recon: "Governance", audit: "Governance", reports: "Reports", airtime: "Communication", messages: "Communication", reminders: "Communication", system: "System" };
   function navBadge(k) {
     if (isStaff()) return k === "airtime" ? pendingAirtime() : k === "approvals" ? K.awaiting(st.db) : 0;
     return k === "myguar" ? (st.db.guarantees || []).filter((g) => g.guarantorId === st.user.memberId && g.status === "Requested").length : 0;
@@ -156,15 +136,18 @@
     const shell = h("div", { class: "shell" });
     shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, h("img", { src: R.LOGO, alt: "BWOMI" }), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
       staff && !st.live ? h("span", { class: "pill" }, "DEMO · DEV") : null,
-      st.live && !st.user.readOnly ? h("button", { class: "iconbtn", id: "my-pin", "aria-label": "Change my PIN", title: "Change my PIN", onclick: () => Form("Change my PIN", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed"), "Save PIN") }, Icon("key")) : null,
+      st.live && !st.user.readOnly ? h("button", { class: "iconbtn", id: "my-pin", "aria-label": "Change my password", title: "Change my password", onclick: () => Form("Change my password", [{ name: "o", label: "Current PIN", type: "password" }, { name: "n", label: "New PIN (members 4+, staff 6+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, f.o); }, "PIN changed"), "Save password") }, Icon("key")) : null,
       st.live ? h("button", { class: "iconbtn", id: "refresh", "aria-label": "Refresh", title: "Refresh", onclick: () => refresh(false) }, Icon("refresh")) : null,
       h("button", { class: "iconbtn", id: "logout", "aria-label": "Sign out", title: "Sign out", onclick: async () => { if (st.live) await st.store.logout(); st.user = null; st.view = null; render(); } }, Icon("logout"))));
-    shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, nav.map(([k, l, , ic, cls]) => { const n = navBadge(k);
-      return h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null); })));
+    let lastGroup = ""; const items = [];
+    nav.forEach(([k, l, , ic, cls]) => { const n = navBadge(k), g = staff ? NAV_GROUP[k] || "" : ""; if (g && g !== lastGroup) { items.push(h("div", { class: "nav-sec", "aria-hidden": "true" }, g)); lastGroup = g; }
+      items.push(h("button", { class: (active(k) ? "active " : "") + (cls || ""), "data-nav": k, "aria-current": active(k) ? "page" : null, onclick: () => go(k) }, Icon(ic, 22), h("span", null, l), n ? h("span", { class: "badge-n" }, String(n)) : null)); });
+    shell.append(h("nav", { class: "nav" + (staff ? " many" : ""), "aria-label": "Main" }, items));
     const main = h("main", { id: "main" }); shell.append(main); app.append(shell);
     if (!st.guarded) { st.guarded = true; try { history.replaceState({ sobBase: 1 }, ""); history.pushState({ sobView: st.view }, ""); } catch (e) {} }
     if (st.view !== nav[0][0]) main.append(h("button", { class: "backbtn", id: "back-btn", "aria-label": "Back", onclick: () => go(st.prevView && st.prevView !== st.view && nav.some((n) => n[0] === st.prevView) ? st.prevView : nav[0][0]) }, Icon("chevron", 18), " Back"));
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
+    if (staff) { const cur = nav.find((n) => n[0] === st.view); if (cur) main.append(h("div", { class: "pagetitle" }, h("h1", null, cur[1]))); }
     try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
@@ -202,7 +185,11 @@
   /* a report on screen: friendly headings, numbers right-aligned with thousands separators, rows open the record behind them */
   const tableFromReport = (rep, onRow) => {
     const numCol = (c) => rep.rows.length > 0 && rep.rows.every((r) => r[c] === "" || r[c] == null || typeof r[c] === "number");
-    const tbl = Table(rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, render: (r) => (typeof r[c] === "number" ? num(r[c]) : r[c] == null ? "" : String(r[c])) })), rep.rows, onRow, "Nothing recorded for this period");
+    const acct = (n) => (n < 0 ? "(" + num(-n) + ")" : num(n)), tot = rep.totals || {};
+    const cols = rep.columns.map((c) => ({ label: (rep.labels && rep.labels[c]) || heading(c), num: numCol(c) ? 1 : 0, neg: (r) => typeof r[c] === "number" && r[c] < 0, render: (r) => (typeof r[c] === "number" ? acct(r[c]) : r[c] == null ? "" : String(r[c])) }));
+    const hasTot = rep.rows.length > 0 && rep.columns.some((c) => typeof tot[c] === "number");
+    const foot = hasTot ? rep.columns.map((c, i) => (typeof tot[c] === "number" ? { text: acct(tot[c]), neg: tot[c] < 0 } : i === 0 ? { text: "Total" } : null)) : null;
+    const tbl = Table(cols, rep.rows, onRow, "Nothing recorded for this period", foot);
     tbl.setAttribute("data-rep", "1"); return tbl;
   };
   function openRow(o, asAt) { if (!o || !o.id) return; if (o.kind === "member") openMember(o.id, asAt); else if (o.kind === "loan") openLoan(o.id, asAt); else if (o.kind === "entry") openEntry(o.id); }
@@ -266,6 +253,9 @@
   const waSend = (text) => { const a = document.createElement("a"); a.href = "https://wa.me/?text=" + encodeURIComponent(shownText(text)); a.target = "_blank"; a.rel = "noopener"; a.style.display = "none"; document.body.append(a); a.click(); a.remove(); };
   /* Two statements: the MEMBER statement (own savings, loans, balances, history) and the ADMINISTRATIVE statement (references, corrections, reserve, audit notes). Only officers who may read the audit trail can open the second; a member can never receive its data (the server removes it). */
   /* the purposes offered in the entry form: the standard list plus whatever the Super Admin added (G.listOptions), always with Other (Specify) */
+  /* a managed list (Administrator adds/retires options, audited) offered in a form, always with Other (Specify) */
+  const listField = (name, label, key, extra) => Object.assign({ name, label, options: G.listOptions(st.db, key), other: true }, extra || {});
+  const reasonField = (key, label) => listField("reason", label || "Reason", key);
   const purposeChoices = () => { const seen = {}; return Object.keys(G.LIST_DEFAULTS).filter((k) => k.indexOf("purpose.") === 0).reduce((o, k) => o.concat(G.listOptions(st.db, k)), []).filter((x) => !seen[x] && (seen[x] = 1)); };
   const pl = (n, w) => n + " " + w + (Number(n) === 1 ? "" : "s");   // 1 loan, 2 loans
   const canAdminStatement = () => st.user && st.user.role !== "Member" && G.can(ctx(), "audit.view");
@@ -346,7 +336,8 @@
         item("xm-dl", "download", "Download PDF", "Save a PDF to this device", { "data-dlpdf": 1 }, () => downloadReport(get(), o.period)),
         item("xm-print", "print", "Print / Save as PDF", "Opens the print page", { "data-print": 1 }, () => printReport(get(), o.period)),
         o.wa ? item("xm-wa", "share", "Share on WhatsApp", "Opens WhatsApp with the message ready", { "data-wa": 1 }, () => waSend(o.wa())) : null,
-        o.csv ? item("xm-csv", "download", "Download CSV", "A spreadsheet file", { "data-csv": 1 }, () => download(o.csv.name, "text/csv", o.csv.get ? o.csv.get() : R.toCSV(shownRep(get())))) : null));
+        o.xlsx ? item("xm-xlsx", "download", "Download Excel", "An Excel workbook (.xlsx)", { "data-xlsx": 1 }, () => { const r = shownRep(get()); download(window.SOB.pdf.fileName(r.title || "SOB_report", today()).replace(/\.pdf$/i, ".xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", window.SOB.xlsx.build(r, { generated: D.toDisplay(today()) })); toast("Excel file saved to your device."); }) : null,
+        o.csv ? item("xm-csv", "download", "Download CSV", "A plain text file that opens in any spreadsheet", { "data-csv": 1 }, () => download(o.csv.name, "text/csv", o.csv.get ? o.csv.get() : R.toCSV(shownRep(get())))) : null));
     } }, Icon("share", 18), " Export / Share");
   }
   const printButton = (rep, period, csvName) => exportMenu({ rep, period, csv: csvName ? { name: csvName } : null });
@@ -362,13 +353,13 @@
       st.live && st.user.role === "Admin" && !hist ? h("div", { class: "row" }, h("button", { "data-act": "edit-contact", onclick: () => Form("Edit contact details — " + m.name + " (" + m.id + ")", [
           { name: "phone", label: "WhatsApp / phone number (Uganda, e.g. 0772 123 456 or +256 772 123 456)", value: m.phone || "", type: "tel", inputmode: "tel" },
           { name: "email", label: "E-mail address (optional)", value: m.email || "", type: "email" },
-          { name: "location", label: "Location (optional)", value: m.location || "" },
+          listField("location", "Location / area (optional)", "member.Location", { value: m.location || "", optional: true }),
           { name: "allowShared", label: "If another member already has this number", options: [{ value: "", label: "Refuse (recommended)" }, { value: "yes", label: "Allow: these members really share one number" }] },
           { name: "reason", label: "Reason (optional) — e.g. member gave a new number", value: "" },
           { name: "note", type: "note", text: "Only contact details change. Every change is recorded in the audit trail." }],
           act(async (f) => { await commit("updateMemberContact", { memberId: m.id, phone: f.phone, email: f.email, location: f.location, allowShared: f.allowShared === "yes", reason: f.reason }); document.querySelectorAll(".modal-bg").forEach((e) => e.remove()); openMember(m.id); }, "Contact details saved")) }, "Edit contact details"), (st.db.users || []).some((u) => u.id === m.id)
-        ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset PIN for " + m.name, [{ name: "n", label: "New PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
-        : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial PIN (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
+        ? h("button", { "data-act": "reset-pin", onclick: () => Form("Reset password for " + m.name, [{ name: "n", label: "New password (4+ characters)", type: "password" }], act(async (f) => { await st.store.setPin(f.n, undefined, m.id); }, "PIN reset")) }, "Reset PIN")
+        : h("button", { "data-act": "create-signin", onclick: () => Form("Create sign-in for " + m.name, [{ name: "n", label: "Initial password (4+ characters)", type: "password" }], act(async (f) => { await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin: f.n }); await st.store.load(); st.db = st.store.db; }, "Sign-in created")) }, "Create sign-in")) : null,
       h("h2", { class: "sec" }, "Loans"), Table(loanCols, K.loanBook(dd, asAt).filter((v) => loans.some((l) => l.id === v.id)), (v) => openLoan(v.id, asAt)),
       h("h2", { class: "sec" }, "Statement"), statementView(id, true, asAt)));
   }
@@ -405,7 +396,7 @@
         { label: "", render: (g) => g.status === "Requested" && G.can(c, "guarantee.manage") ? h("button", { "data-accept-guarantee": g.id, onclick: (ev) => { ev.stopPropagation(); Form("Record the guarantor's acceptance", [{ name: "evidence", label: "How did they accept? (signed form, call, message) - required" }], act(async (f) => { await commit("acceptGuarantee", { id: g.id, evidence: f.evidence }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Guarantee accepted and committed")); } }, "Record acceptance") : "" }], (st.db.guarantees || []).filter((g) => g.loanId === id && g.status !== "Declined"), null, "No guarantors on this loan"),
       h("h2", { class: "sec" }, "Other security (exceptional)"), Table([{ label: "Kind", key: "kind" }, { label: "Description", key: "description" }, { label: "Valuation", num: 1, render: (x) => x.valuation == null ? "—" : num(x.valuation) }, { label: "Accepted cover", num: 1, render: (x) => num(x.acceptedCover || 0) }, { label: "Docs", num: 1, render: (x) => (x.documents || []).length }, { label: "Status", render: (x) => badge(x.status, x.status === "Approved" ? "ok" : x.status === "Proposed" ? "warn" : "mute") },
         { label: "", render: (x) => x.status === "Proposed" && G.can(c, "security.approve") ? h("span", { class: "row", style: "margin:0" }, h("button", { class: "primary", "data-approve-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Approve exceptional security", [{ name: "reason", label: "Why SOB exceptionally accepts security (required)" }, { name: "cover", label: "Part of the loan this security backs (UGX)", type: "number" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "approve", reason: f.reason, acceptedCover: Number(f.cover) }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Security approved")); } }, "Approve"),
-          h("button", { class: "danger", "data-reject-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject security", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Rejected")); } }, "Reject")) : "" }], (st.db.securities || []).filter((x) => x.loanId === id), null, "No other security — the loan rests on savings and guarantors"),
+          h("button", { class: "danger", "data-reject-security": x.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject security", [reasonField("reason.Reject")], act(async (f) => { await commit("decideSecurity", { id: x.id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); openLoan(id); }, "Rejected")); } }, "Reject")) : "" }], (st.db.securities || []).filter((x) => x.loanId === id), null, "No other security — the loan rests on savings and guarantors"),
       ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), (() => { const lr = R.loanStatement(st.db, id, today()); return h("div", null, printButton(lr), tableFromReport(lr)); })()) : null,
       h("h2", { class: "sec" }, "Interest history"), Table([{ label: "Date", key: "date" }, { label: "From", num: 1, render: (x) => x.previousAmount == null ? "—" : num(x.previousAmount) }, { label: "To", num: 1, render: (x) => num(x.newAmount) }, { label: "Reason", key: "reason" }], v.interestHistory),
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
@@ -417,13 +408,13 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Propose other security", G.can(c, "security.manage") && preDisb, () => Form("Propose exceptional security (not the normal route)", [{ name: "kind", label: "Kind", options: S.security.KINDS }, { name: "description", label: "Description (what, where, who owns it)" }, { name: "owner", label: "Owner of the security" }, { name: "valuation", label: "Valuation (UGX)", type: "number" }, dateF("valuationDate", "Valuation date"), { name: "valuedBy", label: "Valued by" }, { name: "doc", label: "Document / evidence title" }, { name: "ref", label: "Document reference" }], act(async (f) => { await commit("proposeSecurity", { loanId: id, kind: f.kind, description: f.description, owner: f.owner, valuation: f.valuation ? Number(f.valuation) : undefined, valuationDate: f.valuationDate, valuedBy: f.valuedBy, documents: [{ name: f.doc, reference: f.ref }] }); M().remove(); openLoan(id); }, "Proposed - the Chairperson must approve it")));
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
     add(loan.status === "AwaitingApproval" ? "Approve (second approval)" : "Approve", (G.can(c, "loan.review") && loan.status === "Pending") || (G.can(c, "loan.secondApprove") && loan.status === "AwaitingApproval"), act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Done"), "primary");
-    add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [{ name: "reason", label: "Reason" }], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
+    add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [reasonField("reason.Decline")], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
     add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
     add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form(v.interestLocked ? "Unlock interest on this loan" : "Lock interest on this loan", [dateF("date", v.interestLocked ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(v.interestLocked ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, v.interestLocked ? "Interest unlocked" : "Interest locked")));
-    add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
+    add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [reasonField("reason.Void")], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);
   }
   /* Why a loan can or cannot proceed: 3x guideline, the shortfall and exactly what backs it. */
@@ -436,9 +427,9 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
   function loans() {
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt }), "Application recorded")) }, "New application") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }, listField("purpose", "What is the loan for?", "loan.Purpose")], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt, purpose: f.purpose }), "Application recorded")) }, "New application") : null),
       loanTotals(),
-      Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), h("p", { class: "mute" }, "Members normally qualify for up to 3× their savings. Above that, guarantors or approved security are needed."));
+      Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), null);
   }
   /* Totals across all active loans. Tap a card for the loan-by-loan breakdown; tap a row to open that loan. */
   function loanTotals() {
@@ -460,9 +451,9 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function openEntry(id) {
     const t = st.db.transactions.find((x) => x.id === id), c = ctx(), row = h("div", { class: "row" });
     const perm = t.voided ? "ledger.restore" : "ledger.void";
-    if (G.can(c, perm)) row.append(h("button", { class: "danger", "data-act": "void", onclick: () => Form(t.voided ? "Restore entry" : "Void entry", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(t.voided ? "restoreEntry" : "voidEntry", { id, reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Done")) }, t.voided ? "Restore" : "Void"));
+    if (G.can(c, perm)) row.append(h("button", { class: "danger", "data-act": "void", onclick: () => Form(t.voided ? "Restore entry" : "Void entry", [reasonField("reason.Void")], act(async (f) => { await commit(t.voided ? "restoreEntry" : "voidEntry", { id, reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Done")) }, t.voided ? "Restore" : "Void"));
     if (t.approvalStatus === "PendingApproval" && G.can(c, "ledger.approve")) row.append(h("button", { class: "primary", "data-act": "approve-entry", onclick: act(async () => { await commit("approveEntry", { id, decision: "approve" }); document.querySelector(".modal-bg").remove(); }, "Approved") }, "Approve (second approval)"),
-      h("button", { class: "danger", "data-act": "reject-entry", onclick: () => Form("Reject entry", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("approveEntry", { id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Rejected")) }, "Reject"));
+      h("button", { class: "danger", "data-act": "reject-entry", onclick: () => Form("Reject entry", [reasonField("reason.Reject")], act(async (f) => { await commit("approveEntry", { id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Rejected")) }, "Reject"));
     const aud = (st.db.auditLog || []).filter((a) => a.entityId === id);
     drill("Entry " + id, null, h("div", null, h("p", null, nameOf(t.memberId), " · ", t.type, " · ", ugx(t.amount), " · ", D.toDisplay(t.date)), t.voided ? h("p", { class: "err" }, "Voided: " + (t.voidReason || "")) : null, row, h("h2", { class: "sec" }, "Audit trail"), Table([{ label: "When", key: "date" }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], aud)));
   }
@@ -476,7 +467,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function shareout() {
     const cur = FYM.current(st.db), y = cur ? cur.year : Number(today().slice(0, 4)), p = C.previewShareOut(st.db, y, today());
     const done = (st.db.shareOutEvents || []).find((e) => e.year === y);
-    return h("div", null, h("div", { class: "blocked" }, "Only each member's available savings are paid out. Amounts held for guarantees stay until released."),
+    return h("div", null, null,
       h("div", { class: "grid" }, Card("To withdraw now", ugx(p.totals.withdrawable), "After guarantee commitments"), Card("Of which loan-holders", ugx(p.totals.withdrawableByLoanHolders), "Loans stay payable"), Card("Committed, stays in account", ugx(p.totals.committedRetained), p.totals.guaranteesAtRisk + " guarantor(s)"), Card("Profit-eligible members", String(p.totals.eligibleMembers)), Card("Excluded (outstanding loan)", String(p.totals.excludedMembers))),
       Table([{ label: "Member", key: "name" }, { label: "Actual savings", num: 1, render: (r) => num(r.savings) }, { label: "Committed", num: 1, render: (r) => num(r.committed) }, { label: "Available", num: 1, render: (r) => num(r.available) }, { label: "Withdraws", num: 1, render: (r) => num(r.withdraw) }, { label: "Stays", num: 1, render: (r) => num(r.retained) }, { label: "Loan owed", num: 1, render: (r) => num(r.outstandingLoan) }, { label: "Action", key: "savingsAction" }], p.rows, (r) => openMember(r.memberId)),
       done ? h("p", { class: "mute" }, "Share-out for " + y + " executed on " + D.toDisplay(done.date) + ".") : G.can(ctx(), "shareout.execute") ? h("div", { class: "row" }, h("button", { class: "danger", id: "exec-shareout", onclick: act(async () => { if (!confirm("Execute the " + y + " share-out? This closes the year.")) return; await commit("executeShareOut", { year: y }); }, "Share-out executed") }, "Execute share-out " + y)) : null);
@@ -484,20 +475,20 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   /* ---------- financial years: independent periods; only a recorded Balance Brought Forward opens a member's new year ---------- */
   function fyearsView() {
     const tb = FYM.table(st.db), canW = G.can(ctx(), "reconcile.manage"), sel = st.fySel && tb.some((c) => c.year === st.fySel) ? st.fySel : (tb.length ? tb[tb.length - 1].year : null);
-    if (!tb.length) return h("div", { class: "blocked" }, "No financial years are registered yet. Each year begins on the day of the previous approved share-out.");
+    if (!tb.length) return Empty({ icon: "book", title: "No financial years yet" });
     const pos = FYM.position(st.db, sel), nm = (id) => (st.db.members.find((m) => m.id === id) || {}).name || id, hasPrev = tb.some((c) => c.year < sel);
     const recs = FYM.openings(st.db).slice().sort((a, b) => (a.year - b.year) || (a.memberId < b.memberId ? -1 : 1));
     const record = () => Form("Record a Balance Brought Forward", [{ name: "year", label: "Into financial year", options: tb.filter((c) => tb.some((x) => x.year < c.year)).map((c) => ({ value: c.year, label: c.label })), value: sel }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name + " (" + m.id + ")" })) }, { name: "amount", label: "Amount to bring forward (UGX, whole shillings)", type: "number" }, { name: "evidence", label: "Evidence (the minute or decision approving it)" }, { name: "reason", label: "Reason" }, { type: "note", text: "Changes no ledger entry or live savings. Needs the Chairperson's approval." }],
       act(async (f) => commit("recordBroughtForward", { year: Number(f.year), memberId: f.m, amount: Number(f.amount), evidence: f.evidence, reason: f.reason }), "Sent for approval"));
     return h("div", null,
-      h("div", { class: "blocked" }, "Each year stands alone. Only a recorded Balance Brought Forward opens a member's new year."),
+      null,
       Chips(tb.map((c) => [String(c.year), c.label.replace("FY", "Financial Year ")]), String(sel), (k) => { st.fySel = Number(k); render(); }),
       h("p", { class: "mute", id: "fy-span" }, "Financial Year " + pos.year + ": " + D.longDate(pos.openedDate) + " – " + (pos.closedDate ? D.longDate(pos.closedDate) + " (closed by the approved share-out)" : "open")),
       h("div", { class: "grid fy4" }, hasPrev ? Card("Previous year closing position", ugx(pos.totals.previousClosing), "For information") : null, hasPrev ? Card("Held in the club consolidated position", ugx(pos.totals.notBroughtForward), "Not brought forward") : null, Card("Authorised Balance Brought Forward", ugx(pos.totals.opening), "Recorded by officers"), Card("New-year transactions", ugx(pos.totals.deposits + pos.totals.profit - pos.totals.withdrawals - pos.totals.shareOuts + pos.totals.other), "Deposits, profit, withdrawals")),
       Table([{ label: "Member", render: (r) => r.name }, { label: "Previous closing", num: 1, render: (r) => num(r.previousClosing) }, { label: "Brought forward", num: 1, render: (r) => num(r.opening) }, { label: "Deposits", num: 1, render: (r) => num(r.deposits) }, { label: "Profit", num: 1, render: (r) => num(r.profit) }, { label: "Withdrawn", num: 1, render: (r) => num(r.withdrawals) }, { label: "Share-out", num: 1, render: (r) => num(r.shareOuts) }, { label: "Closing", num: 1, render: (r) => num(r.closing) }], pos.rows),
       h("h2", { class: "sec" }, "Recorded Balance Brought Forward"),
       canW ? h("div", { class: "row" }, h("button", { class: "primary", id: "bbf-add", onclick: record }, "Record a Balance Brought Forward")) : null,
-      recs.length ? Table([{ label: "Year", render: (o) => "Financial Year " + o.year }, { label: "Member", render: (o) => nm(o.memberId) }, { label: "Amount", num: 1, render: (o) => num(o.amount) }, { label: "Evidence", key: "evidence" }, { label: "Recorded by", render: (o) => o.recordedBy + (o.authorisedBy ? " · approved by " + o.authorisedBy : "") }, { label: "", render: (o) => canW ? h("button", { "data-bbf-void": o.id, onclick: () => Form("Void this Balance Brought Forward", [{ name: "reason", label: "Reason" }], act(async (f) => commit("voidBroughtForward", { id: o.id, reason: f.reason }), "Sent for approval")) }, "Void") : null }], recs) : h("p", { class: "mute" }, "None recorded. Every financial year currently opens at zero."));
+      recs.length ? Table([{ label: "Year", render: (o) => "Financial Year " + o.year }, { label: "Member", render: (o) => nm(o.memberId) }, { label: "Amount", num: 1, render: (o) => num(o.amount) }, { label: "Evidence", key: "evidence" }, { label: "Recorded by", render: (o) => o.recordedBy + (o.authorisedBy ? " · approved by " + o.authorisedBy : "") }, { label: "", render: (o) => canW ? h("button", { "data-bbf-void": o.id, onclick: () => Form("Void this Balance Brought Forward", [{ name: "reason", label: "Reason" }], act(async (f) => commit("voidBroughtForward", { id: o.id, reason: f.reason }), "Sent for approval")) }, "Void") : null }], recs) : null);
   }
   /* ---------- profit: proportional to eligible savings, Chairperson-approved posting ---------- */
   function profitRows(rows) {
@@ -514,8 +505,8 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       act(async (f) => { const args = { period: f.period };
         if (preview) { const pv = st.live ? await st.store.command("previewProfit", args) : S.commands.run(st.db, ctx(), "previewProfit", args); drill("Profit distribution preview — nothing posted", pv.formula, h("div", null, h("div", { class: "grid" }, Card("Pool", ugx(pv.pool)), Card("Distributed", ugx(pv.distributed)), Card("Undistributed (rounding)", ugx(pv.undistributed)), Card("Eligible members", String(pv.eligibleMembers))), h("p", { class: "mute" }, pv.basis), profitRows(pv.rows))); }
         else { await commit("distributeProfit", args); } }, preview ? "Preview ready" : "Profit posted to members' savings"));
-    return h("div", null, h("p", { class: "mute" }, "Member Profit = (Member Eligible Savings ÷ Total Eligible Savings) × Approved Profit Pool. Members with an outstanding loan at the distribution date are not eligible. The Super Admin enters the pool and date, previews the complete schedule and submits it; only the Chairperson's approval posts it. Every member's figure can be opened; rounding differences stay visible as 'undistributed'."),
-      h("h2", { class: "sec" }, "Cycle inputs (pool and measurement date)"), h("p", { class: "mute" }, "Entered by the Super Admin with a reason. Changes are kept in the history."),
+    return h("div", null, null,
+      h("h2", { class: "sec" }, "Cycle inputs (pool and measurement date)"), null,
       Table([{ label: "Period", key: "period" }, { label: "Pool", num: 1, render: (c) => num(c.pool) }, { label: "Measured at", render: (c) => D.toDisplay(c.measurementDate) }, { label: "Source", key: "sourceNote" }, { label: "Status", render: (c) => posted.some((d) => d.period === c.period) ? badge("Posted - locked", "mute") : badge("Ready", "ok") }, { label: "Changes", num: 1, render: (c) => String((c.history || []).length) }], cycles,
         (c) => drill("History of inputs for " + c.period, null, Table([{ label: "When", key: "date" }, { label: "By", key: "by" }, { label: "Pool", render: (x) => num(x.new.pool) }, { label: "Measured at", render: (x) => x.new.measurementDate }, { label: "Was", render: (x) => x.previous ? num(x.previous.pool) + " @ " + x.previous.measurementDate : "—" }, { label: "Reason", key: "reason" }], c.history || []))),
       G.can(ctx(), "profit.distribute") ? h("div", { class: "row" }, h("button", { id: "profit-cycle", onclick: () => setCycle(null) }, "Set cycle inputs"), h("button", { id: "profit-preview", onclick: () => run(true) }, "Preview a distribution"), h("button", { class: "primary", id: "profit-post", onclick: () => run(false) }, "Submit final distribution for approval")) : null,
@@ -531,8 +522,8 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const btn = (r) => !can ? "" : r.kind === "Ledger entry" ? h("button", { class: "primary", "data-approve": r.ref, onclick: (e) => { e.stopPropagation(); act(async () => commit("approveEntry", { id: r.ref, decision: "approve" }), "Approved")(); } }, "Approve")
       : r.kind === "Loan" ? h("button", { class: "primary", "data-approve": r.ref, onclick: (e) => { e.stopPropagation(); act(async () => commit("approveLoan", { loanId: r.ref }), "Loan approved")(); } }, "Approve")
       : reqOf(r.ref) ? h("span", { class: "row" }, h("button", { class: "primary", "data-approve": r.ref, onclick: (e) => { e.stopPropagation(); act(async () => commit("approveRequest", { id: r.ref }), "Approved and posted")(); } }, "Approve"),
-        h("button", { class: "danger", "data-reject": r.ref, onclick: (e) => { e.stopPropagation(); Form("Reject request", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("rejectRequest", { id: r.ref, reason: f.reason }), "Rejected")); } }, "Reject")) : "";
-    return h("div", null, h("p", { class: "mute" }, "Items do not count until the Chairperson approves them. The Treasurer reviews only."),
+        h("button", { class: "danger", "data-reject": r.ref, onclick: (e) => { e.stopPropagation(); Form("Reject request", [reasonField("reason.Reject")], act(async (f) => commit("rejectRequest", { id: r.ref, reason: f.reason }), "Rejected")); } }, "Reject")) : "";
+    return h("div", null, null,
       h("div", { class: "grid" }, Card("Waiting for the Chairperson", String(ap.totals.waiting))),
       Table([{ label: "Kind", key: "kind" }, { label: "Member", key: "member" }, { label: "Detail", key: "detail" }, { label: "Entered by", key: "enteredBy" }, { label: "", render: btn }], rows, (r) => { if (r.kind === "Ledger entry") openEntry(r.ref); else if (reqOf(r.ref)) showRequest(r); else { const sec = (st.db.securities || []).find((x) => x.id === r.ref); openLoan(r.kind === "Loan" ? r.ref : sec.loanId); } }),
       h("h2", { class: "sec" }, "Recently decided requests"), Table([{ label: "Action", key: "label" }, { label: "Detail", key: "summary" }, { label: "Requested by", key: "requestedBy" }, { label: "Decision", key: "status" }, { label: "Decided by", key: "decidedBy" }, { label: "Date", render: (x) => D.toDisplay(x.decidedDate || x.requestedDate) }], decided),
@@ -555,23 +546,53 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const rep = REPORTS[n](); if (rep.blocked) { drill(n, null, h("div", { class: "blocked" }, "Blocked: " + rep.reason)); return; }
     drill(rep.title, null, h("div", null, h("div", { class: "row" }, printButton(rep, rep.period, n.replace(/\W+/g, "_") + ".csv")), tableFromReport(rep), h("pre", { class: "mute" }, JSON.stringify(rep.totals))));
   }
+  /* REPORT CENTRE: one place for every report. Pick the report, narrow it by financial year, dates, member and status, then read it here or download it as PDF or Excel.
+     Every figure comes from the same ledger calculations as the dashboard (core/reportcentre). */
+  const LEGACY_SKIP = ["Loan book", "Savings by member", "Loan repayments", "Income & expenses", "Annual summary", "Financial year (current)", "Interest Receivable", "Subscriptions", "Profit distribution", "December share-out", "Financial years"];
   function reports() {
-    const extra = FYM.table(st.db).map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; });
-    const groups = REPORT_GROUPS.map((g) => (g[0] === "General Reserve Fund" ? [g[0], g[1], g[2].concat(extra)] : g));
-    const p = periodNow(), ov = K.overview(st.db, p), grouped = groups.reduce((a, g) => a.concat(g[2]), []), other = Object.keys(REPORTS).filter((n) => !grouped.includes(n));
-    const rcard = (n) => { const c = Card(n, PERIOD_AWARE.includes(n) ? "Follows the period" : "As at today", "Open · print / PDF · CSV", () => openReport(n)); c.classList.add("rpt"); return c; };
-    return h("div", null, periodBar(), privacyToggle(),
-      h("h2", { class: "sec" }, "Key figures · tap one to see the transactions behind it"), h("div", { class: "grid", id: "kpi-reports" }, K.KEYS.map((k) => { const d = K.detail(st.db, k, p); return Card(d.title, kpiShow(ov[k]), d.period, () => openKpi(k)); })),
-      groups.concat(other.length ? [["Other", "", other]] : []).map(([title, blurb, names]) => h("div", null, h("h2", { class: "sec" }, title), blurb ? h("p", { class: "mute rg-blurb" }, blurb) : null,
-        h("div", { class: "grid" }, names.filter((n) => REPORTS[n]).map(rcard)))),
-      h("p", { class: "mute", style: "font-size:13px;margin-top:18px" }, "“As at today” statements show today's position; “Follows the period” uses the period chosen above."));
+    const RCm = S.reportcentre, cat = RCm.catalogue(), tb = FYM.table(st.db);
+    const legacy = Object.keys(REPORTS).filter((n) => !LEGACY_SKIP.includes(n)).concat(tb.map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; }));
+    const f = st.rc = Object.assign({ id: "savings", year: "", from: "", to: "", memberId: "", status: "" }, st.rc || {});
+    const entryOf = () => cat.find((c) => c.id === f.id), has = (k) => { const e = entryOf(); return !!e && e.filters.includes(k); };
+    const sel = (id, label, opts, val, on) => { const el = h("select", { id, "aria-label": label, onchange: (e) => on(e.target.value) }, opts.map(([v, t]) => h("option", Object.assign({ value: v }, String(v) === String(val) ? { selected: "" } : {}), t))); return h("label", { class: "fld" }, h("span", null, label), el); };
+    const date = (id, label, val, on) => h("label", { class: "fld" }, h("span", null, label), h("input", { type: "date", id, value: val, max: today(), onchange: (e) => on(e.target.value) }));
+    const set = (k, v) => { f[k] = v; if (k === "id") { f.status = ""; } paint(); };
+    const statusList = () => f.id === "balances" ? ["Active", "Inactive", "Pending"] : ["Active", "Cleared", "Pending", "AwaitingApproval", "Approved", "Declined"];
+    const result = h("div", { id: "rc-result" });
+    let rep = null;
+    const run = () => { const isLegacy = !entryOf() && legacy.includes(f.id); if (isLegacy) { const r = REPORTS[f.id](); return Object.assign({}, r, { notes: r.notes || [], period: r.period || "As at " + D.longDate(today()) }); } return RCm.run(st.db, f.id, { year: f.year, from: f.from, to: f.to, memberId: f.memberId, status: f.status }, today()); };
+    const shownTotals = (r) => Object.keys(r.totals || {}).filter((k) => typeof r.totals[k] === "number" && r.columns.concat(Object.keys(r.labels || {})).length >= 0).slice(0, 6);
+    function paint() {
+      bar.replaceChildren(...barItems());
+      result.replaceChildren();
+      try { rep = run(); } catch (e) { result.append(Banner("bad", e.message.replace(/^[A-Z_]+: /, ""))); return; }
+      if (rep.blocked) { result.append(Banner("warn", rep.reason || "This report cannot be produced yet.")); return; }
+      const tot = shownTotals(rep), lab = (k) => (rep.labels && rep.labels[k]) || heading(k).replace(/ \(UGX\)$/, "");
+      result.append(h("div", { class: "rc-head" }, h("div", null, h("h2", { class: "rc-title" }, rep.title), h("div", { class: "rc-period" }, rep.period || "")), h("div", { class: "rc-count" }, pl(rep.rows.length, "line"))),
+        tot.length ? h("div", { class: "rc-totals" }, tot.map((k) => h("div", { class: "rc-total" }, h("span", null, lab(k)), h("b", { class: rep.totals[k] < 0 ? "neg" : "" }, /^(rows|entries|loans|count)$/i.test(k) ? String(rep.totals[k]) : rep.totals[k] < 0 ? "UGX (" + num(-rep.totals[k]) + ")" : ugx(rep.totals[k]))))) : null,
+        tableFromReport(rep, null), (rep.notes || []).length ? h("div", { class: "rc-notes" }, rep.notes.map((n) => h("p", null, n))) : null);
+      applyPrivacy();
+    }
+    const barItems = () => {
+      const opts = [h("label", { class: "fld wide" }, h("span", null, "Report"), h("select", { id: "rc-report", "aria-label": "Report", onchange: (e) => set("id", e.target.value) },
+        RCm.GROUPS.map((g) => h("optgroup", { label: g }, cat.filter((c) => c.group === g).map((c) => h("option", Object.assign({ value: c.id }, c.id === f.id ? { selected: "" } : {}), c.title)))),
+        h("optgroup", { label: "More statements" }, legacy.map((n) => h("option", Object.assign({ value: n }, n === f.id ? { selected: "" } : {}), n)))))];
+      if (has("period") || has("year")) opts.push(sel("rc-year", "Financial year", [["", "All records"]].concat(tb.map((c) => [String(c.year), c.label.replace("FY", "Financial Year ")])), f.year, (v) => { f.year = v; if (v) { f.from = ""; f.to = ""; } paint(); }));
+      if (has("period")) opts.push(date("rc-from", "From", f.from, (v) => { f.from = v; f.year = ""; paint(); }), date("rc-to", "To", f.to, (v) => { f.to = v; paint(); }));
+      if (has("member")) opts.push(sel("rc-member", "Member", [["", "All members"]].concat(st.db.members.slice().sort((a, b) => a.name.localeCompare(b.name)).map((m) => [m.id, m.name + " (" + m.id + ")"])), f.memberId, (v) => set("memberId", v)));
+      if (has("category")) opts.push(sel("rc-category", "Category (purpose)", [["", "All categories"]].concat(Object.keys(G.LIST_DEFAULTS).filter((k) => k.indexOf("purpose.") === 0).reduce((o, k) => o.concat(G.listOptions(st.db, k)), []).filter((x, i, a) => a.indexOf(x) === i).sort().map((x) => [x, x])), f.category || "", (v) => set("category", v)));
+      if (has("status")) opts.push(sel("rc-status", "Status", [["", "All"]].concat(statusList().map((x) => [x, x === "AwaitingApproval" ? "Awaiting approval" : x])), f.status, (v) => set("status", v)));
+      return opts.concat([h("div", { class: "rc-actions" }, canExport() ? exportMenu({ id: "rc-export", rep: () => rep, period: undefined, xlsx: true, csv: { name: "SOB_report.csv", get: () => R.toCSV(shownRep(rep)) } }) : null)]);
+    };
+    const bar = h("section", { class: "rc-bar card", id: "rc-bar" });
+    paint(); return h("div", { id: "report-centre" }, privacyToggle(), bar, result);
   }
   function recon() {
     const list = (st.db.discrepancies || []).slice().sort((a, b) => (a.status === b.status ? 0 : a.status === "Open" ? -1 : 1)), integ = S.integrity.check(st.db, today()), un = S.integrity.unaccounted(st.db, today());
     return h("div", null, h("div", { class: "grid" }, Card("Open items", String(list.filter((d) => d.status === "Open").length), "Need a decision with evidence"), Card("Resolved", String(list.filter((d) => d.status === "Resolved").length)),
       Card("Data errors not in the register", String(un.length), un.length ? "Click to see" : "All accounted for", () => drill("Unaccounted data errors", "Errors the integrity check finds that no register item covers.", Table([{ label: "Code", key: "code" }, { label: "Detail", key: "detail" }], un))),
       Card("Integrity warnings", String(integ.warnings))),
-      h("p", { class: "mute" }, "Nothing is edited to make figures balance. A difference closes only by a recorded decision."),
+      null,
       Table([{ label: "Kind", key: "kind" }, { label: "Subject", key: "subject" }, { label: "Summary", key: "summary" }, { label: "Status", render: (d) => badge(d.status, d.status === "Open" ? "warn" : "ok") }], list, (d) => openDiscrepancy(d.id)));
   }
   function openDiscrepancy(id) {
@@ -584,7 +605,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       act(async (f) => { await commit("resolveDiscrepancy", { id, decision: f.decision, reason: f.reason, evidence: f.evidence, entry: f.decision === "ACCEPT_SOURCE_WITH_ENTRY" ? { type: f.etype, amount: f.eamt, date: f.edate, memberId: f.emember } : undefined }); document.querySelector(".modal-bg") && document.querySelector(".modal-bg").remove(); }, "Resolved")) }, "Resolve"));
     drill("Discrepancy " + d.subject, null, body);
   }
-  function audit() { const all = (st.db.auditLog || []).slice().reverse(); return Searchable("Search the audit trail by action, person, record or reason", (q) => { const hit = all.filter((a) => !q || ((a.entityType || "") + " " + (a.entityId || "") + " " + (a.action || "") + " " + (a.by || "") + " " + (a.reason || "")).toLowerCase().includes(q)); return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > 200 ? "Showing the latest 200 of " + hit.length + " — search to narrow." : hit.length + " entries"), Table([{ label: "When", key: "date" }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], hit.slice(0, 200), null, "No audit entries match")); }); }
+  function audit() { const all = (st.db.auditLog || []).slice().reverse(); return Searchable("Search the audit trail by action, person, record or reason", (q) => { const hit = all.filter((a) => !q || ((a.entityType || "") + " " + (a.entityId || "") + " " + (a.action || "") + " " + (a.by || "") + " " + (a.reason || "")).toLowerCase().includes(q)); return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > 200 ? "Showing the latest 200 of " + hit.length + " — search to narrow." : (hit.length === 1 ? "1 entry" : hit.length + " entries")), Table([{ label: "When", render: (a) => D.toDisplay(a.date) }, { label: "Entity", render: (a) => a.entityType + " " + a.entityId }, { label: "Action", key: "action" }, { label: "By", key: "by" }, { label: "Reason", key: "reason" }], hit.slice(0, 200), null, "No audit entries match")); }); }
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
@@ -612,7 +633,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     } else if (G.can(ctx(), "airtime.manage")) top.push(h("div", { class: "row" }, h("button", { id: "request-airtime", onclick: () => airtimeForm(null) }, "Record a request for a member")));
     const cols = airtimeCols(staff).concat([{ label: "", render: (r) => r.status !== "Pending" ? "" : h("span", { class: "row", style: "margin:0" },
       G.can(ctx(), "airtime.manage") ? [h("button", { class: "primary", "data-fulfil": r.id, onclick: (ev) => { ev.stopPropagation(); act(async () => commit("fulfilAirtime", { id: r.id }), "Marked fulfilled — savings debited")(); } }, "Fulfil"),
-        h("button", { class: "danger", "data-reject": r.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject airtime request", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("rejectAirtime", { id: r.id, reason: f.reason }), "Rejected")); } }, "Reject")] : null,
+        h("button", { class: "danger", "data-reject": r.id, onclick: (ev) => { ev.stopPropagation(); Form("Reject airtime request", [reasonField("reason.Reject")], act(async (f) => commit("rejectAirtime", { id: r.id, reason: f.reason }), "Rejected")); } }, "Reject")] : null,
       !staff ? h("button", { "data-cancel": r.id, onclick: (ev) => { ev.stopPropagation(); act(async () => commit("cancelAirtime", { id: r.id }), "Cancelled")(); } }, "Cancel") : null) }]);
     return h("div", null, top, h("h2", { class: "sec" }, staff ? "Airtime requests" : "My airtime requests"), Table(cols, list));
   }
@@ -652,7 +673,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
           rec && st.live ? h("button", { id: "rem-send-sms", onclick: () => smsSend(rec, phone, m) }, "Send by SMS") : null,
           rec ? h("button", { id: "rem-confirm-sent", onclick: () => act(async () => { await commit("confirmReminderSent", { id: rec.id, note: "" }); m.close(); }, "Recorded: sent (your confirmation)")().catch(() => {}) }, "I sent it") : null)
           : h("div", { class: "blocked" }, "This member has no valid Uganda WhatsApp number on record."),
-        h("p", { class: "mute" }, "Opens the member's private chat only. “Opened” is not “delivered”: confirm with “I sent it”.")));
+        null));
       return m;
     }
     const doPreview = (r) => act(async () => {
@@ -692,6 +713,14 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const loanDeadlineForm = (r) => Form("Approved deadline for " + nameOf(r.loan.memberId), [{ type: "note", text: "Replaces the general deadline for this loan. Needs approval; leave blank to keep the general one." },
       { name: "dl", label: "Deadline for this loan", type: "date", value: cfg.loanDeadlines[r.loan.id] || "" }, { name: "reason", label: "Reason / authority" }],
       act(async (f) => commit("setReminderDates", { shareOutDate: cfg.shareOutDate, deadline: cfg.deadline, loanDeadlines: Object.assign({}, cfg.loanDeadlines, { [r.loan.id]: f.dl }), reason: f.reason })), "Send to the Chairperson");
+    const autoForm = () => { const a = RM.getAuto(st.db); return Form("Automatic reminders (SMS)", [
+      { type: "note", text: "When ON, members who still owe get short SMS messages each day this schedule applies. Nothing is sent unless the SMS gateway is live. Changes need the Chairperson's approval and are recorded." },
+      { name: "enabled", label: "Automatic reminders", options: [{ value: "true", label: "ON" }, { value: "false", label: "OFF" }], value: String(a.enabled) },
+      { name: "r", label: "Regular reminder every (days) before the deadline", type: "number", value: a.regularEveryDays, inputmode: "numeric" },
+      { name: "a", label: "Tell the member their name goes to Church Administration after (days with no payment)", type: "number", value: a.adminAfterDays, inputmode: "numeric" },
+      { name: "b", label: "Serious reminder about the Bishop when this many days (or fewer) remain before the deadline", type: "number", value: a.bishopDaysBefore, inputmode: "numeric" },
+      { name: "reason", label: "Reason / authority (e.g. committee decision and date)" }],
+      act(async (f) => commit("setAutoReminders", { enabled: f.enabled === "true", regularEveryDays: Number(f.r), adminAfterDays: Number(f.a), bishopDaysBefore: Number(f.b), reason: f.reason })), "Send to the Chairperson"); };
     const timingForm = () => Form("Reminder timing", [{ name: "u", label: "“Urgent” starts when this many days or fewer remain to the deadline", type: "number", value: cfg.urgentDays, inputmode: "numeric" }, { name: "f", label: "“Final Notice” starts when this many days or fewer remain (or the deadline has passed)", type: "number", value: cfg.finalDays, inputmode: "numeric" },
       { name: "mi", label: "Minimum days between two reminders at the same level for one loan", type: "number", value: cfg.minIntervalDays, inputmode: "numeric" }, { name: "reason", label: "Reason" }],
       act(async (f) => commit("setReminderSettings", { urgentDays: f.u, finalDays: f.f, minIntervalDays: f.mi, reason: f.reason }), "Saved"));
@@ -701,6 +730,20 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         .concat(RM.FIELDS.map((k) => ({ name: k, label: nm[k], type: "textarea", value: T[k] }))).concat([{ name: "reason", label: "Reason" }]),
         act(async (g) => { const t = {}; RM.FIELDS.forEach((k) => { if (g[k] !== T[k]) t[k] = g[k]; }); await commit("setReminderSettings", { templates: { [f.lv]: t }, reason: g.reason }); }, "Wording saved"), "Save wording"), 50);
     }, "Next");
+    /* ESCALATION: overdue loans reported to the church administrator, then the Bishop. The officer previews, then sends; the list is rebuilt from the ledger on the server. */
+    const esc = RM.getEscalation(st.db);
+    const escForm = () => Form("Who is told about overdue loans", [{ type: "note", text: "Church administrator first, then the Bishop as the highest escalation. Days are counted after the approved repayment deadline. Needs the Chairperson's approval. Numbers are kept only in the Sheet." }]
+      .concat(esc.reduce((a, x) => a.concat([{ name: x.id + "_name", label: x.label + " — name", value: x.name || "" }, { name: x.id + "_phone", label: x.label + " — phone", value: x.phone || "", inputmode: "tel" }, { name: x.id + "_days", label: x.label + " — told this many days after the deadline", type: "number", value: x.afterDays, inputmode: "numeric" }]), [])).concat([{ name: "reason", label: "Reason / authority" }]),
+      act(async (f) => commit("setEscalation", { steps: { ADMIN: { name: f.ADMIN_name, phone: f.ADMIN_phone, afterDays: Number(f.ADMIN_days) }, BISHOP: { name: f.BISHOP_name, phone: f.BISHOP_phone, afterDays: Number(f.BISHOP_days) } }, reason: f.reason })), "Send to the Chairperson");
+    const escSend = (x) => { let plan; try { plan = RM.escalationPlan(st.db, { step: x.id, asOf: asOf }); } catch (e) { return toast(friendly(e), "warn"); }
+      if (!plan.ready) return toast(plan.note, "warn");
+      Form("Tell the " + x.label + "?", [{ type: "note", text: plan.rows.length + " member(s), total " + num(plan.total) + ". The message is built again from the ledger when you press Send, goes to " + x.label + " only, and cannot be unsent." }, { type: "note", text: plan.texts.join("\n\n") }],
+        act(async () => { const q = await commit("queueEscalation", { step: x.id }); const r = await st.store.call({ action: "dispatchOutbox", ids: q.outboxIds }); const bad = r.result.failed + r.result.dryRun; if (bad) throw new Error(r.result.dryRun ? "The SMS gateway is not switched on, so nothing was sent." : "The SMS was not sent: gateway error."); await reload(); }, "Sent to the " + x.label), "Send SMS"); };
+    const escPanel = () => h("div", { id: "esc-panel" }, h("h2", { class: "sec" }, "Overdue loans: tell the church administrator, then the Bishop"),
+      h("p", { class: "mute" }, "After the approved deadline, the church administrator is told first and the Bishop later if members are still unpaid. Nothing is sent unless an officer presses Send. Members are not messaged here."),
+      Table([{ label: "Step", render: (x) => x.label }, { label: "Name", key: "name" }, { label: "Phone", render: (x) => x.phone ? "set" : badge("Not set", "bad") }, { label: "After deadline (days)", num: 1, key: "afterDays" }, { label: "Overdue now", num: 1, render: (x) => { try { return String(RM.escalationPlan(st.db, { step: x.id, asOf: asOf }).rows.length); } catch (e) { return "-"; } } },
+        { label: "", render: (x) => st.live ? h("button", { "data-esc-send": x.id, onclick: () => escSend(x) }, "Preview and send") : "" }], esc),
+      h("div", { class: "row" }, h("button", { id: "esc-set", onclick: escForm }, "Set contacts and days")));
     const notSet = !cfg.shareOutDate || !cfg.deadline;
     const oldBackend = st.live && CFG.build && st.store.serverBuild && st.store.serverBuild !== CFG.build;
     return h("div", null,
@@ -710,8 +753,9 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       notSet ? h("div", { class: "blocked", id: "rem-notset" }, "Set the share-out date and repayment deadline first.") : null,
       h("div", { class: "grid" }, Card("Share-out date", cfg.shareOutDate ? D.longDate(cfg.shareOutDate) : "Not set", cfg.shareOutDate ? RM.daysBetween(asOf, cfg.shareOutDate) + " days to go" : ""), Card("Approved deadline", cfg.deadline ? D.longDate(cfg.deadline) : "Not set", cfg.deadline ? RM.daysBetween(asOf, cfg.deadline) + " days to go" : ""),
         Card("Loans with a balance", String(rows.length), cand.excluded.settled + " settled loans are left out automatically"), Card("Total still owed", ugx(rows.filter((r) => r.figures).reduce((a, r) => a + r.figures.totalOutstanding, 0)), "as at " + D.longDate(asOf))),
-      h("div", { class: "row" }, h("button", { class: "primary", id: "rem-dates", onclick: datesForm }, "Set share-out date & deadline"), h("button", { id: "rem-timing", onclick: timingForm }, "Timing"), h("button", { id: "rem-wording", onclick: wordingForm }, "Message wording"),
+      h("div", { class: "row" }, h("button", { class: "primary", id: "rem-dates", onclick: datesForm }, "Set share-out date & deadline"), h("button", { id: "rem-timing", onclick: timingForm }, "Timing"), h("button", { id: "rem-auto", onclick: autoForm }, "Automatic reminders: " + (RM.getAuto(st.db).enabled ? "ON" : "OFF")), h("button", { id: "rem-wording", onclick: wordingForm }, "Message wording"),
         st.live ? h("button", { id: "rem-recalc", onclick: () => act(reload, "Recalculated from the live ledger")().catch(() => {}) }, "Recalculate now") : null),
+      escPanel(),
       h("h2", { class: "sec" }, "Members with an outstanding loan"),
       h("div", { class: "row" }, h("div", null, h("label", null, "Reminder level"), h("select", { id: "rem-level", onchange: (e) => { rem.level = e.target.value; } }, lvlOpt.map((o) => h("option", Object.assign({ value: o.value }, lvl() === o.value ? { selected: "selected" } : {}), o.label)))),
         h("button", { class: "primary", id: "rem-bulk", disabled: !ready.length || notSet, onclick: doBulk }, "Prepare reminders for all " + ready.length + " (private chats)")),
@@ -749,7 +793,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
       Table([{ label: "Created", render: (m) => D.toDisplay(String(m.createdAt).slice(0, 10)) }, { label: "To", render: (m) => m.to === "ADMIN" ? "Admin phone" : (m.memberId ? nameOf(m.memberId) + " " : "") + m.to }, { label: "Channel", key: "channel" }, { label: "Message", key: "body" },
         { label: "Status", render: (m) => badge(m.status, m.status === "SENT" ? "ok" : m.status === "FAILED" ? "bad" : m.status === "QUEUED" || m.status === "DRY_RUN" ? "warn" : "mute") }, { label: "Note", key: "reason" },
         { label: "", render: (m) => ["SENT", "CANCELLED"].includes(m.status) ? "" : h("button", { "data-cancel-msg": m.id, onclick: () => Form("Cancel message", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelMessage", { id: m.id, reason: f.reason }), "Cancelled")) }, "Cancel") }], ob),
-      h("p", { class: "mute" }, "Members can switch notifications off from their Home screen; those members are skipped, not messaged."));
+      null);
   }
 
 
@@ -775,7 +819,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const rep = rc.pack && rc.state && ["loaded", "mixed"].includes(rc.state.state) ? LD.build(st.db, rc.pack, today()) : null, reps = rep ? LD.asReports(rep) : [];
     const sign = () => {
       const have = new Set((st.db.users || []).map((u) => u.id)), need = st.db.members.filter((m) => m.status !== "Inactive" && !have.has(m.id));
-      return h("div", null, h("h2", { class: "sec" }, "Sign-ins"), h("p", { class: "mute" }, need.length + " member(s) have no sign-in yet. Each gets a one-time PIN and chooses their own at first sign-in. Download the slips once, print, then delete the file."),
+      return h("div", null, h("h2", { class: "sec" }, "Sign-ins"), h("p", { class: "mute" }, need.length + " member(s) have no sign-in yet. Each gets a one-time password and chooses their own at first sign-in. Download the slips once, print, then delete the file."),
         h("div", { class: "row" }, h("button", { id: "make-signins", disabled: !need.length, onclick: act(async () => {
           const slips = []; for (const m of need) { const pin = randPin(); await st.store.createUser({ id: m.id, name: m.name, role: "Member", memberId: m.id, pin }); slips.push([m.id, m.name, pin]); }
           download("SOB-PIN-slips-" + today() + ".csv", "text/csv", "id,name,pin\n" + slips.map((x) => [x[0], '"' + x[1].replace(/"/g, '""') + '"', x[2]].join(",")).join("\n")); await refresh();
@@ -784,7 +828,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
           act(async (f) => { const pin = randPin8(); await st.store.createUser({ id: f.id.trim().toUpperCase(), name: f.name, role: f.role, pin }); download("SOB-staff-PIN-" + f.id.trim().toUpperCase() + ".csv", "text/csv", "id,name,role,pin\n" + [f.id.trim().toUpperCase(), '"' + f.name + '"', f.role, pin].join(",")); await refresh(); }, "Sign-in created; PIN downloaded")) }, "Add staff sign-in")));
     };
     return h("div", { id: "records-panel" }, h("h2", { class: "sec", style: "margin-top:0" }, "Load SOB records"),
-      h("p", { class: "mute" }, "Loads the verified records into the Sheet. Uncertain rows go to the reconciliation register."),
+      null,
       h("div", { class: "row" }, file), rc.pack ? h("p", { class: "mute" }, "File: " + rc.name + " — " + rc.pack.controls.members + " members, " + rc.pack.controls.legacyTransactions + " current entries, " + rc.pack.controls.historyEntries + " historical entries.") : null,
       rc.state ? h("div", { class: rc.state.state === "foreign" || rc.state.state === "mixed" ? "blocked" : "hint", id: "records-state" }, stateText[rc.state.state] + " (" + rc.state.members + " members, " + rc.state.transactions + " transactions, " + rc.state.loans + " loans in the Sheet now)") : null,
       h("div", { class: "field" }, h("label", { for: "records-approver" }, "Approved by (name, role, date)"), h("input", { id: "records-approver", type: "text", placeholder: "e.g. Name, Role, 8 Oct 2026", value: rc.approver || "", oninput: (e) => { rc.approver = e.target.value; } })),
@@ -796,7 +840,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         rc.res.pending && rc.res.pending.length ? h("div", { class: "hint", id: "records-pending" }, "Waiting for the Chairperson in Approvals (" + rc.res.pending.length + "): " + rc.res.pending.join("; ") + ". When they have approved, press Load records once more to finish the repayments.") : null) : null,
       rep ? h("div", { id: "records-report" }, h("h2", { class: "sec" }, "Reconciliation report"),
         h("div", { class: "grid" }, Card("Actual savings", ugx(rep.totals.savings), "After withdrawals and share-outs"), Card("Available savings", ugx(rep.totals.available)), Card("Loan principal outstanding", ugx(rep.totals.loanPrincipal)), Card("Unpaid interest", ugx(rep.totals.unpaidInterest)), Card("Profit credited", ugx(rep.totals.profitCredited)), Card("Open register items", String(rep.register.filter((x) => x.status === "Open").length))),
-        h("p", { class: "mute" }, "Actual savings = deposits + profit − withdrawals − share-outs. Available = actual − guarantee commitments."),
+        null,
         reps.map((r) => h("div", null, h("h3", null, r.title), h("div", { class: "row" }, printButton(r, "As at " + D.toDisplay(rep.asOf), r.title.replace(/\W+/g, "_") + ".csv")), tableFromReport(r))),
         rep.missing.length ? h("div", null, h("h3", null, "Information genuinely missing"), h("ul", null, rep.missing.map((x) => h("li", null, x)))) : null,
         rep.decisions.length ? h("div", null, h("h3", null, "SOB decisions still needed"), h("ul", null, rep.decisions.map((x) => h("li", null, x)))) : null) : null,
@@ -807,8 +851,30 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   function listsPanel() {
     const add = (key) => Form("Add an option: " + G.LIST_TITLES[key], [{ name: "label", label: "New option (max 60 characters)" }, { name: "reason", label: "Reason" }], act(async (f) => commit("addListItem", { list: key, label: f.label, reason: f.reason }), "Option added"));
     const retire = (key, label) => Form("Retire \"" + label + "\" from " + G.LIST_TITLES[key], [{ type: "note", text: "Entries already recorded keep their wording. The option simply stops being offered." }, { name: "reason", label: "Reason" }], act(async (f) => commit("retireListItem", { list: key, label, reason: f.reason }), "Option retired"));
-    return h("div", { id: "lists-panel" }, h("h2", { class: "sec" }, "Lists and options"), h("p", { class: "mute" }, "Choices offered in forms; every form also offers Other (Specify). Changes are audited."),
+    return h("div", { id: "lists-panel" }, h("h2", { class: "sec" }, "Lists and options"), null,
       Object.keys(G.LIST_DEFAULTS).map((key) => h("div", { class: "panel" }, h("b", null, G.LIST_TITLES[key]), h("div", { class: "chips" }, G.listOptions(st.db, key).map((label) => h("span", { class: "chip" }, label, " ", h("button", { class: "linkbtn", "aria-label": "Retire " + label, onclick: () => retire(key, label) }, "×")))), h("button", { "data-add-list": key, onclick: () => add(key) }, "Add an option"))));
+  }
+  /* outstanding entries: confirmed transactions that were not yet entered, supplied as a private file; posted only through the ledger's own rules */
+  function outstandingPanel() {
+    const oc = st.out = st.out || {};
+    const approver = () => (document.getElementById("out-approver") || {}).value || "";
+    const go = (dry) => act(async () => {
+      if (!oc.pack) throw new Error("Choose the outstanding-entries file first.");
+      if (!approver().trim()) throw new Error("Type who confirmed these entries (name, role, date).");
+      oc.res = (await st.store.call({ action: "command", name: "processOutstandingEntries", args: { batchId: oc.pack.batchId, approvedBy: approver(), entries: oc.pack.entries, dryRun: dry } })).result;
+      if (!dry) { await st.store.load(); st.db = st.store.db; } render();
+    }, dry ? "Check finished — nothing was posted" : "Finished — read the result below");
+    const file = h("input", { type: "file", id: "out-file", accept: ".json,application/json", onchange: async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try { const p = JSON.parse(await f.text()); if (!p || p.kind !== "SOB_ENTRIES_PACK" || !Array.isArray(p.entries) || !p.batchId) throw new Error("This is not an outstanding-entries file."); if (p.controls && p.controls.count !== p.entries.length) throw new Error("The entry count does not match the file's control total."); oc.pack = p; oc.name = f.name; oc.res = null; toast("Entries file read"); }
+      catch (err) { oc.pack = null; toast("That file cannot be used: " + friendly(err), "warn"); } render(); } });
+    return h("div", { id: "outstanding-panel" }, h("h2", { class: "sec" }, "Enter outstanding transactions"),
+      h("p", { class: "mute" }, "For transactions the Chairperson has confirmed but that are not yet in the ledger. Each keeps its original date. Repayments are checked against the loan, its owner and what is still owed. Withdrawals go to the Chairperson for approval. Pressing the button twice adds nothing twice."),
+      h("div", { class: "row" }, file), oc.pack ? h("p", { class: "mute" }, "File: " + oc.name + " — " + oc.pack.entries.length + " entries, batch " + oc.pack.batchId + ".") : null,
+      h("div", { class: "field" }, h("label", { for: "out-approver" }, "Confirmed by (name, role, date)"), h("input", { id: "out-approver", type: "text", placeholder: "e.g. Name, Role, 18 Nov 2026", value: oc.approver || "", oninput: (e) => { oc.approver = e.target.value; } })),
+      h("div", { class: "row" }, h("button", { id: "out-check", disabled: !oc.pack, onclick: go(true) }, "Check only"), h("button", { class: "primary", id: "out-post", disabled: !oc.pack, onclick: go(false) }, "Enter transactions")),
+      oc.res ? h("div", { id: "out-result" }, Banner("ok", (oc.res.dryRun ? "Check passed. Nothing was posted. " : "") + oc.res.posted + " to post or posted, " + oc.res.awaitingApproval + " waiting for the Chairperson, " + oc.res.alreadyProcessed + " already done."),
+        Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }, { label: "Member", key: "memberId" }, { label: "Type", key: "type" }, { label: "Loan", key: "loanId" }, { label: "Amount (UGX)", num: 1, render: (r) => num(r.amount) }, { label: "Result", key: "result" }], oc.res.rows)) : null);
   }
   function system() {
     if (!st.live) return h("div", { class: "blocked" }, "Available on the live deployment only.");
@@ -817,12 +883,12 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const download = async () => {
       const r = await st.store.call({ action: "exportBackup" }), a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(r.backup)], { type: "application/json" })), download: "SOB-backup-" + today() + ".json" }); document.body.append(a); a.click(); a.remove(); toast("Backup downloaded — it contains members' personal data; keep it private");
     };
-    return h("div", null, recordsPanel(), listsPanel(), h("h2", { class: "sec" }, "Backups"),
-      h("p", { class: "mute" }, "A snapshot is taken every night. Backups never contain PINs."),
+    return h("div", null, recordsPanel(), outstandingPanel(), listsPanel(), h("h2", { class: "sec" }, "Backups"),
+      null,
       h("div", { class: "row" }, h("button", { class: "primary", id: "backup-now", onclick: act(async () => { const r = await st.store.call({ action: "backupNow", force: true }); toast("Snapshot " + r.id + " saved"); await reload(); }) }, "Back up now"), h("button", { id: "backup-download", onclick: act(download) }, "Download offline backup")),
       st.sys && st.sys.error ? h("div", { class: "err" }, st.sys.error) : null,
       Table([{ label: "Snapshot", key: "id" }, { label: "When", key: "createdAt" }, { label: "Label", key: "label" }, { label: "Ledger revision", num: 1, key: "revision" }, { label: "", render: (b) => h("button", { "data-verify-backup": b.id, onclick: act(async () => { const r = await st.store.call({ action: "verifyBackup", id: b.id }); toast("Verified: " + r.counts.transactions + " transactions, checksum OK"); }) }, "Verify") }], (st.sys && st.sys.backups) || []),
-      h("p", { class: "mute" }, "Restoring is done by the spreadsheet owner (see the deployment guide)."),
+      null,
       h("h2", { class: "sec" }, "Sign-ins"),
       Table([{ label: "ID", key: "id" }, { label: "Name", key: "name" }, { label: "Role", key: "role" }, { label: "Status", render: (u) => badge(u.status, u.status === "Active" ? "ok" : "bad") }, { label: "", render: (u) => u.id === st.user.id || u.status === "Disabled" ? "" : h("button", { class: "danger", "data-disable": u.id, onclick: () => { if (confirm("Disable sign-in for " + u.id + "?")) act(async () => { await st.store.disableUser(u.id); await st.store.load(); st.db = st.store.db; render(); }, "Sign-in disabled")(); } }, "Disable") }], st.db.users || []));
   }
@@ -831,7 +897,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     const stmt = RSV.statement(st.db), yrs = FYM.table(st.db), canW = G.can(ctx(), "reserve.manage");
     const rows = yrs.map((y) => { const a = RSV.available(st.db, y.year), p = PRC.year(st.db, y.year, today()); return { label: y.label, earned: p.earnedRecorded, credited: a.credited, verified: a.verified, moved: a.transferred, available: a.available }; });
     const yearOpts = yrs.map((y) => ({ value: y.year, label: y.label })), histOpts = (st.db.historicalLoans || []).filter((l) => !l.voided).map((l) => ({ value: l.id, label: ((st.db.members.find((m) => m.id === l.memberId) || {}).name || l.memberId) + " · " + D.toDisplay(l.date) + " · owed " + num(HLN.position(st.db, l.id).outstanding) }));
-    return h("div", null, h("div", { class: "blocked" }, "The General Reserve belongs to SOB as a group. Every movement needs evidence and the Chairperson's approval."),
+    return h("div", null, null,
       h("div", { class: "grid" }, Card("Reserve balance", ugx(stmt.balance), "Closing balance today"), Card("Movements", String(stmt.entries.length), stmt.entries.length ? "Each with evidence" : "No reserve balance exists in the records yet"), Card("Years with verified profit", String(rows.filter((r) => r.verified !== null).length), "of " + rows.length)),
       h("h2", { class: "sec" }, "Profit available for the reserve, by financial year"),
       Table([{ label: "Year", key: "label" }, { label: "Profit earned (recorded)", num: 1, render: (r) => num(r.earned) }, { label: "Credited to members", num: 1, render: (r) => num(r.credited) }, { label: "Verified by Chairperson", num: 1, render: (r) => r.verified === null ? badge("Not verified", "bad") : num(r.verified) }, { label: "Already in reserve", num: 1, render: (r) => num(r.moved) }, { label: "Can be moved now", num: 1, render: (r) => h("strong", null, num(r.available)) }], rows),
@@ -842,7 +908,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         h("button", { id: "res-open", onclick: () => Form("Record the reserve opening balance", [dateF("date", "Date"), { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "evidence", label: "Evidence" }, { name: "reason", label: "Reason" }], act(async (f) => commit("openReserve", { date: f.date, amount: Number(f.amount), evidence: f.evidence, reason: f.reason }))) }, "Record opening balance"),
         h("button", { id: "res-use", onclick: () => Form("Use money from the reserve", [dateF("date", "Date"), { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "purpose", label: "Purpose" }, { name: "evidence", label: "Evidence" }, { name: "reason", label: "Reason" }], act(async (f) => commit("utilizeReserve", { date: f.date, amount: Number(f.amount), purpose: f.purpose, evidence: f.evidence, reason: f.reason }))) }, "Use reserve")) : null,
       h("h2", { class: "sec" }, "Historical loans (before 21 Dec 2025): receivables, offsets and write-offs"),
-      h("p", { class: "mute" }, "A balance owed stays a receivable unless the Chairperson approves a write-off with evidence."),
+      null,
       Table([{ label: "Member", render: (x) => (st.db.members.find((m) => m.id === x.loan.memberId) || {}).name || x.loan.memberId }, { label: "Loan paid out", num: 1, render: (x) => num(x.disbursed) }, { label: "Principal unpaid", num: 1, render: (x) => num(x.principalOutstanding) }, { label: "Interest unpaid", num: 1, render: (x) => num(x.interestOutstanding) }, { label: "Written off", num: 1, render: (x) => num(x.writtenOffPrincipal + x.writtenOffInterest) }, { label: "Status", render: (x) => badge(x.status, x.status === "Open" ? "bad" : "ok") }], (st.db.historicalLoans || []).filter((l) => !l.voided).map((l) => HLN.position(st.db, l.id))),
       canW && (st.db.historicalLoans || []).length ? h("div", { class: "row" },
         h("button", { id: "res-offset", onclick: () => Form("Offset a member's savings against a historical loan", [{ name: "loanId", label: "Historical loan", type: "select", options: histOpts }, dateF("date", "Date"), { name: "amount", label: "Amount (UGX)", type: "number" }, { name: "evidence", label: "Evidence (member's written consent, minute)" }, { name: "reason", label: "Reason" }], act(async (f) => commit("offsetHistoricalLoan", { loanId: f.loanId, date: f.date, amount: Number(f.amount), evidence: f.evidence, reason: f.reason }))) }, "Offset savings against a loan"),
@@ -856,7 +922,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (server " + String(r.build).slice(0, 8) + ")" : "") + "."; };
-  const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or PIN."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
+  const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or password."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
     if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
     app.append(State("loading"));

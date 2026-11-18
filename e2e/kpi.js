@@ -41,8 +41,8 @@ let fails = 0; const ok = (c, m) => { if (c) console.log("  ok  " + m); else { f
   { const [dl] = await Promise.all([pg.waitForEvent("download", { timeout: 15000 }), (async () => { await pg.click('.modal [data-export]'); await pg.click('#xm-dl'); })()]); const dp = await dl.path(), buf = require("fs").readFileSync(dp);
     ok(/\.pdf$/.test(dl.suggestedFilename()) && buf.slice(0, 5).toString() === "%PDF-" && buf.length > 2000, "Download PDF saves a real PDF file (" + dl.suggestedFilename() + ")"); }
   /* the selection survives navigation */
-  await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await pg.click('[data-chip="lastYear"]'); await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#kpi-reports");
-  ok(/Financial Year \d{4}|FY\d{4}|31 Dec/.test(await pg.innerText("#period-note")), "the Reports page uses the same period"); ok((await pg.locator("#kpi-reports .card").count()) === K.KEYS.length, "every dashboard figure is also a report");
+  await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((m) => m.remove())); await pg.click('[data-chip="lastYear"]'); await pg.click('[data-nav="reports"]'); await pg.waitForSelector("#rc-report");
+  ok((await pg.locator("#rc-report option").count()) >= 20, "the Report Centre offers every report in one list"); await pg.selectOption("#rc-report", "deposits"); await pg.waitForFunction(() => /Deposits/.test((document.querySelector("#rc-result .rc-title") || {}).textContent || "")); ok(/Deposits/.test(await pg.innerText("#rc-result .rc-title")) && (await pg.locator("#rc-result tbody tr").count()) > 0, "the Deposits report opens with its lines");
   /* member statement period: list, brought-forward/closing line and PDF follow the chosen range */
   await pg.click("#logout"); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Member"); await pg.click("#demo-go"); await pg.waitForSelector('[data-card="My Savings"]'); await pg.click('[data-nav="savings"]'); await pg.waitForSelector("#stmt-period");
   const mid = await pg.evaluate(() => window.__SOB.user.memberId), lp = D.presetPeriod("lastYear", today, YRS);

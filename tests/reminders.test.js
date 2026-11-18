@@ -40,21 +40,20 @@ t("date rules: share-out in December, not in the past; deadline a real day not a
 t("the message carries every required item and every figure equals the engine's own at that moment", () => {
   const { db, l } = world(); setDates(db, "2026-10-22");
   const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }), s = rec.body;
-  assert.match(s, /Dear Example Member A,/); assert.match(s, /SOB-001/); assert.match(s, /Praise the Lord\./); assert.match(s, /1 Corinthians 4:2/); assert.match(s, /SOB Savings Group Administration\./);
-  assert.equal(num(s, "Loan Principal"), 100000); assert.match(s, /Disbursement Date: 3 Feb 2026/); assert.equal(num(s, "Monthly Interest"), 10000);
-  assert.match(s, /Interest Period: 8 calendar months \(3 Feb 2026 to 22 Oct 2026\)/);
+  assert.match(s, /Dear Example Member A,/); assert.match(s, /Praise the Lord\./); assert.match(s, /SOB Savings Group Administration\./);
+  assert.equal(num(s, "Loan Principal"), 100000); assert.match(s, /Loan Disbursement Date: 3 February 2026/);
   assert.equal(num(s, "Accrued Interest"), L.loanAccumulatedInterest(l, "2026-10-22")); assert.equal(num(s, "Accrued Interest"), 80000);
-  assert.equal(num(s, "Repayments Received"), 0); assert.equal(num(s, "Outstanding Principal"), 100000); assert.equal(num(s, "Unpaid Interest"), 80000);
-  assert.equal(num(s, "Total Outstanding"), L.loanOutstanding(l, db, "2026-10-22")); assert.equal(num(s, "Total Outstanding"), 180000);
-  assert.match(s, /Repayment Deadline: 5 Dec 2026/); assert.match(s, /Days Remaining: 44 days/); assert.match(s, /Annual Share-Out: 19 Dec 2026 \(58 days to go\)/); assert.match(s, /Figures as at 22 Oct 2026, 11:00 EAT/);
+  assert.equal(num(s, "Total Balance Due"), L.loanOutstanding(l, db, "2026-10-22")); assert.equal(num(s, "Total Balance Due"), 180000);
+  assert.match(s, /Payment Deadline: 5 December 2026/); assert.ok(!/Days Remaining|Monthly Interest|Interest Period/.test(s), "brief official layout");
 });
 
 t("interest-first repayments are reflected exactly (20,000 then 60,000 -> principal 40,000 repaid, 60,000 outstanding)", () => {
   const { db, l } = world(); setDates(db, "2026-05-01", "2026-12-19", "2026-12-05");
   run(db, "Admin", "2026-05-10", "repayLoan", { loanId: l.id, amount: 20000, date: "2026-05-10" }); run(db, "Admin", "2026-06-02", "repayLoan", { loanId: l.id, amount: 60000, date: "2026-06-02" });
   const rec = run(db, "Admin", "2026-06-02", "prepareReminder", { loanId: l.id }), s = rec.body;
-  assert.equal(num(s, "Repayments Received"), 80000); assert.equal(num(s, "Total Outstanding"), 60000 + 0); assert.equal(num(s, "Outstanding Principal"), 60000); assert.equal(num(s, "Unpaid Interest"), 0);
-  assert.equal(num(s, "Total Outstanding"), L.loanOutstanding(l, db, "2026-06-02"));
+  assert.equal(num(s, "Repayments Received"), 80000); assert.equal(num(s, "Total Balance Due"), 60000);
+  assert.equal(num(s, "Total Balance Due"), L.loanOutstanding(l, db, "2026-06-02"));
+  assert.equal(num(s, "Loan Principal") + num(s, "Accrued Interest") - num(s, "Repayments Received"), num(s, "Total Balance Due"), "the lines add up");
 });
 
 t("LIVE: a repayment recorded after a reminder is reflected by the next one, and the old one is refused as stale", () => {
@@ -64,7 +63,7 @@ t("LIVE: a repayment recorded after a reminder is reflected by the next one, and
   run(db, "Admin", "2026-10-22", "repayLoan", { loanId: l.id, amount: 50000, date: "2026-10-22" });
   assert.throws(() => run(db, "Admin", "2026-10-22", "revalidateReminder", { id: r1.id }), /STALE_REMINDER/);
   const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "URGENT" });
-  assert.equal(num(r2.body, "Repayments Received"), 50000); assert.equal(num(r2.body, "Total Outstanding"), 130000);
+  assert.equal(num(r2.body, "Repayments Received"), 50000); assert.equal(num(r2.body, "Total Balance Due"), 130000);
   assert.throws(() => run(db, "Admin", "2026-10-23", "revalidateReminder", { id: r2.id }), /STALE_REMINDER/, "tomorrow interest/days have moved on");
 });
 
@@ -80,15 +79,15 @@ t("urgency follows the configured dates and becomes progressively firmer (overdu
   const at = (day) => run(db, "Admin", day, "prepareReminder", { loanId: l.id });
   const early = at("2026-10-22"), mid = at("2026-11-20"), late = at("2026-12-01"), over = at("2026-12-08");
   assert.deepEqual([early, mid, late, over].map((r) => r.level), ["FRIENDLY", "URGENT", "FINAL", "FINAL"]);
-  assert.match(mid.body, /Days Remaining: 15 days/); assert.match(late.body, /Days Remaining: 4 days/); assert.match(over.body, /Deadline passed 3 days ago/);
-  assert.match(late.body, /final notice/i); assert.match(mid.body, /fellow members who are expecting their savings/); assert.match(over.body, /fellow members who are expecting their savings/);
+  assert.match(mid.body, /Payment Deadline: 5 December 2026/); assert.match(over.body, /Payment Deadline: 5 December 2026/);
+  assert.match(late.body, /final notice/i); assert.match(mid.body, /urgent/i); assert.match(over.body, /Church Administration/);
   assert.notEqual(early.body.split("\n")[4], late.body.split("\n")[4], "wording differs by level");
 });
 
 t("a loan-specific approved deadline overrides the general one", () => {
   const { db, l } = world(); setDates(db, "2026-10-22");
   const r = run(db, "Admin", "2026-10-22", "setReminderDates", { shareOutDate: "2026-12-19", deadline: "2026-12-05", loanDeadlines: { [l.id]: "2026-11-15" }, reason: "agreed with member" }); run(db, "Chairperson", "2026-10-22", "approveRequest", { id: r.requestId });
-  const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }); assert.match(rec.body, /Repayment Deadline: 15 Nov 2026/); assert.match(rec.body, /Days Remaining: 24 days/); assert.equal(rec.level, "URGENT");
+  const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }); assert.match(rec.body, /Payment Deadline: 15 November 2026/); assert.equal(rec.level, "URGENT");
 });
 
 t("duplicates are prevented; a firmer level or the next interval is allowed; cancelling frees the slot", () => {
@@ -189,7 +188,7 @@ const gw = (live, answer) => { const sent = []; return { sent, g: { SMS: { live,
 t("SMS: queue -> gateway -> accepted is recorded honestly (accepted is not delivered), the text is the verified reminder text, and it goes to the member's own number only", () => {
   const { db, rec } = smsWorld(), { g, sent } = gw(true); const q = run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id });
   assert.equal(db.outbox.length, 1); assert.equal(db.outbox[0].to, "+256772123456"); assert.equal(db.outbox[0].channel, "SMS");
-  N.dispatch(db, ctx("Admin", "2026-10-22"), g, { ids: [q.outboxId] }); assert.equal(sent.length, 1); assert.ok(!/[*]|(^|\s)_/.test(sent[0].body), "no WhatsApp markup in an SMS"); assert.ok(/UGX/.test(sent[0].body));
+  N.dispatch(db, ctx("Admin", "2026-10-22"), g, { ids: [q.outboxId] }); assert.equal(sent.length, 1); assert.ok(!/[*]|(^|\s)_/.test(sent[0].body), "no WhatsApp markup in an SMS"); assert.ok(/UGX/.test(sent[0].body)); assert.ok(sent[0].body.length <= 50, "an SMS is never longer than 50 characters"); assert.ok(!/[\u201C\u201D\u2014]/.test(sent[0].body), "plain characters only"); const bal = /(UGX [\d,]+)/.exec(sent[0].body); assert.ok(bal && db.reminders[0].body.includes(bal[1]), "the amount in the SMS equals the verified reminder balance"); assert.strictEqual(db.reminders[0].smsBody, sent[0].body);
   run(db, "Admin", "2026-10-22", "syncReminderSms", { id: rec.id }); const r = db.reminders[0]; assert.equal(r.delivery, "SMS_ACCEPTED"); assert.ok(r.events.some((e) => e.event === "SMS_ACCEPTED" && /does not prove/.test(e.note)));
   assert.throws(() => run(db, "Admin", "2026-10-22", "queueReminderSms", { id: rec.id }), /already sent/); assert.throws(() => run(db, "Admin", "2026-10-22", "cancelReminder", { id: rec.id, reason: "x" }), /cannot be cancelled/);
 });
@@ -208,4 +207,51 @@ t("SMS: a targeted send touches nothing else in the outbox; stale figures, opted
   const w4 = smsWorld(); ["Treasurer", "Secretary", "Committee"].forEach((r) => assert.throws(() => run(w4.db, r, "2026-10-22", "queueReminderSms", { id: w4.rec.id })));
   const before = JSON.stringify([w4.db.transactions, w4.db.loans]); N.dispatch(w4.db, ctx("Admin", "2026-10-22"), gw(true).g, { ids: [] }); assert.equal(JSON.stringify([w4.db.transactions, w4.db.loans]), before, "no financial record changes");
 });
+t("every reminder tells the member that unpaid loans after the deadline go to Church Administration", () => { const REM = require("../src/core/reminders.js"); ["FRIENDLY", "URGENT"].forEach((lv) => { const T = REM.DEFAULT_TEMPLATES ? REM.DEFAULT_TEMPLATES[lv] : null; if (T) assert.ok(/Church Administration/.test(T.request) && /Bishop/.test(T.request), lv); }); assert.ok(/Church Administration/.test(REM.DEFAULT_TEMPLATES.FINAL.request) && /Bishop has requested the list of members with outstanding loans after this date/.test(REM.DEFAULT_TEMPLATES.FINAL.request)); });
+t("the deadline is a setting: notices keep the deadline they were issued with, and a changed deadline makes an old unsent notice stale", () => {
+  const { db, l } = world(); setDates(db, "2026-10-22", "2026-12-19", "2026-11-24");
+  const r1 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" });
+  assert.match(r1.body, /Payment Deadline: 24 November 2026/); assert.equal(r1.deadline, "2026-11-24");
+  assert.match(r1.body, /your name and outstanding balance will be submitted to Church Administration/); assert.match(r1.body, /The Bishop has requested the list/);
+  const sms = RM.composeSms(db, r1, r1.figures); assert.equal(sms, "SOB FINAL: Pay UGX 180,000 now. Bishop next."); assert.ok(sms.length <= 50);
+  setDates(db, "2026-10-22", "2026-12-19", "2026-12-05");                                       // next cycle / a new decision: no code change
+  assert.equal(r1.deadline, "2026-11-24"); assert.match(r1.body, /24 November 2026/, "the issued notice keeps its deadline");
+  assert.throws(() => run(db, "Admin", "2026-10-22", "revalidateReminder", { id: r1.id }), /STALE_REMINDER.*deadline changed/);
+  const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" }); assert.match(r2.body, /Payment Deadline: 5 December 2026/);
+});
+t("the deadline needs the Chairperson to approve it; no date is written into the program", () => { const { db } = world(); const r = run(db, "Admin", "2026-10-22", "setReminderDates", { shareOutDate: "2026-12-19", deadline: "2026-11-24", reason: "committee" }); assert.equal(r.pendingApproval, true); assert.equal(RM.getConfig(db).deadline, null); assert.ok(!/2026-11-24|24 November/.test(require("fs").readFileSync(require.resolve("../src/core/reminders.js"), "utf8")), "no hard-coded deadline in the code"); });
+/* ---- automatic reminders ---- */
+const autoWorld = () => { const w = world(); w.db.members[0].phone = "0772123456"; setDates(w.db, "2026-11-10", "2026-12-19", "2026-11-24"); return w; };
+const setAuto = (db, day, a) => { const r = run(db, "Admin", day, "setAutoReminders", Object.assign({ reason: "committee decision (test)" }, a)); if (r.pendingApproval) run(db, "Chairperson", day, "approveRequest", { id: r.requestId }); };
+const auto = (db, day, g) => RM.autoRun(db, ctx("Admin", day), g);
+t("AUTO: nothing is sent while it is switched off, and switching it on needs the Chairperson", () => {
+  const { db } = autoWorld(), { g, sent } = gw(true); assert.equal(auto(db, "2026-11-10", g).sent.length, 0); assert.equal(sent.length, 0);
+  const r = run(db, "Admin", "2026-11-10", "setAutoReminders", { enabled: true, reason: "x" }); assert.equal(r.pendingApproval, true); assert.equal(RM.getAuto(db).enabled, false);
+  run(db, "Chairperson", "2026-11-10", "approveRequest", { id: r.requestId }); assert.equal(RM.getAuto(db).enabled, true);
+  assert.ok(db.auditLog.some((a) => a.entityType === "AutoReminders" && a.action === "Changed"));
+});
+t("AUTO: with the gateway not live nothing is sent and no record is created", () => { const { db } = autoWorld(), { g, sent } = gw(false); setAuto(db, "2026-11-10", { enabled: true }); const r = auto(db, "2026-11-10", g); assert.equal(sent.length, 0); assert.equal(db.reminders.length, 0); assert.match(r.note, /not live/); });
+t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then the Bishop before the deadline; every SMS is 50 characters or fewer; each goes once", () => {
+  const { db } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true });
+  assert.equal(auto(db, "2026-11-10", g).sent[0].stage, "REGULAR"); assert.equal(auto(db, "2026-11-10", g).sent.length, 0, "same day: not sent twice");
+  assert.equal(auto(db, "2026-11-12", g).sent.length, 0, "only 2 days after the first reminder");
+  assert.equal(auto(db, "2026-11-13", g).sent[0].stage, "ADMIN"); assert.equal(auto(db, "2026-11-14", g).sent.length, 0, "the Church Administration notice goes once");
+  assert.equal(auto(db, "2026-11-21", g).sent.length, 0, "3 days before the deadline: not yet the Bishop stage");
+  assert.equal(auto(db, "2026-11-22", g).sent[0].stage, "BISHOP"); assert.equal(auto(db, "2026-11-23", g).sent.length, 0, "the Bishop notice goes once"); assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up");
+  assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
+  const recs = db.reminders.filter((r) => r.auto); assert.deepEqual(recs.map((r) => r.stage), ["REGULAR", "ADMIN", "BISHOP"]); assert.ok(recs.every((r) => r.deadline === "2026-11-24" && r.delivery === "SMS_ACCEPTED" && /Church Administration/.test(r.body)));
+  assert.ok(db.auditLog.filter((a) => a.entityType === "AutoReminderRun").length >= 3 && db.auditLog.some((a) => a.entityType === "Reminder" && a.action === "Prepared"));
+});
+t("AUTO: someone who has paid since the first reminder skips the Church Administration notice; a loan paid in full is not messaged again", () => {
+  const { db, l } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true }); auto(db, "2026-11-10", g);
+  run(db, "Admin", "2026-11-12", "repayLoan", { loanId: l.id, amount: 10000, date: "2026-11-12" }); assert.equal(auto(db, "2026-11-13", g).sent.length, 0, "no Church Administration notice for someone who has been paying");
+  assert.equal(auto(db, "2026-11-17", g).sent[0].stage, "REGULAR", "still gets the regular reminder");
+  run(db, "Admin", "2026-11-18", "repayLoan", { loanId: l.id, amount: L.loanOutstanding(db.loans[0], db, "2026-11-18"), date: "2026-11-18" }); const n = sent.length; assert.equal(auto(db, "2026-11-22", g).sent.length, 0); assert.equal(sent.length, n);
+});
+t("AUTO: opted-out members are skipped; a failed send is cancelled and tried again next run; nothing in the ledger changes", () => {
+  const { db } = autoWorld(), bad = gw(true, { ok: false, error: "HTTP 500" }), good = gw(true); setAuto(db, "2026-11-10", { enabled: true }); const before = JSON.stringify([db.transactions, db.loans]);
+  const r1 = auto(db, "2026-11-10", bad.g); assert.equal(r1.failed.length, 1); assert.ok(db.reminders[0].delivery === "CANCELLED"); assert.equal(auto(db, "2026-11-11", good.g).sent.length, 1, "retried and sent");
+  assert.equal(JSON.stringify([db.transactions, db.loans]), before); db.members[0].notifyOptOut = true; assert.equal(auto(db, "2026-11-20", good.g).sent.length, 0);
+});
+t("AUTO: the schedule can be changed without code, and bad values are refused", () => { const { db } = autoWorld(); setAuto(db, "2026-11-10", { enabled: true, regularEveryDays: 3, adminAfterDays: 2, bishopDaysBefore: 4 }); assert.deepEqual([RM.getAuto(db).regularEveryDays, RM.getAuto(db).adminAfterDays, RM.getAuto(db).bishopDaysBefore], [3, 2, 4]); assert.throws(() => run(db, "Admin", "2026-11-10", "setAutoReminders", { adminAfterDays: 0, reason: "x" }), /INVALID/); });
 console.log(n + " reminder tests passed");
