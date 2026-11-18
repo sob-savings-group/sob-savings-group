@@ -24,6 +24,18 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok(/months charged/i.test(ctxTxt) && /monthly interest/i.test(ctxTxt) && /repaid so far/i.test(ctxTxt) && /owed today/i.test(ctxTxt) && /paid out/.test(ctxTxt), "the lock form shows the loan's history: months charged, interest, repaid, owed");
   await pg.fill('.modal input[name="date"]', "2026-11-01"); await pg.dispatchEvent('.modal input[name="date"]', "input");
   ok(/If locked from/.test(await pg.locator("#lock-preview").innerText()), "choosing a date previews the effect on months and amount owed");
+  await pg.keyboard.press("Escape"); await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
+  await pg.click("#record-existing-loan"); await pg.waitForSelector('.modal input[name="date"]');
+  const rf = await pg.locator(".modal").innerText();
+  ok(/date it was paid out/i.test(rf) && /monthly interest/i.test(rf) && /restore loan/i.test(rf), "Record existing loan form has a payout date, monthly interest, and points voided loans to Restore");
+  await pg.fill('.modal input[name="amt"]', "200000"); await pg.fill('.modal input[name="date"]', "2025-12-01"); await pg.fill('.modal input[name="rate"]', "30000"); await pg.fill('.modal [name="remarks"]', "backdated test");
+  await pg.click(".modal [data-submit]"); await pg.waitForTimeout(500); await pg.waitForFunction(() => !document.querySelector(".modal [data-submit]"));
+  await pg.waitForTimeout(300);
+  ok(/LOAN-\S+\s+Demo Member 001\s+200,000\s+330,000/.test((await pg.locator("tbody tr").last().innerText()).replace(/\s+/g," ")), "the loan is listed at once, with interest running from the backdated date (11 months x 30,000 = 330,000)");
+  await pg.locator("tbody tr", { hasText: "backdated" }).count();
+  await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove()));
+  const rows = pg.locator("#loan-totals ~ * tbody tr, tbody tr"); await rows.last().click(); await pg.waitForSelector(".modal");
+  ok(/11 months/.test(await pg.locator(".modal").innerText()), "the loan page counts 11 months from the backdated date");
   ok(errs.length === 0, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close(); srv.close(); console.log(fails ? "loan totals e2e FAILED" : "loan totals e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });
