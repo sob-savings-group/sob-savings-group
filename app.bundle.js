@@ -4384,7 +4384,7 @@
   function Form(title, fields, onSubmit, submitLabel) {
     const inputs = {};
     const body = h("div", null, fields.map((f) => {
-      if (f.type === "note") return h("p", { class: "mute" }, f.text);
+      if (f.type === "note") return f.node || h("p", { class: "mute" }, f.text);
       if (f.other && f.options) {   // a list with an "Other (Specify)" facility: choosing it reveals a text box and the typed text is what is recorded
         const OTHER = "__other__", sel = h("select", { name: f.name + "__sel" }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o)).concat([h("option", { value: OTHER }, "Other (Specify)")]));
         const txt = h("input", { type: "text", name: f.name + "__other", placeholder: "Please specify", maxlength: "60", "aria-label": f.label + " (specify)" }); txt.hidden = true;
@@ -5021,6 +5021,29 @@ window.SOBMember = function (E) {
         h("h2", { class: "sec" }, "Repayments up to this date"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(dd).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment"), (t) => openEntry(t.id)),
         h("h2", { class: "sec" }, "Guarantors on this date"), Table([{ label: "Guarantor", render: (g) => nameOf(g.guarantorId) }, { label: "Guaranteed", num: 1, render: (g) => num(g.amount) }, { label: "Still committed", num: 1, render: (g) => num(L.guaranteeRemainingAsOf(g, asAt)) }], (st.db.guarantees || []).filter((g) => g.loanId === loan.id && (g.status === "Active" || g.status === "Released") && !(g.dateCommitted && g.dateCommitted > asAt)))) : null));
   }
+  /* LOCK / UNLOCK INTEREST: show the loan's own history first (what was lent, repaid, how many months are charged, what is owed) and a live preview of the chosen date. */
+  function lockForm(loan, v) {
+    const unlock = v.interestLocked, id = loan.id, T = today();
+    const reps = (L.activeTransactions(st.db) || []).filter((t) => t.loanId === id && t.type === "Loan Repayment").sort((a, b) => (a.date < b.date ? -1 : 1));
+    const locks = loan.interestLocks || [];
+    const owedWith = (lk) => { const c2 = Object.assign({}, loan, { interestLocks: (loan.interestLocks || []).concat(lk ? [lk] : []) }); return { months: L.loanMonthsAfterGrace(c2, T), owed: L.loanOutstanding(c2, st.db, T) }; };
+    const now = owedWith(null), preview = h("p", { class: "mute", id: "lock-preview" });
+    const box = h("div", { id: "lock-context" },
+      h("p", null, h("b", null, nameOf(loan.memberId)), " · loan paid out ", D.toDisplay(loan.date), " · ", Number(loan.loanAmount).toLocaleString(), " UGX"),
+      h("div", { class: "grid" }, Card("Monthly interest", ugx(v.assignedMonthlyInterest)), Card("Months charged", String(v.unpaidMonths), "from payout to " + D.toDisplay(T)), Card("Interest so far", ugx(v.accumulatedInterest)), Card("Repaid so far", ugx(v.repaid)), Card("Owed today", ugx(v.balance))),
+      h("p", { class: "mute" }, reps.length ? "Repayments:" : "No repayments recorded yet."),
+      reps.length ? Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], reps) : null,
+      locks.length ? h("div", null, h("p", { class: "mute" }, "Earlier lock periods:"), Table([{ label: "From", render: (l) => D.toDisplay(l.from) }, { label: "To", render: (l) => D.isISO(l.to) ? D.toDisplay(l.to) : "still locked" }, { label: "Reason", key: "reason" }], locks)) : null,
+      h("p", { class: "mute" }, unlock ? "Unlocking makes interest grow again from the date you choose. Months inside the locked period stay free." : "Locking stops NEW interest from the date you choose. Months before it stay charged; nothing recorded is changed. The Chairperson must approve."), preview);
+    const m = Form(unlock ? "Unlock interest on this loan" : "Lock interest on this loan", [{ type: "note", node: box }, dateF("date", unlock ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }],
+      act(async (f) => { await commit(unlock ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, unlock ? "Interest unlocked" : "Interest locked"));
+    const di = m.el.querySelector('input[name="date"]');
+    const upd = () => { const d = di && di.value; if (!D.isISO(d)) { preview.textContent = ""; return; }
+      if (unlock) { const open = locks.find((l) => !D.isISO(l.to)); preview.textContent = open && d >= open.from ? "Locked since " + D.toDisplay(open.from) + ". If unlocked on " + D.toDisplay(d) + ", interest grows again from then." : "";
+      } else if (loan.date && d < loan.date) preview.textContent = "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ").";
+      else { const w = owedWith({ from: d, to: "" }); preview.textContent = "If locked from " + D.toDisplay(d) + ": months charged " + now.months + " → " + w.months + " (today). Owed today " + ugx(now.owed) + " → " + ugx(w.owed) + ". Interest stops growing from that date."; } };
+    if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); upd(); }
+  }
   function openLoan(id, asAt0) {
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
@@ -5054,7 +5077,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
-    add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form(v.interestLocked ? "Unlock interest on this loan" : "Lock interest on this loan", [dateF("date", v.interestLocked ? "Unlock date" : "Lock from"), { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit(v.interestLocked ? "unlockInterest" : "lockInterest", { loanId: id, date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, v.interestLocked ? "Interest unlocked" : "Interest locked")));
+    add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => lockForm(loan, v));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [reasonField("reason.Void")], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);
   }
