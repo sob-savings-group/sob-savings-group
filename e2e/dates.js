@@ -70,7 +70,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click('[data-nav="myloans"]'); await pg.click("[data-loan]"); await pg.waitForSelector(".modal .kv"); const mt = await pg.locator(".modal").innerText();
   const grab = (label) => { const m = new RegExp(label + "\\s*UGX ([\\d,]+)").exec(mt); return m ? Number(m[1].replace(/,/g, "")) : null; };
   ok(grab("Principal left") === w.principalOutstanding && grab("Interest due now") === w.unpaidInterest && grab("Interest paid") === w.interestPaid && grab("Interest charged so far") === w.accruedInterest, "borrower's loan screen matches the engine (principal left " + w.principalOutstanding + ", interest due " + w.unpaidInterest + ")");
-  ok(new RegExp("You owe today\\s*" + ug(owe)).test(mt), "'You owe today' equals loan outstanding (" + ug(owe) + ")");
+  ok(new RegExp("You owe today\\s*" + ug(owe), "i").test(mt), "'You owe today' equals loan outstanding (" + ug(owe) + ")");
   ok(w.steps.every((x) => mt.includes(ug(x.amount)) && (x.principal === 0 || mt.includes(ug(x.principal)))), "every repayment is listed with its interest / principal split");
   await pg.click("[data-close]"); await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "SOB-002"); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, "4321"); await pg.click("#login-go"); await pg.waitForSelector("[data-nav]");
   const pos = L.memberPosition(dbf, "SOB-002"), lg = await pg.locator(".legend").first().innerText();

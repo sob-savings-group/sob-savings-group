@@ -44,12 +44,12 @@ const pend = () => (server().approvalRequests || []).filter((q) => q.command ===
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const errs = [];
   const sess = async (viewport) => { const c = await b.newContext({ viewport }), pg = await c.newPage(); pg.on("pageerror", (e) => errs.push(e.message)); await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); return pg; };
-  const officer = async (pg, id, pin) => { await pg.click("#tab-officer"); await pg.fill("#sid", id); await pg.fill("#spin", pin); await pg.click("#officer-go"); await pg.waitForSelector("#kpis"); };
+  const officer = async (pg, id, pin) => { await pg.fill("#mid", id); await pg.fill("#pin", pin); await pg.click("#login-go"); await pg.waitForSelector("#kpis"); };
   const ap = await sess({ width: 1200, height: 900 }); await officer(ap, "ADMIN", "admin-pin-1");
   const ledgerBefore = JSON.stringify(server().transactions) + JSON.stringify(server().loans);
   /* 1. the Financial Years screen: years stand alone */
   await ap.click('[data-nav="fyears"]'); await ap.waitForSelector("#fy-span");
-  let txt = await ap.locator("#main").innerText(); ok(/Financial Year 2026/.test(txt) && /Held in the club consolidated position/.test(txt) && /None recorded/.test(txt), "Financial Years screen: names the year explicitly, shows the club consolidated position and says nothing is brought forward yet");
+  let txt = await ap.locator("#main").innerText(); ok(/Financial Year 2026/.test(txt) && /Held in the club consolidated position/i.test(txt) && /None recorded|Authorised balance brought forward\s*UGX 0/i.test(txt), "Financial Years screen: names the year explicitly, shows the club consolidated position and says nothing is brought forward yet");
   ok(/100,000/.test(txt), "the previous year's closing position (100,000) is shown for information, not carried in");
   /* 2. record a Balance Brought Forward: goes to the Chairperson, changes nothing yet */
   await ap.click("#bbf-add"); await ap.selectOption('select[name="m"]', M1.id); await ap.fill('input[name="amount"]', "60000"); await ap.fill('input[name="evidence"]', "AGM minute 4"); await ap.fill('input[name="reason"]', "Members chose to keep funds in"); await ap.click("[data-submit]");
@@ -58,7 +58,7 @@ const pend = () => (server().approvalRequests || []).filter((q) => q.command ===
   const ct = tok("CHAIR", "chair-pin-1"); const rr = cmd(ct, "approveRequest", { id: pend()[0].id }); ok(rr.ok !== false, "the Chairperson approves" + (rr.ok === false ? ": " + JSON.stringify(rr) : ""));
   ok(FYM.openingOf(server(), 2026, M1.id) === 60000, "after approval the member's Financial Year 2026 opens with exactly 60,000");
   await ap.reload(); await ap.waitForSelector("#kpis"); await ap.click('[data-nav="fyears"]'); await ap.waitForSelector("#fy-span"); txt = await ap.locator("#main").innerText();
-  ok(/Authorised Balance Brought Forward/.test(txt) && /60,000/.test(txt) && /40,000/.test(txt) && /AGM minute 4/.test(txt), "screen now shows the authorised 60,000, 40,000 left in the club position, and the evidence");
+  ok(/Authorised Balance Brought Forward/i.test(txt) && /60,000/.test(txt) && /40,000/.test(txt) && /AGM minute 4/.test(txt), "screen now shows the authorised 60,000, 40,000 left in the club position, and the evidence");
   ok(ledgerBefore === JSON.stringify(server().transactions) + JSON.stringify(server().loans), "no ledger entry or loan changed");
   /* 3. explicit period names everywhere */
   await ap.click('[data-nav="dash"]'); await ap.waitForSelector("#periodbar"); const bar = await ap.locator("#periodbar").innerText();

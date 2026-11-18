@@ -36,7 +36,7 @@ function testSms(){ return __gwTest("SMS"); }
 function testWhatsApp(){ return __gwTest("WHATSAPP"); }
 function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
-    randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
+    mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
 var SOB_BUILD = "__BUILD__";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
@@ -55,7 +55,7 @@ function doGet(){ return __json({ ok: true, service: "SOB Ledger", build: SOB_BU
    "authorization required" page instead of data. */
 function authorizeSOB(){
   SpreadsheetApp.getActiveSpreadsheet().getName(); CacheService.getScriptCache().get("x"); PropertiesService.getScriptProperties().getKeys();
-  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/");
+  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/"); MailApp.getRemainingDailyQuota();
   return "SOB is authorised. Build " + SOB_BUILD + ". Now deploy it as a New version.";
 }
 /* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
@@ -108,6 +108,25 @@ function installBackupTrigger(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === "dailyBackup") ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger("dailyBackup").timeBased().everyDays(1).atHour(2).create();
   return "dailyBackup scheduled";
+}
+/* ---- Automatic loan reminders (SMS). dailyReminders() is what the trigger runs. It sends NOTHING unless the Chairperson-approved switch is on (Reminders > Automatic reminders) AND the SMS gateway is live and tested.
+   Every message and every run is recorded in the audit trail; no ledger entry, loan or balance is changed. You can also run it by hand from the editor to see what it would do today. ---- */
+function dailyReminders(){
+  var env = __env(), S = __M['backend/store'], G = __M['core/governance'], RM = __M['core/reminders'];
+  env.lock.waitLock(30000);
+  try {
+    var db = S.readAll(env.ss), before = JSON.parse(JSON.stringify(db)), ctx = G.makeCtx({ id: "AUTO", name: "Automatic reminders", role: "Admin" });
+    var r = RM.autoRun(db, ctx, env.gateways || {});
+    S.guardNoLoss(before, db); var changed = S.writeChanged(env.ss, before, db);
+    if (changed.length) { var rev = Number(S.readMeta(env.ss).revision || 0) + 1; S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() }); }
+    return JSON.stringify({ date: r.date, enabled: r.enabled, sent: r.sent.length, failed: r.failed.length, skipped: r.skipped.length, note: r.note });
+  } finally { env.lock.releaseLock(); }
+}
+/* Run once from the editor: schedules dailyReminders() every day around 09:00. Safe to run again (replaces the old trigger). */
+function installReminderTrigger(){
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === "dailyReminders") ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger("dailyReminders").timeBased().everyDays(1).atHour(9).create();
+  return "dailyReminders scheduled";
 }
 /* Disaster recovery (editor only): set Script Property SOB_RESTORE_BACKUP_ID to a Backups-sheet id, then Run > restoreFromProperty. The property is cleared afterwards. */
 function restoreFromProperty(){

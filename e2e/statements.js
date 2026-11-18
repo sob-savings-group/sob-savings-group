@@ -49,7 +49,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await mp.waitForFunction(() => { const b = document.querySelector("#open-statement") || [...document.querySelectorAll("button,.quick,[role=button]")].find((e) => /My statement/.test(e.textContent)); if (!b) return false; b.click(); return true; }, null, { timeout: 20000 }); await mp.waitForSelector("#stmt-view", { timeout: 20000 });
   const mtxt = await mp.locator("#stmt-view").innerText(); const mhtml = await mp.locator("#stmt-view").innerHTML();
   ok(leaksIn(mtxt).length === 0 && leaksIn(mhtml).length === 0, "member portal statement: none of the internal references, notes, officer names, evidence, reserve text or guarantor names appear" + (leaksIn(mtxt + mhtml).length ? " — LEAK: " + leaksIn(mtxt + mhtml).join(", ") : ""));
-  ok((await mp.locator("#stmt-view >> text=Loan still owed").count()) >= 1 && /Closing savings/.test(mtxt) && /TOTAL OWED/.test(mtxt), "the member still sees their own savings, balances and loan obligation");
+  ok((await mp.locator("#stmt-view >> text=Loan still owed").count()) >= 1 && /Closing savings/i.test(mtxt) && /TOTAL OWED/i.test(mtxt), "the member still sees their own savings, balances and loan obligation");
   ok((await mp.locator("text=Administrative statement").count()) === 0, "a member is never offered the Administrative statement");
   const w = await mp.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth })); ok(w.sw <= w.iw + 1, "mobile 390px: no sideways scrolling (" + w.sw + " <= " + w.iw + ")");
   /* the member's own PDF: built from the same member statement */
@@ -60,7 +60,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* 3. a tampered browser asking for more */
   ok(!API.handle(env, { action: "getLedger", token: lg.token }).db.users.length && API.handle(env, { action: "command", token: lg.token, name: "updateMemberContact", args: { memberId: M1.id, phone: "0772000000" } }).ok === false, "a member's login cannot fetch other data or change records");
   /* 4. the Super Admin: Member statement first, switch to the Administrative statement */
-  const ap = await sess({ width: 1100, height: 900 }); await ap.click("#tab-officer"); await ap.fill("#sid", "ADMIN"); await ap.fill("#spin", "admin-pin-1"); await ap.click("#officer-go"); await ap.waitForSelector("#kpis");
+  const ap = await sess({ width: 1100, height: 900 }); await ap.fill("#mid", "ADMIN"); await ap.fill("#pin", "admin-pin-1"); await ap.click("#login-go"); await ap.waitForSelector("#kpis");
   await ap.click('[data-nav="members"]'); await ap.fill("input.search", "Grace"); await ap.click("#main tbody tr"); await ap.waitForSelector("#stmt-view");
   let atxt = await ap.locator("#stmt-view").innerText(); ok(leaksIn(atxt + await ap.locator("#stmt-view").innerHTML()).length === 0, "officers start on the Member statement (safe to print or send): no internal material");
   ok((await ap.locator("text=Administrative statement (officers only)").count()) === 1, "the officer is offered the Administrative statement as a separate choice");

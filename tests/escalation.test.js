@@ -1,0 +1,28 @@
+/* Overdue-loan escalation: church administrator first, then the Bishop; officer-sent; list rebuilt from the ledger; no duplicates; contacts private. Synthetic data. Run: node tests/escalation.test.js */
+const assert = require("assert"), G = require("../src/core/governance.js"), CMD = require("../src/core/commands.js"), RM = require("../src/core/reminders.js"), API = require("../src/backend/api.js");
+let n = 0; const t = (name, fn) => { fn(); n++; };
+const mk = (id, today) => G.makeCtx({ id, name: id, role: id === "CHAIR" ? "Chairperson" : "Admin" }, { today, now: today + "T08:00:00Z" });
+const admin = (d) => mk("ADMIN", d), chair = (d) => mk("CHAIR", d);
+const fresh = () => {
+  const db = { members: ["A", "B", "C"].map((x, i) => ({ id: "M-" + x, name: "Member " + x, status: "Active", phone: "0772000" + (100 + i) })), transactions: [], loans: [], guarantees: [], auditLog: [], approvalRequests: [], users: [], policy: [], outbox: [] };
+  ["M-A", "M-B", "M-C"].forEach((m) => G.createEntry(db, admin("2026-11-01"), { date: "2026-01-05", memberId: m, amount: 900000, type: "Savings" }));
+  ["M-A", "M-B"].forEach((m) => CMD.run(db, admin("2026-11-01"), "recordExistingLoan", { memberId: m, amount: 100000, date: "2026-02-02", assignedMonthlyInterest: 0, remarks: "test" }));
+  const r = CMD.run(db, admin("2026-11-01"), "setReminderDates", { shareOutDate: "2026-12-20", deadline: "2026-11-10", reason: "test" }); CMD.run(db, chair("2026-11-01"), "approveRequest", { id: r.requestId });
+  const e = CMD.run(db, admin("2026-11-01"), "setEscalation", { steps: { ADMIN: { phone: "0772555111", afterDays: 1, name: "Admin" }, BISHOP: { phone: "0772555222", afterDays: 3, name: "Bishop" } }, reason: "test" }); CMD.run(db, chair("2026-11-01"), "approveRequest", { id: e.requestId });
+  return db;
+};
+t("contacts are set only through a Chairperson-approved request, and audited without exposing numbers", () => { const db = fresh(); assert.strictEqual(RM.getEscalation(db)[0].phone, "+256772555111"); assert.ok(db.auditLog.some((a) => a.entityType === "ReminderEscalation")); assert.ok(!JSON.stringify(db.auditLog.filter((a) => a.entityType === "ReminderEscalation")).includes("555111")); });
+t("the Bishop cannot be set before the church administrator; bad numbers refused", () => { const db = fresh(); assert.throws(() => RM.setEscalation(db, admin("2026-11-02"), { steps: { BISHOP: { afterDays: 0 } }, reason: "x" }), /cannot come before/); assert.throws(() => RM.setEscalation(db, admin("2026-11-02"), { steps: { ADMIN: { phone: "123" } }, reason: "x" }), /valid Uganda/); });
+t("nobody is reported on or before the deadline", () => { const db = fresh(); assert.strictEqual(RM.escalationPlan(db, { step: "ADMIN", asOf: "2026-11-10" }).rows.length, 0); });
+t("church administrator is told from day 1, the Bishop only from day 3", () => { const db = fresh(); assert.strictEqual(RM.escalationPlan(db, { step: "ADMIN", asOf: "2026-11-11" }).rows.length, 2); assert.strictEqual(RM.escalationPlan(db, { step: "BISHOP", asOf: "2026-11-12" }).rows.length, 0); const b = RM.escalationPlan(db, { step: "BISHOP", asOf: "2026-11-13" }); assert.strictEqual(b.rows.length, 2); assert.ok(/Member A \(M-A\) UGX 100,000/.test(b.texts[0])); });
+t("a member who has paid in full is not listed; a member with no loan never is", () => { const db = fresh(); const loan = db.loans.find((l) => l.memberId === "M-A"); CMD.run(db, admin("2026-11-12"), "repayLoan", { loanId: loan.id, amount: 100000, date: "2026-11-12" }); const p = RM.escalationPlan(db, { step: "ADMIN", asOf: "2026-11-12" }); assert.deepStrictEqual(p.rows.map((r) => r.memberId), ["M-B"]); });
+t("queueing goes to the configured phone only, uses the ledger's figures, and a second press the same day adds nothing", () => {
+  const db = fresh(), c = admin("2026-11-13"), r = CMD.run(db, c, "queueEscalation", { step: "BISHOP" });
+  assert.strictEqual(r.members, 2); assert.ok(db.outbox.every((m) => m.to === "+256772555222" && m.channel === "SMS" && m.status === "QUEUED"));
+  const k = db.outbox.length; CMD.run(db, c, "queueEscalation", { step: "BISHOP" }); assert.strictEqual(db.outbox.length, k);
+  assert.ok(db.auditLog.some((a) => a.entityType === "Escalation" && a.entityId === "BISHOP"));
+});
+t("nothing is queued with no contact number or nobody overdue; no money record changes", () => { const db = fresh(); assert.throws(() => CMD.run(db, admin("2026-11-10"), "queueEscalation", { step: "ADMIN" }), /NOTHING_TO_SEND/); RM.setEscalation(db, admin("2026-11-11"), { steps: { ADMIN: { phone: "" } }, reason: "x" }); assert.throws(() => CMD.run(db, admin("2026-11-11"), "queueEscalation", { step: "ADMIN" }), /NO_VALID_PHONE/); const tx = JSON.stringify(db.transactions), ln = JSON.stringify(db.loans); CMD.run(db, admin("2026-11-13"), "queueEscalation", { step: "BISHOP" }); assert.strictEqual(JSON.stringify(db.transactions), tx); assert.strictEqual(JSON.stringify(db.loans), ln); });
+t("a member's own view never carries the escalation contacts", () => { const db = fresh(); const v = API.viewFor(db, { id: "M-A", role: "Member", memberId: "M-A", name: "Member A" }, "2026-11-13"); assert.ok(!JSON.stringify(v).includes("555111") && !JSON.stringify(v).includes("555222")); });
+t("a member cannot queue or change escalation", () => { const db = fresh(), m = G.makeCtx({ id: "M-A", name: "A", role: "Member", memberId: "M-A" }, { today: "2026-11-13", now: "2026-11-13T08:00:00Z" }); assert.throws(() => CMD.run(db, m, "queueEscalation", { step: "ADMIN" }), /FORBIDDEN|permission/i); assert.throws(() => CMD.run(db, m, "setEscalation", { steps: {}, reason: "x" }), /FORBIDDEN|permission/i); });
+console.log(n + " escalation tests passed");

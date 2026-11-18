@@ -521,9 +521,14 @@ __M['core/governance'] = (function(){ const module = {exports:{}}; const require
     "purpose.Expense": ["Administration", "Transport", "Stationery", "Meeting costs", "Bank charges"],
     "purpose.Income": ["Loan interest", "Annual subscription", "Donation"],
     "purpose.Profit": ["Profit share"],
-    "purpose.Bank Charge": ["Bank charge"]
+    "purpose.Bank Charge": ["Bank charge"],
+    "loan.Purpose": ["School fees", "Business capital", "Farming", "Medical expenses", "Household needs", "Emergency", "Rent"],
+    "member.Location": [],
+    "reason.Decline": ["Savings too low for the amount", "Existing loan not yet cleared", "Guarantors not sufficient", "Incomplete application", "Committee decision"],
+    "reason.Reject": ["Details do not match the records", "Not supported by a receipt", "Duplicate request", "Not approved by the committee"],
+    "reason.Void": ["Entered in error", "Duplicate entry", "Wrong member", "Wrong amount", "Wrong date", "Cancelled by the committee"]
   };
-  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges" };
+  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges", "loan.Purpose": "Loan purposes (what the loan is for)", "member.Location": "Member locations / areas", "reason.Decline": "Reasons for declining a loan", "reason.Reject": "Reasons for rejecting a request or entry", "reason.Void": "Reasons for voiding or restoring a record" };
   const listItems = (db, key) => (db.listItems || []).filter((i) => i && i.list === key);
   function listOptions(db, key) {
     const retired = {}, added = []; listItems(db, key).forEach((i) => { if (i.active === false) retired[i.label.toLowerCase()] = 1; else added.push(i.label); });
@@ -739,7 +744,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
   }
 
   /* --- workflow --- */
-  function applyForLoan(db, ctx, memberId, amount) {
+  function applyForLoan(db, ctx, memberId, amount, purpose) {
     G.require(ctx, "loan.apply");
     if (ctx.role === "Member" && ctx.memberId !== memberId) throw new Error("FORBIDDEN: members apply only for themselves");
     if (!db.members.some((m) => m.id === memberId)) throw new Error("UNKNOWN_MEMBER: " + memberId);
@@ -747,7 +752,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     if (!(L.memberSavings(db, memberId) > 0)) throw new Error("NO_SAVINGS: a member must have savings before applying");
     if (L.memberHasOutstandingLoan(db, memberId)) throw new Error("HAS_OUTSTANDING_LOAN: clear the existing loan first");
     if ((db.loans || []).some((l) => l.memberId === memberId && !l.voided && PRE_DISBURSE.includes(l.status))) throw new Error("ALREADY_APPLIED");
-    const loan = { id: G.uid("LOAN"), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
+    const loan = { id: G.uid("LOAN"), purpose: String(purpose || "").trim().slice(0, 80), memberId, memberName: db.members.find((m) => m.id === memberId).name, loanAmount: amount, status: "Pending",
       applicationDate: ctx.today, appliedBy: ctx.by, graceMonths: 0 };
     db.loans.push(loan);
     G.audit(db, ctx, "Loan", loan.id, "Applied", null, { memberId, amount });
@@ -2049,19 +2054,23 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   const FIELDS = ["intro", "request", "stewardship", "scripture", "thanks", "signature"];
   /* Wording only. NO amounts, dates or rates appear here: those are filled from the ledger and the configuration. The scripture is configurable; the signature too. */
   const DEFAULT_TEMPLATES = {
-    FRIENDLY: { intro: "As we approach the annual SOB Savings Group share-out, we respectfully remind you of your outstanding loan obligation.",
-      request: "We kindly request you to prioritize settlement within the approved period to facilitate timely reconciliation and a smooth share-out for all members.",
-      stewardship: "These funds represent the savings of fellow members who have entrusted them to our collective stewardship.", scripture: "1 Corinthians 4:2 — Faithfulness in stewardship.", thanks: "Thank you for your cooperation and commitment.", signature: "SOB Savings Group Administration." },
-    URGENT: { intro: "The annual SOB Savings Group share-out is now close, and your loan obligation remains outstanding. We humbly and respectfully urge you to settle without further delay.",
-      request: "Please arrange your payment by {deadline}. Delayed repayment affects fellow members who are expecting their savings at the share-out.",
-      stewardship: "These funds are the savings of our fellow members, entrusted to our collective stewardship. We must be found faithful with them.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", thanks: "Thank you for giving this your prompt attention.", signature: "SOB Savings Group Administration." },
-    FINAL: { intro: "This is a final notice regarding your outstanding loan, ahead of the annual SOB Savings Group share-out.",
-      request: "We ask that you settle in full by {deadline}, or contact the Administration immediately. Delayed repayment directly affects fellow members who are expecting their savings at the share-out, and unpaid balances will be dealt with in line with the group's approved policies.",
-      stewardship: "SOB is a serious financial institution holding the hard-earned savings of its members; we are accountable for every shilling entrusted to us.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", thanks: "We trust you will respond with the same faithfulness you expect for your own savings.", signature: "SOB Savings Group Administration." }
+    FRIENDLY: { intro: "As we approach the annual SOB Savings Group share-out, we respectfully remind you of your outstanding SOB loan.",
+      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans affect the group's obligations. These funds belong to fellow members who have entrusted them to our collective stewardship.",
+      request: "Kindly settle your balance by {deadline}. Loans still unpaid after that date will be forwarded to Church Administration, and then to the Bishop, who has requested the list of members with outstanding loans.", thanks: "Thank you for your cooperation and commitment.", scripture: "1 Corinthians 4:2 — Faithfulness in stewardship.", signature: "SOB Savings Group Administration." },
+    URGENT: { intro: "This is an urgent reminder regarding your outstanding SOB loan.",
+      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group's obligations.",
+      request: "Your name and outstanding balance will be forwarded to Church Administration if this loan remains unpaid. Please settle by {deadline}; after that date the Bishop has requested the list of members with outstanding loans.", thanks: "Please treat this matter with the seriousness it deserves and give it your prompt attention.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", signature: "SOB Savings Group Administration." },
+    FINAL: { intro: "This is a final notice regarding your outstanding SOB loan.",
+      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group’s obligations and the reputation of the Church.",
+      request: "If payment is not received by {deadline}, your name and outstanding balance will be submitted to Church Administration. The Bishop has requested the list of members with outstanding loans after this date.",
+      thanks: "Please treat this matter with urgency and settle your balance immediately.", scripture: "", signature: "SOB Savings Group Administration." }
   };
   const DEFAULTS = { shareOutDate: null, deadline: null, loanDeadlines: {}, urgentDays: 30, finalDays: 7, minIntervalDays: 7 };
 
   const clone = (x) => JSON.parse(JSON.stringify(x));
+  const FULL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const fullDate = (iso) => (D.isISO(iso) ? Number(iso.slice(8, 10)) + " " + FULL_MONTHS[Number(iso.slice(5, 7)) - 1] + " " + iso.slice(0, 4) : "");
+  const padDate = (iso) => (D.isISO(iso) ? iso.slice(8, 10) + " " + D.longDate(iso).split(" ")[1] + " " + iso.slice(0, 4) : "");
   const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
   const daysBetween = (a, b) => Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)) - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000);
   const hash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
@@ -2182,17 +2191,14 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     const prob = problemOf(db, loan, asOf); if (prob) throw new Error("CANNOT_VERIFY: " + prob + ". No reminder was prepared.");
     const f = figures(db, loan, asOf); if (f.totalOutstanding <= 0) throw new Error("SETTLED: this loan has no balance outstanding; no reminder is needed");
     const sch = schedule(db, cfg, loan, asOf); if (sch.error) throw new Error(sch.error);
-    const T = cfg.templates[level], vars = { name: member.name, id: member.id, deadline: D.longDate(sch.deadline), daysToDeadline: String(Math.abs(sch.daysToDeadline)), shareOutDate: D.longDate(sch.shareOutDate), daysToShareOut: String(sch.daysToShareOut) };
-    const L1 = [];
-    const days = sch.daysToDeadline > 0 ? sch.daysToDeadline + " day" + (sch.daysToDeadline === 1 ? "" : "s") : sch.daysToDeadline === 0 ? "Due today" : "Deadline passed " + Math.abs(sch.daysToDeadline) + " day" + (Math.abs(sch.daysToDeadline) === 1 ? "" : "s") + " ago";
-    const period = f.interestMonths + " calendar month" + (f.interestMonths === 1 ? "" : "s") + " (" + D.longDate(f.disbursed) + " to " + D.longDate(asOf) + ")" + (f.graceMonths ? ", after " + f.graceMonths + " month(s) of authorised grace" : "");
-    L1.push("Dear " + member.name + ",", "", "Praise the Lord.", "", fill(T.intro, vars), "", "*Your Loan Summary*", "Member: " + member.name + " (" + member.id + ")",
-      "Loan Principal: " + money(f.principal), "Disbursement Date: " + D.longDate(f.disbursed), "Monthly Interest: " + money(f.monthlyInterest), "Interest Period: " + period, "Accrued Interest: " + money(f.accruedInterest),
-      "Repayments Received: " + money(f.repaid), "Outstanding Principal: " + money(f.outstandingPrincipal), "Unpaid Interest: " + money(f.unpaidInterest));
+    const T = cfg.templates[level], vars = { name: member.name, id: member.id, deadline: fullDate(sch.deadline), daysToDeadline: String(Math.abs(sch.daysToDeadline)), shareOutDate: fullDate(sch.shareOutDate), daysToShareOut: String(sch.daysToShareOut) };
+    const L1 = ["Dear " + member.name + ",", "", "Praise the Lord.", "", fill(T.intro, vars), "", "Loan Disbursement Date: " + fullDate(f.disbursed), "Loan Principal: " + money(f.principal), "Accrued Interest: " + money(f.accruedInterest)];
     if (f.unpaidPenalties > 0) L1.push("Unpaid Penalties: " + money(f.unpaidPenalties));
-    L1.push("*Total Outstanding: " + money(f.totalOutstanding) + "*", "_Figures as at " + D.longDate(asOf) + ", " + eatTime(nowISO) + ". Interest is added for each calendar month the loan remains unsettled._", "",
-      "Repayment Deadline: " + D.longDate(sch.deadline), "Days Remaining: " + days, "Annual Share-Out: " + D.longDate(sch.shareOutDate) + " (" + sch.daysToShareOut + " day" + (sch.daysToShareOut === 1 ? "" : "s") + " to go)", "",
-      fill(T.request, vars), "", fill(T.stewardship, vars), "", "_" + fill(T.scripture, vars) + "_", "", fill(T.thanks, vars), "", fill(T.signature, vars));
+    if (f.repaid > 0) L1.push("Repayments Received: " + money(f.repaid));
+    L1.push("*Total Balance Due: " + money(f.totalOutstanding) + "*", "Payment Deadline: " + fullDate(sch.deadline), "");
+    [T.stewardship, T.request, T.thanks].forEach((x) => { const t = fill(x || "", vars).trim(); if (t) L1.push(t, ""); });
+    if (String(T.scripture || "").trim()) L1.push("_" + fill(T.scripture, vars) + "_", "");
+    L1.push(fill(T.signature, vars));
     return { text: L1.join("\n"), figures: f, schedule: sch, level, member: { id: member.id, name: member.name } };
   }
   /* Private chat only: wa.me/<number>?text=... Never a group, never a number the member did not register. */
@@ -2213,7 +2219,7 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     if (!N.normalizePhone(member.phone)) throw new Error("NO_VALID_PHONE: " + member.name + " has no valid Uganda WhatsApp number on record; update the member's phone first");
     if (!/^Active$/i.test(String(member.status || "Active"))) throw new Error("MEMBER_NOT_ACTIVE: member status is " + member.status);
     const msg = compose(db, loan, level, asOf, ctx.now), bodyHash = hash(msg.text.replace(/_Figures as at [^\n]*\n/, ""));
-    const prior = (db.reminders || []).filter((r) => r.loanId === loan.id && r.delivery !== "CANCELLED");
+    const prior = (db.reminders || []).filter((r) => r.loanId === loan.id && r.delivery !== "CANCELLED" && r.deadline === sch.deadline);   /* a notice issued under an earlier deadline never blocks one with the current deadline */
     const dup = prior.find((r) => r.bodyHash === bodyHash && r.asOf === asOf) || prior.find((r) => rank(r.level) >= rank(level) && daysBetween(r.asOf, asOf) < cfg.minIntervalDays);
     if (dup) throw new Error("DUPLICATE_REMINDER: a " + LEVEL_LABEL[dup.level] + " for this loan was already prepared on " + D.longDate(dup.asOf) + " (" + dup.id + "). The next reminder at this level is allowed " + D.longDate(D.addDays(dup.asOf, cfg.minIntervalDays)) + ", or choose a firmer level. To send the same one again, use 'Open WhatsApp' on that history line.");
     const rec = { id: G.uid("REM"), loanId: loan.id, memberId: member.id, memberName: member.name, level, recommendedLevel: sch.recommended, delivery: "PREPARED", followUp: "NONE", body: msg.text, bodyHash,
@@ -2246,6 +2252,7 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     if (rec.asOf !== ctx.today) throw new Error("STALE_REMINDER: this reminder was prepared on " + D.longDate(rec.asOf) + "; interest and days remaining have moved on. Prepare a new reminder.");
     const f = figures(db, loan, ctx.today); if (f.error) throw new Error("CANNOT_VERIFY: " + f.error);
     if (f.totalOutstanding <= 0) throw new Error("SETTLED: the loan has since been settled; no reminder is needed");
+    const sch0 = schedule(db, getConfig(db), loan, ctx.today); if (!sch0.error && sch0.deadline !== rec.deadline) throw new Error("STALE_REMINDER: the approved repayment deadline changed from " + D.longDate(rec.deadline) + " to " + D.longDate(sch0.deadline) + " after this reminder was prepared. Prepare a new reminder; the old one must not be sent.");
     if (!sameFigures(rec.figures, f)) throw new Error("STALE_REMINDER: the loan balance has changed since this reminder was prepared (a repayment or adjustment was recorded). Prepare a new reminder; the old one must not be sent.");
     if (!N.normalizePhone(member.phone)) throw new Error("NO_VALID_PHONE: the member's WhatsApp number is no longer valid");
     return { id: rec.id, text: rec.body, phone: member.phone, calcAt: rec.calcAt, verifiedAt: ctx.now };
@@ -2270,12 +2277,31 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   }
   /* SMS through the gateway. The officer taps "Send by SMS" for ONE prepared reminder. The text is re-checked against the ledger right now (same rules as WhatsApp),
      the member must not have opted out, and the message goes to the outbox with a key that makes a second tap harmless. "Accepted by the gateway" is NOT "delivered". */
-  const smsText = (t) => String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, "");
+  /* SMS is sent in a VERY BRIEF form: never more than SMS_MAX characters (urgency, amount, action only). The detailed notice is for WhatsApp. Wording only: the amount and date come from the
+     ledger and the approved configuration at the moment of sending. Each stage has a few shorter fall-backs; if none fits, nothing is sent (never a longer message). */
+  const SMS_MAX = 50;
+  const SMS_TEMPLATES = {
+    FRIENDLY: ["SOB: Loan {total} due {dl}. Pay now.", "SOB: Pay {total} by {dl}.", "SOB: Pay {amt} by {dl}."],
+    URGENT: ["SOB: {total} unpaid. Name to Church Admin.", "SOB: {total} unpaid. Name to Admin.", "SOB: {amt} unpaid. Name to Admin."],
+    FINAL: ["SOB FINAL: Pay {total} now. Bishop next.", "SOB FINAL: Pay {amt} now. Bishop next.", "SOB FINAL: Pay {amt}. Bishop next."]
+  };
+  const asciiSms = (t) => String(t).replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-");
+  const smsText = (t) => asciiSms(String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, ""));
+  const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function composeSms(db, rec, f) {
+    const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, list = custom ? [custom] : SMS_TEMPLATES[rec.level];
+    /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
+    const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
+    const v = { total: money(n), amt: n.toLocaleString("en-US"), dl };
+    for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return t; }
+    throw new Error("SMS_TOO_LONG: the message would be longer than " + SMS_MAX + " characters, so it was not sent. Use WhatsApp for this member.");
+  }
   function queueSms(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); const chk = revalidate(db, ctx, { id: r.id });
     if (r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED") throw new Error("BAD_STATE: this reminder was already sent; prepare a new one when the next reminder is due");
+    const smsBody = composeSms(db, r, figures(db, (db.loans || []).find((l) => l.id === r.loanId), ctx.today)); r.smsBody = smsBody;
     const member = (db.members || []).find((m) => m.id === r.memberId); if (member && member.notifyOptOut) throw new Error("OPTED_OUT: the member switched notifications off, so no SMS is sent");
-    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsText(chk.text) }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
+    const msg = N.queue(db, ctx, { memberId: r.memberId, template: "loanReminderSms", vars: { text: smsBody }, channel: "SMS", dedupeKey: "REMSMS:" + r.id });
     if (msg.status === "SKIPPED") throw new Error("NO_VALID_PHONE: " + msg.reason);
     r.smsOutboxId = msg.id; event(r, ctx, "SMS_QUEUED", "SMS prepared for the gateway (" + msg.id + "). Not sent until the gateway accepts it.");
     G.audit(db, ctx, "Reminder", r.id, "SMS queued", null, { outbox: msg.id }, "Officer asked for this reminder to go by SMS"); return { reminder: r, outboxId: msg.id };
@@ -2289,6 +2315,56 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     } else if (m.status === "FAILED") event(r, ctx, "SMS_FAILED", String(m.reason || "").slice(0, 200));
     else if (m.status === "DRY_RUN") event(r, ctx, "SMS_NOT_SENT", "The SMS gateway is not switched on, so nothing was sent.");
     return { reminder: r, outboxStatus: m.status, reason: m.reason || "" };
+  }
+
+  /* ---------- ESCALATION: overdue loans reported to the church administrator, then to the bishop (officer-sent SMS) ----------
+     Steps are configured (who, their phone, how many days after the approved deadline). The list is ALWAYS rebuilt here from the ledger when sending; nothing the
+     screen shows can be typed into a message. Contacts live only in the Sheet (db.policy), approved by the Chairperson, and are never sent to members. */
+  const STEP_IDS = ["ADMIN", "BISHOP"];
+  function getEscalation(db) {
+    const rec = ((db && db.policy) || []).find((p) => p.id === KEY) || {}, cur = rec.escalation || {};
+    return STEP_IDS.map((id, i) => Object.assign({ id, label: id === "ADMIN" ? "Church Administrator" : "Bishop", phone: "", afterDays: i === 0 ? 1 : 3, name: "" }, cur[id] || {}));
+  }
+  function setEscalation(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason");
+    const steps = a.steps || {}, next = {};
+    STEP_IDS.forEach((id) => {
+      const v = steps[id] || {}, cur = getEscalation(db).find((x) => x.id === id), phone = v.phone !== undefined ? String(v.phone).trim() : cur.phone, days = v.afterDays !== undefined ? Number(v.afterDays) : cur.afterDays;
+      if (phone && !N.normalizePhone(phone)) throw new Error("INVALID: " + cur.label + " phone number is not a valid Uganda number");
+      if (!Number.isInteger(days) || days < 0 || days > 60) throw new Error("INVALID: days after the deadline must be a whole number from 0 to 60");
+      next[id] = { phone: phone ? N.normalizePhone(phone) : "", afterDays: days, name: String(v.name !== undefined ? v.name : cur.name || "").slice(0, 60) };
+    });
+    if (next.BISHOP.afterDays < next.ADMIN.afterDays) throw new Error("INVALID: the Bishop (highest escalation) cannot come before the church administrator");
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(getEscalation(db)); rec.escalation = next;
+    G.audit(db, ctx, "ReminderEscalation", KEY, "Changed", before.map((x) => ({ id: x.id, afterDays: x.afterDays, hasPhone: !!x.phone })), STEP_IDS.map((id) => ({ id, afterDays: next[id].afterDays, hasPhone: !!next[id].phone })), a.reason);
+    return getEscalation(db);
+  }
+  /* The overdue list for one step as at a day. Read-only. */
+  function escalationPlan(db, a) {
+    const asOf = a.asOf, cfg = getConfig(db), steps = getEscalation(db), step = steps.find((x) => x.id === a.step); if (!step) throw new Error("INVALID: step must be ADMIN or BISHOP");
+    const rows = [];
+    L.activeLoans(db).forEach((loan) => {
+      if (loan.status === "Cleared" || problemOf(db, loan, asOf)) return;
+      const dl = effectiveDeadline(cfg, loan); if (!isReal(dl)) return;
+      const over = daysBetween(dl, asOf); if (over < step.afterDays || over < 1) return;       // only AFTER the approved deadline has passed
+      const f = figures(db, loan, asOf); if (!(f.totalOutstanding > 0)) return;
+      const m = (db.members || []).find((x) => x.id === loan.memberId); rows.push({ memberId: loan.memberId, name: m ? m.name : loan.memberId, owed: Math.round(f.totalOutstanding), deadline: dl, daysOverdue: over, loanId: loan.id });
+    });
+    rows.sort((x, y) => y.daysOverdue - x.daysOverdue || (x.memberId < y.memberId ? -1 : 1));
+    const head = "SOB Savings Group - " + step.label + ": loans unpaid after the approved deadline, as at " + asOf + ". ", tail = " Confidential: for follow-up only.";
+    const lines = rows.map((r, i) => (i + 1) + ". " + r.name + " (" + r.memberId + ") " + money(r.owed)), parts = []; let cur = "";
+    lines.forEach((l) => { if (cur && (head + cur + l).length > 420) { parts.push(cur.trim()); cur = ""; } cur += l + "; "; }); if (cur) parts.push(cur.trim());
+    const texts = parts.map((t, i) => head + (parts.length > 1 ? "(Part " + (i + 1) + "/" + parts.length + ") " : "") + t + (i === parts.length - 1 ? " Total " + money(rows.reduce((x, r) => x + r.owed, 0)) + "." : "") + tail);
+    return { step, asOf, rows, texts, total: rows.reduce((x, r) => x + r.owed, 0), ready: !!step.phone && rows.length > 0, note: !step.phone ? "No phone number is set for the " + step.label + "." : !rows.length ? "Nobody is overdue by " + step.afterDays + " day(s) or more." : "" };
+  }
+  function queueEscalation(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; const plan = escalationPlan(db, { step: a.step, asOf: ctx.today });
+    if (!plan.step.phone) throw new Error("NO_VALID_PHONE: no phone number is set for the " + plan.step.label);
+    if (!plan.rows.length) throw new Error("NOTHING_TO_SEND: nobody is overdue by " + plan.step.afterDays + " day(s) or more");
+    const ids = plan.texts.map((t, i) => N.queue(db, ctx, { to: plan.step.phone, template: "loanReminderSms", vars: { text: t }, channel: "SMS", dedupeKey: "ESC:" + plan.step.id + ":" + ctx.today + ":" + hash(t) }).id);
+    G.audit(db, ctx, "Escalation", plan.step.id, "SMS queued", null, { messages: ids.length, members: plan.rows.map((r) => r.memberId), total: plan.total }, "Overdue loans reported to the " + plan.step.label + " (officer-sent; the gateway's answer is recorded in the outbox)");
+    return { outboxIds: ids, members: plan.rows.length, total: plan.total };
   }
   function setFollowUp(db, ctx, a) {
     G.require(ctx, "notify.manage"); const r = byId(db, a && a.id); a = a || {};
@@ -2307,7 +2383,64 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     const prev = r.delivery; r.delivery = "CANCELLED"; r.cancelReason = String(a.reason).trim(); event(r, ctx, "CANCELLED", a.reason);
     G.audit(db, ctx, "Reminder", r.id, "Cancelled", prev, "CANCELLED", a.reason); return r;
   }
-  return { KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  /* ---------- AUTOMATIC REMINDERS (SMS, sent by the daily schedule) ----------
+     Three stages, all measured from the approved repayment deadline and configurable (db.policy "reminders".auto; the Chairperson approves any change):
+       REGULAR  before the deadline, every `regularEveryDays` days, to members who still owe;
+       ADMIN    after `adminAfterDays` days with no repayment since the first reminder: the member is told their name and balance will go to Church Administration;
+       BISHOP   when `bishopDaysBefore` days (or fewer) remain before the deadline and the loan is still unpaid: the member is told the matter will go to the Bishop.
+     Nothing is sent unless it is switched on AND the SMS gateway is live and tested. Each message is an ordinary reminder record (figures re-verified, audited), never longer than 50 characters.
+     Each stage goes once per loan per deadline; a failed send is cancelled with its reason and retried at the next run. No ledger entry, loan or balance is ever changed. */
+  const AUTO_DEFAULTS = { enabled: false, regularEveryDays: 7, adminAfterDays: 3, bishopDaysBefore: 2 };
+  const STAGE_LEVEL = { REGULAR: "FRIENDLY", ADMIN: "URGENT", BISHOP: "FINAL" };
+  const STAGE_LABEL = { REGULAR: "Regular reminder", ADMIN: "Notice: name goes to Church Administration", BISHOP: "Serious reminder: matter goes to the Bishop" };
+  function getAuto(db) {
+    const a = (((db && db.policy) || []).find((p) => p.id === KEY) || {}).auto || {}, n = (k) => (Number.isInteger(Number(a[k])) && a[k] !== "" && a[k] !== null && a[k] !== undefined ? Number(a[k]) : AUTO_DEFAULTS[k]);
+    return { enabled: a.enabled === true, regularEveryDays: n("regularEveryDays"), adminAfterDays: n("adminAfterDays"), bishopDaysBefore: n("bishopDaysBefore"), updatedBy: a.updatedBy || "", updatedDate: a.updatedDate || "" };
+  }
+  function setAuto(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); const cur = getAuto(db);
+    const int = (k, lo, hi, what) => { const v = a[k] === undefined ? cur[k] : Number(a[k]); if (!Number.isInteger(v) || v < lo || v > hi) throw new Error("INVALID: " + what + " must be a whole number from " + lo + " to " + hi); return v; };
+    const next = { enabled: a.enabled === undefined ? cur.enabled : a.enabled === true || a.enabled === "true" || a.enabled === "yes", regularEveryDays: int("regularEveryDays", 1, 30, "days between regular reminders"), adminAfterDays: int("adminAfterDays", 1, 30, "days of non-payment before the Church Administration notice"), bishopDaysBefore: int("bishopDaysBefore", 0, 14, "days before the deadline for the Bishop notice") };
+    db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
+    const before = clone(getAuto(db)); rec.auto = Object.assign({}, next, { updatedBy: ctx.by, updatedDate: ctx.today });
+    G.audit(db, ctx, "AutoReminders", KEY, "Changed", before, clone(getAuto(db)), a.reason); return getAuto(db);
+  }
+  function autoRun(db, ctx, gateways) {
+    G.require(ctx, "notify.manage"); const auto = getAuto(db), today = ctx.today, out = { date: today, enabled: auto.enabled, sent: [], skipped: [], failed: [], note: "" };
+    if (!auto.enabled) { out.note = "Automatic reminders are switched off. Nothing was sent."; return out; }
+    if (!(gateways && gateways.SMS && gateways.SMS.live === true)) { out.note = "The SMS gateway is not live (set up and tested). Nothing was sent."; G.audit(db, ctx, "AutoReminderRun", today, "Run skipped", null, { reason: out.note }, "Scheduled daily run"); return out; }
+    const cfg = getConfig(db), done = (r) => r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED";
+    for (const loan of L.activeLoans(db).filter((l) => !l.voided)) {
+      let rec = null;
+      try {
+        const member = (db.members || []).find((m) => m.id === loan.memberId);
+        if (!member || !/^Active$/i.test(String(member.status || "Active"))) { out.skipped.push({ loanId: loan.id, reason: "member not active" }); continue; }
+        if (member.notifyOptOut) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "member switched notifications off" }); continue; }
+        if (!N.normalizePhone(member.phone)) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "no valid phone number" }); continue; }
+        const f = figures(db, loan, today); if (f.error) { out.skipped.push({ loanId: loan.id, reason: f.error }); continue; } if (!(f.totalOutstanding > 0)) continue;
+        const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
+        if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
+        const mine = (db.reminders || []).filter((r) => r.auto && r.loanId === loan.id && r.deadline === sch.deadline && done(r)), has = (st) => mine.some((r) => r.stage === st);
+        const first = mine.slice().sort((x, y) => (x.asOf < y.asOf ? -1 : 1))[0], last = mine.filter((r) => r.stage === "REGULAR").sort((x, y) => (x.asOf < y.asOf ? 1 : -1))[0];
+        const repaidSince = first && L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > first.asOf);
+        let stage = null;
+        if (sch.daysToDeadline <= auto.bishopDaysBefore && !has("BISHOP")) stage = "BISHOP";
+        else if (first && !has("ADMIN") && !has("BISHOP") && !repaidSince && daysBetween(first.asOf, today) >= auto.adminAfterDays) stage = "ADMIN";
+        else if (!has("ADMIN") && !has("BISHOP") && (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays)) stage = "REGULAR";
+        if (!stage) continue;
+        rec = prepare(db, ctx, { loanId: loan.id, level: STAGE_LEVEL[stage] }); rec.auto = true; rec.stage = stage;
+        const q = queueSms(db, ctx, { id: rec.id }); N.dispatch(db, ctx, gateways, { ids: [q.outboxId] }); syncSms(db, ctx, { id: rec.id });
+        if (rec.delivery === "SMS_ACCEPTED") out.sent.push({ loanId: loan.id, memberId: member.id, stage, reminderId: rec.id, sms: rec.smsBody });
+        else { cancel(db, ctx, { id: rec.id, reason: "Automatic SMS was not accepted by the gateway; it will be tried again at the next run" }); out.failed.push({ loanId: loan.id, memberId: member.id, stage }); }
+      } catch (e) {
+        if (rec && rec.delivery !== "SMS_ACCEPTED" && rec.delivery !== "CANCELLED") { try { cancel(db, ctx, { id: rec.id, reason: "Automatic reminder could not be completed: " + String(e.message).slice(0, 120) }); } catch (x) { /* already closed */ } }
+        out.skipped.push({ loanId: loan.id, reason: String(e.message).replace(/^[A-Z_]+: /, "").slice(0, 160) });
+      }
+    }
+    G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
+    return out;
+  }
+  return { getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 return module.exports; })();
@@ -2321,6 +2454,53 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
 })(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L) {
   const COMMANDS = {
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
+
+    /* OUTSTANDING ENTRIES: records the owner has confirmed but not yet entered, supplied as a PRIVATE file (never in the repository). Everything goes through the
+       existing rules: Savings and Loan Repayment post with their original date (repayments through repayLoan, so the loan, its owner, its start date and the outstanding
+       balance are all checked); every Withdraw is stored as a request the Chairperson must approve. Each entry carries a unique sourceRef, so a second run adds nothing.
+       The whole batch is trial-run on a copy first: if any line fails, nothing at all is posted. */
+    processOutstandingEntries: (db, ctx, a) => {
+      G.require(ctx, "ledger.create"); G.require(ctx, "loan.repay");
+      const batch = String(a.batchId || "").trim(), approvedBy = String(a.approvedBy || "").trim(), list = a.entries;
+      if (!/^[A-Za-z0-9._-]{3,40}$/.test(batch)) throw new Error("INVALID: batchId");
+      G.need(approvedBy, "approvedBy"); if (!Array.isArray(list) || !list.length || list.length > 100) throw new Error("INVALID: entries must be a list of 1 to 100 lines");
+      const refs = new Set(), plan = list.map((e, i) => {
+        const ref = "OUTSTANDING|" + batch + "|" + (e.ref || i + 1); if (refs.has(ref)) throw new Error("INVALID: line " + (i + 1) + " repeats reference " + ref); refs.add(ref);
+        const amount = Number(e.amount); if (!Number.isInteger(amount) || amount <= 0) throw new Error("INVALID: line " + (i + 1) + " amount");
+        if (!isRealDate(String(e.date || ""))) throw new Error("INVALID: line " + (i + 1) + " needs a real date YYYY-MM-DD"); if (e.date > ctx.today) throw new Error("INVALID: line " + (i + 1) + " is dated in the future");
+        if (!["Savings", "Loan Repayment", "Withdraw"].includes(e.type)) throw new Error("INVALID: line " + (i + 1) + " type must be Savings, Loan Repayment or Withdraw");
+        if (!db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: line " + (i + 1) + " " + e.memberId);
+        if (e.type === "Loan Repayment") { if (!e.loanId) throw new Error("REQUIRED: line " + (i + 1) + " needs the loan ID"); } else if (e.loanId) throw new Error("INVALID: line " + (i + 1) + " must not carry a loan ID");
+        return { i, ref, date: e.date, memberId: e.memberId, type: e.type, amount, loanId: e.loanId || "" };
+      }).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.i - y.i));
+      const exec = (work) => plan.map((p) => {
+        const row = { line: p.i + 1, ref: p.ref, date: p.date, memberId: p.memberId, type: p.type, amount: p.amount, loanId: p.loanId };
+        const dup = work.transactions.find((t) => t.sourceRef === p.ref) || (work.approvalRequests || []).find((r) => r.command === "postOutstandingWithdrawal" && r.args && r.args.sourceRef === p.ref);
+        if (dup) return Object.assign(row, { result: "already processed", detail: dup.id });
+        const tag = { sourceRef: p.ref, importBatch: batch, importNote: "Outstanding entry confirmed by " + approvedBy };
+        if (p.type === "Savings") { const e = G.createEntry(work, ctx, Object.assign({ date: p.date, memberId: p.memberId, amount: p.amount, type: "Savings", purpose: "Savings" }, tag)); return Object.assign(row, { result: "posted", detail: e.id }); }
+        if (p.type === "Loan Repayment") {
+          const loan = work.loans.find((l) => l.id === p.loanId); if (!loan) throw new Error("LOAN_NOT_FOUND: line " + row.line + " " + p.loanId);
+          if (loan.memberId !== p.memberId) throw new Error("LOAN_MISMATCH: line " + row.line + " loan " + p.loanId + " belongs to " + loan.memberId + ", not " + p.memberId);
+          const n = work.transactions.length; LN.repayLoan(work, ctx, p.loanId, p.amount, p.date);
+          const e = work.transactions[work.transactions.length - 1]; if (work.transactions.length !== n + 1 || e.type !== "Loan Repayment" || e.loanId !== p.loanId) throw new Error("INTERNAL: repayment line " + row.line + " was not recorded as expected");
+          Object.assign(e, tag); return Object.assign(row, { result: "posted", detail: e.id });
+        }
+        const r = run(work, ctx, "postOutstandingWithdrawal", Object.assign({ date: p.date, memberId: p.memberId, amount: p.amount }, tag));
+        return Object.assign(row, { result: "awaiting Chairperson approval", detail: r.requestId });
+      });
+      const trial = clone(db), rows = exec(trial);                                // any failure here stops everything before the real ledger is touched
+      const summary = { posted: rows.filter((r) => r.result === "posted").length, awaitingApproval: rows.filter((r) => r.result.startsWith("awaiting")).length, alreadyProcessed: rows.filter((r) => r.result === "already processed").length };
+      if (a.dryRun) return Object.assign({ dryRun: true, batchId: batch, rows }, summary);
+      const done = exec(db);
+      G.audit(db, ctx, "OutstandingBatch", batch, "Outstanding entries processed", null, { posted: summary.posted, awaitingApproval: summary.awaitingApproval, alreadyProcessed: summary.alreadyProcessed, refs: done.map((r) => r.ref) }, "Confirmed by " + approvedBy + "; original dates kept");
+      return Object.assign({ dryRun: false, batchId: batch, rows: done }, summary);
+    },
+    postOutstandingWithdrawal: (db, ctx, a) => {
+      G.require(ctx, "ledger.create"); if (!a.sourceRef) throw new Error("REQUIRED: sourceRef");
+      if (db.transactions.some((t) => t.sourceRef === a.sourceRef)) throw new Error("DUPLICATE: " + a.sourceRef + " was already posted");
+      return G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: "Withdraw", purpose: "Member withdrawal", sourceRef: a.sourceRef, importBatch: a.importBatch, importNote: a.importNote });
+    },
     splitRepayment: (db, ctx, a) => {
       G.require(ctx, "reconcile.manage"); G.need(a.reason, "reason"); G.need(a.evidence, "evidence");
       const t = db.transactions.find((x) => x.id === a.id); if (!t) throw new Error("NOT_FOUND: entry " + a.id);
@@ -2354,7 +2534,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     approveEntry: (db, ctx, a) => { const t = G.approveEntry(db, ctx, a.id, a.decision, a.reason); if (t.approvalStatus === "Approved") LN.onRepaymentCounted(db, ctx, t); return t; },
     addMember: (db, ctx, a) => G.addMember(db, ctx, { id: a.id, regDate: a.regDate, name: a.name, phone: a.phone, email: a.email, location: a.location }),
     updateMemberContact: (db, ctx, a) => G.updateMemberContact(db, ctx, { memberId: a.memberId, phone: a.phone, email: a.email, location: a.location, allowShared: !!a.allowShared, reason: a.reason }),
-    applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount),
+    applyForLoan: (db, ctx, a) => LN.applyForLoan(db, ctx, a.memberId, a.amount, a.purpose),
     addGuarantee: (db, ctx, a) => LN.addGuarantee(db, ctx, a.loanId, a.guarantorId, a.amount),
     acceptGuarantee: (db, ctx, a) => LN.acceptGuarantee(db, ctx, a.id, { evidence: a.evidence }),
     declineGuarantee: (db, ctx, a) => LN.declineGuarantee(db, ctx, a.id, a.reason),
@@ -2442,6 +2622,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
+    setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
+    queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
     syncReminderSms: (db, ctx, a) => RM.syncSms(db, ctx, { id: a.id }),
     confirmReminderSent: (db, ctx, a) => RM.confirmSent(db, ctx, { id: a.id, note: a.note }),
     setReminderFollowUp: (db, ctx, a) => RM.setFollowUp(db, ctx, { id: a.id, followUp: a.followUp, note: a.note, promiseDate: a.promiseDate }),
@@ -2451,6 +2633,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     retireListItem: (db, ctx, a) => G.retireListItem(db, ctx, { list: a.list, label: a.label, reason: a.reason }),
     recordBroughtForward: (db, ctx, a) => FYR.recordBroughtForward(db, ctx, { year: a.year, memberId: a.memberId, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     voidBroughtForward: (db, ctx, a) => FYR.voidBroughtForward(db, ctx, { id: a.id, reason: a.reason }),
+    setAutoReminders: (db, ctx, a) => RM.setAuto(db, ctx, { enabled: a.enabled, regularEveryDays: a.regularEveryDays, adminAfterDays: a.adminAfterDays, bishopDaysBefore: a.bishopDaysBefore, reason: a.reason }),
     setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.
@@ -2465,6 +2648,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
     closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
+    postOutstandingWithdrawal: { perm: "ledger.create", label: "Post a confirmed withdrawal that was not yet entered" },
     settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
@@ -2473,6 +2657,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     confirmFYProfit: { perm: "reserve.manage", label: "Verify a financial year's group profit" }, settleFinancialYear: { perm: "reserve.manage", label: "Settle a completed financial year into the General Reserve Fund" }, openReserve: { perm: "reserve.manage", label: "Record the General Reserve Fund opening balance" },
     transferToReserve: { perm: "reserve.manage", label: "Transfer unallocated profit to the General Reserve Fund" }, utilizeReserve: { perm: "reserve.manage", label: "Use money from the General Reserve Fund" },
     recordBroughtForward: { perm: "reconcile.manage", label: "Record a member's Balance Brought Forward into a financial year" }, voidBroughtForward: { perm: "reconcile.manage", label: "Void a Balance Brought Forward record" },
+    setEscalation: { perm: "policy.manage", label: "Set who is told about overdue loans (church administrator and bishop) and when" },
+    setAutoReminders: { perm: "policy.manage", label: "Change the automatic reminder schedule" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
@@ -2484,6 +2670,8 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
     if (name === "closeYearBalances") return "Close " + (a.lines || []).length + " brought-forward balances (total UGX " + (a.lines || []).reduce((x, l) => x + Number(l.amount), 0) + ") as paid out at the " + a.date + " share-out";
+    if (name === "postOutstandingWithdrawal") return "Withdrawal UGX " + a.amount + " for " + a.memberId + " dated " + a.date + " (outstanding entry, batch " + (a.importBatch || "") + ")";
+    if (name === "setEscalation") return "Overdue-loan escalation: church administrator after " + ((a.steps || {}).ADMIN || {}).afterDays + " day(s), bishop after " + ((a.steps || {}).BISHOP || {}).afterDays + " day(s) past the approved deadline";
     if (name === "distributeProfit") return "Profit distribution " + a.period;
     if (name === "settleFinancialYear") return "Settle FY" + a.year + " into the General Reserve Fund (verified result" + (a.expectedResult !== undefined ? " UGX " + a.expectedResult : "") + "; gain moves in, loss is reflected, balance carries forward)";
     if (name === "confirmFYProfit") return "Verify FY" + a.year + " group profit as UGX " + a.amount;
@@ -2493,6 +2681,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "setAutoReminders") return "Automatic reminders " + (a.enabled === undefined ? "settings" : (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF")) + ": regular every " + a.regularEveryDays + " days; Church Administration notice after " + a.adminAfterDays + " days unpaid; Bishop notice " + a.bishopDaysBefore + " days before the deadline";
     if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");
     return a.id || "";
   };
@@ -3267,7 +3456,7 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   const CSS = "@page{size:A4;margin:12mm 12mm 16mm;@bottom-right{content:\"Page \" counter(page) \" of \" counter(pages);font:9px Arial;color:#666}}*{box-sizing:border-box}body{font:12px/1.45 \"Helvetica Neue\",Arial,Helvetica,sans-serif;margin:0;color:#14213d;-webkit-print-color-adjust:exact;print-color-adjust:exact}html,body{height:100%}table.page{width:100%;height:100%;border-collapse:collapse}table.page>tbody>tr>td{vertical-align:top}table.page>thead>tr>td,table.page>tfoot>tr>td,table.page>tbody>tr>td{border:0;padding:0}thead{display:table-header-group}tfoot{display:table-footer-group}" +
     ".hd{display:flex;align-items:center;gap:14px;border-bottom:3px solid #b8892b;padding-bottom:8px;margin-bottom:10px}.hd img{height:70px;width:auto}.hd .t{flex:1}.hd .g{font-size:18px;font-weight:700;color:#0b1f3a}.hd .r{font-size:16px;font-weight:700;margin-top:3px;color:#14213d}.hd .p{font-size:11px;color:#444;margin-top:2px}" +
     ".ft{border-top:2px solid #b8892b;margin-top:10px;padding-top:6px;font-size:9.5px;color:#222}.ft .o{display:flex;flex-wrap:wrap;gap:4px 0}.ft .o div{width:33.33%;padding-right:8px}.ft b{display:block;font-size:10px}.ft .n{margin-top:4px;color:#666;font-size:9px}" +
-    "table.d{border-collapse:collapse;width:100%;margin:8px 0;border:1px solid #cfd7e6}table.d th,table.d td{border:0;border-bottom:1px solid #e1e7f2;padding:5px 8px;text-align:left}table.d tbody tr:nth-child(even) td{background:#f7f9fd}table.d td:first-child{white-space:nowrap}table.d th.n,table.d td.n{text-align:right}table.sum{border-collapse:separate;border-spacing:0;margin:6px 0 12px;min-width:60%;background:#f4f7fc;border:1px solid #d5ddec;border-radius:6px}table.sum th{text-align:left;padding:5px 18px 5px 12px;color:#41506b;font-weight:600;border-bottom:1px solid #e3e9f4}table.sum td{padding:5px 12px;font-weight:700;color:#0f2a56;border-bottom:1px solid #e3e9f4}.bar{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0b1f3a;color:#fff;padding:10px 14px;font:14px Arial}.bar button{font:inherit;padding:8px 12px;border-radius:8px;border:0;background:#d9ae4a;color:#1a1405;font-weight:700}@media print{.bar{display:none}}.fine{color:#666;font-size:10px;margin-top:10px}table.d.tot{width:auto;min-width:50%}table.d th{background:#0f2a56;color:#fff;font-size:11px;font-weight:700}table.d.tot th{background:#eef2fa;color:#0f2a56;text-transform:none;letter-spacing:0;font-size:12px}table.d tr{page-break-inside:avoid}h3{margin:16px 0 4px;font-size:13px;color:#0f2a56}.nopr{display:none}";
+    "table.d{border-collapse:collapse;width:100%;margin:8px 0;border:1px solid #cfd7e6}table.d th,table.d td{border:0;border-bottom:1px solid #e1e7f2;padding:5px 8px;text-align:left}table.d tbody tr:nth-child(even) td{background:#f7f9fd}table.d td:first-child{white-space:nowrap}table.d th.n,table.d td.n{text-align:right;font-variant-numeric:tabular-nums}table.d td.neg{color:#b3261e}table.d tr.tot td{font-weight:700;border-top:1.5px solid #0f2a56;border-bottom:3px double #0f2a56;background:#eef2f9}table.sum{border-collapse:separate;border-spacing:0;margin:6px 0 12px;min-width:60%;background:#f4f7fc;border:1px solid #d5ddec;border-radius:6px}table.sum th{text-align:left;padding:5px 18px 5px 12px;color:#41506b;font-weight:600;border-bottom:1px solid #e3e9f4}table.sum td{padding:5px 12px;font-weight:700;color:#0f2a56;border-bottom:1px solid #e3e9f4}.bar{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0b1f3a;color:#fff;padding:10px 14px;font:14px Arial}.bar button{font:inherit;padding:8px 12px;border-radius:8px;border:0;background:#d9ae4a;color:#1a1405;font-weight:700}@media print{.bar{display:none}}.fine{color:#666;font-size:10px;margin-top:10px}table.d.tot{width:auto;min-width:50%}table.d th{background:#0f2a56;color:#fff;font-size:11px;font-weight:700}table.d.tot th{background:#eef2fa;color:#0f2a56;text-transform:none;letter-spacing:0;font-size:12px}table.d tr{page-break-inside:avoid}h3{margin:16px 0 4px;font-size:13px;color:#0f2a56}.nopr{display:none}";
   function brandedPage(title, bodyHTML, meta) {
     meta = meta || {};
     const per = meta.period ? "Reporting period: " + esc(meta.period) : "";
@@ -3280,16 +3469,21 @@ __M['core/reports'] = (function(){ const module = {exports:{}}; const require = 
   const humanize = (k) => { const t = String(k).replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/_/g, " ").trim(); return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase(); };
   const fmtCell = (v) => (typeof v === "number" && isFinite(v) ? Math.round(v * 100) / 100 === Math.round(v) ? Math.round(v).toLocaleString("en-US") : v.toLocaleString("en-US") : v);
   const isNum = (v) => typeof v === "number" && isFinite(v);
+  /* accounting presentation: thousands separators, negatives in brackets and red, positives in the ordinary ink colour */
+  const acct = (v) => (isNum(v) && v < 0 ? "(" + fmtCell(-v) + ")" : fmtCell(v));
+  const negCls = (v) => (isNum(v) && v < 0 ? " neg" : "");
   function toPrintHTML(rep, meta) {
     meta = Object.assign({}, meta || {}); if (!meta.period && rep.period) meta.period = rep.period;
     if (rep.blocked) return brandedPage(rep.title, "<p>Blocked: " + esc(rep.reason) + "</p>", meta);
     const numCol = (c) => rep.rows.length > 0 && rep.rows.every((r) => r[c] === "" || r[c] == null || isNum(r[c]));
     const nums = {}; rep.columns.forEach((c) => { nums[c] = numCol(c); });
     const label = (c) => (rep.labels && rep.labels[c]) || (/^[A-Z]/.test(c) || / /.test(c) ? c : humanize(c));
-    const t = Object.keys(rep.totals).map((k) => "<tr><th>" + esc(humanize(k)) + '</th><td class="n">' + esc(fmtCell(rep.totals[k])) + "</td></tr>").join("");
-    const sum = (rep.summary || []).length ? '<table class="sum">' + rep.summary.map((x) => "<tr><th>" + esc(x[0]) + '</th><td class="n">' + esc(fmtCell(x[1])) + "</td></tr>").join("") + "</table>" : "";
+    const tk = Object.keys(rep.totals || {}), inCols = tk.filter((k) => rep.columns.indexOf(k) >= 0 && isNum(rep.totals[k])), other = tk.filter((k) => inCols.indexOf(k) < 0 && !(rep.columns.indexOf(k) >= 0));
+    const t = other.map((k) => "<tr><th>" + esc(humanize(k)) + '</th><td class="n' + negCls(rep.totals[k]) + '">' + esc(acct(rep.totals[k])) + "</td></tr>").join("");
+    const sum = (rep.summary || []).length ? '<table class="sum">' + rep.summary.map((x) => "<tr><th>" + esc(x[0]) + '</th><td class="n' + negCls(x[1]) + '">' + esc(acct(x[1])) + "</td></tr>").join("") + "</table>" : "";
+    const totRow = inCols.length && rep.rows.length ? '<tr class="tot">' + rep.columns.map((c, i) => (inCols.indexOf(c) >= 0 ? '<td class="n' + negCls(rep.totals[c]) + '">' + esc(acct(rep.totals[c])) + "</td>" : '<td class="">' + (i === 0 ? "Total" : "") + "</td>")).join("") + "</tr>" : "";
     return brandedPage(rep.title, sum + '<table class="d"><thead><tr>' + rep.columns.map((c) => '<th class="' + (nums[c] ? "n" : "") + '">' + esc(label(c)) + "</th>").join("") + "</tr></thead><tbody>" +
-      (rep.rows.length ? rep.rows.map((r) => "<tr>" + rep.columns.map((c) => '<td class="' + (nums[c] ? "n" : "") + '">' + esc(fmtCell(r[c])) + "</td>").join("") + "</tr>").join("") : '<tr><td colspan="' + rep.columns.length + '">No entries for this report.</td></tr>') + "</tbody></table>" + (t && !rep.hideTotals ? '<h3>Totals</h3><table class="d tot">' + t + "</table>" : "") + '<p class="fine">Figures are in Uganda Shillings (UGX). Issued from the SOB platform; the ledger is the record of truth.</p>', meta);
+      (rep.rows.length ? rep.rows.map((r) => "<tr>" + rep.columns.map((c) => '<td class="' + (nums[c] ? "n" + negCls(r[c]) : "") + '">' + esc(nums[c] ? acct(r[c]) : fmtCell(r[c])) + "</td>").join("") + "</tr>").join("") + totRow : '<tr><td colspan="' + rep.columns.length + '">No entries for this report.</td></tr>') + "</tbody></table>" + (t && !rep.hideTotals ? '<h3>Totals</h3><table class="d tot">' + t + "</table>" : "") + '<p class="fine">Figures are in Uganda Shillings (UGX). Brackets and red mean a negative amount (a reduction or an amount owed). Issued from the SOB platform; the ledger is the record of truth.</p>', meta);
   }
   const TYPE_LABEL = { Savings: "Savings deposit", Withdraw: "Withdrawal", Profit: "Profit share", "Loan Disbursement": "Loan paid out", "Loan Repayment": "Loan repayment", Subscription: "Annual subscription", "Share-Out": "December share-out", "Bank Charge": "Bank charge", Penalty: "Penalty" };
   /* A member-friendly, filing-quality statement: plain wording, running savings balance, and the three positions at the top. */
@@ -3453,9 +3647,13 @@ __M['core/statements'] = (function(){ const module = {exports:{}}; const require
 
   /* ---------------- the printable statement ---------------- */
   let ADM = false;   /* set at the start of toPrintHTML: columns/rows marked adm are printed in the Administrative statement only */
-  const tbl = (cols0, rows, cls) => { const cols = cols0.filter((c) => !c.adm || ADM); return '<table class="d' + (cls ? " " + cls : "") + '"><thead><tr>' + cols.map((c) => '<th class="' + (c.n ? "n" : "") + '">' + esc(c.h) + "</th>").join("") + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + cols.map((c) => '<td class="' + (c.n ? "n" : "") + (c.k === "ref" ? " ref" : c.k === "type" ? " nw" : "") + '">' + esc(c.f ? c.f(r) : r[c.k]) + "</td>").join("") + "</tr>").join("") + "</tbody></table>"; };
-  const kv = (rows0, cls) => { const rows = rows0.filter((r) => r[3] !== "adm" || ADM); return '<table class="sum ' + (cls || "") + '">' + rows.map((r) => "<tr" + (r[2] ? ' class="' + r[2] + '"' : "") + "><th>" + esc(r[0]) + '</th><td class="n">' + esc(typeof r[1] === "number" ? ugx(r[1]) : r[1]) + "</td></tr>").join("") + "</table>"; };
-  const ST_CSS = '<style>.idb{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;border:1px solid #d5ddec;border-radius:6px;padding:8px 12px;background:#f9fbfe;margin:6px 0 10px}.idb div{display:flex;gap:8px}.idb b{min-width:92px;color:#41506b;font-weight:600}.sec{font-size:13px;color:#0f2a56;margin:14px 0 4px;border-bottom:2px solid #b8892b;padding-bottom:2px;break-after:avoid}table.sum tr.tot th,table.sum tr.tot td{border-top:2px solid #0f2a56;font-size:13px;color:#0f2a56}table.sum tr.sub th{padding-left:26px;font-weight:500}.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;background:#e1f5ec;color:#0a6e4c}.pill.w{background:#fbefd6;color:#8f5a08}.cf{font-size:10.5px;color:#41506b;margin:4px 0}.lh{display:flex;justify-content:space-between;align-items:baseline;margin:12px 0 2px;break-after:avoid}.lh b{font-size:13px;color:#0f2a56}table.d td{font-size:11px}.conf{border:1px dashed #b8892b;background:#fdf8ea;color:#5d430a;font-size:10px;padding:5px 8px;border-radius:5px;margin:8px 0}.box{break-inside:avoid}td.ref{white-space:nowrap;font-size:9.5px;letter-spacing:-.15px}td.nw{white-space:nowrap}table.d{break-inside:auto}</style>';
+  /* accounting presentation: a negative amount (a minus sign, or a negative number) is shown in brackets and in red; positives stay in the normal ink */
+  const NEGTXT = /^\s*(UGX\s*)?[-\u2212]\s*(UGX\s*)?[\d,]+(\.\d+)?\s*$/;
+  const acctText = (v) => { if (typeof v === "number") return v < 0 ? { t: "(" + Math.abs(v).toLocaleString("en-US") + ")", neg: true } : { t: v.toLocaleString("en-US"), neg: false };
+    const x = v == null ? "" : String(v); if (NEGTXT.test(x)) return { t: "(" + x.replace(/[-\u2212]\s*/, "").trim() + ")", neg: true }; return { t: x, neg: false }; };
+  const tbl = (cols0, rows, cls) => { const cols = cols0.filter((c) => !c.adm || ADM); return '<table class="d' + (cls ? " " + cls : "") + '"><thead><tr>' + cols.map((c) => '<th class="' + (c.n ? "n" : "") + '">' + esc(c.h) + "</th>").join("") + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + cols.map((c) => (() => { const a = c.n ? acctText(c.f ? c.f(r) : r[c.k]) : { t: c.f ? c.f(r) : r[c.k], neg: false }; return '<td class="' + (c.n ? "n" : "") + (a.neg ? " neg" : "") + (c.k === "ref" ? " ref" : c.k === "type" ? " nw" : "") + '">' + esc(a.t) + "</td>"; })()).join("") + "</tr>").join("") + "</tbody></table>"; };
+  const kv = (rows0, cls) => { const rows = rows0.filter((r) => r[3] !== "adm" || ADM); return '<table class="sum ' + (cls || "") + '">' + rows.map((r) => "<tr" + (r[2] ? ' class="' + r[2] + '"' : "") + "><th>" + esc(r[0]) + '</th><td class="n' + (acctText(r[1]).neg ? " neg" : "") + '">' + esc(typeof r[1] === "number" ? (r[1] < 0 ? "UGX (" + Math.abs(r[1]).toLocaleString("en-US") + ")" : ugx(r[1])) : acctText(r[1]).t) + "</td></tr>").join("") + "</table>"; };
+  const ST_CSS = '<style>.idb{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;border:1px solid #d5ddec;border-radius:6px;padding:8px 12px;background:#f9fbfe;margin:6px 0 10px}.idb div{display:flex;gap:8px}.idb b{min-width:92px;color:#41506b;font-weight:600}.sec{font-size:13px;color:#0f2a56;margin:14px 0 4px;border-bottom:2px solid #b8892b;padding-bottom:2px;break-after:avoid}table.sum td.neg,table.d td.neg{color:#b3261e}table.sum tr.tot th,table.sum tr.tot td{border-top:2px solid #0f2a56;font-size:13px;color:#0f2a56}table.sum tr.sub th{padding-left:26px;font-weight:500}.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;background:#e1f5ec;color:#0a6e4c}.pill.w{background:#fbefd6;color:#8f5a08}.cf{font-size:10.5px;color:#41506b;margin:4px 0}.lh{display:flex;justify-content:space-between;align-items:baseline;margin:12px 0 2px;break-after:avoid}.lh b{font-size:13px;color:#0f2a56}table.d td{font-size:11px}.conf{border:1px dashed #b8892b;background:#fdf8ea;color:#5d430a;font-size:10px;padding:5px 8px;border-radius:5px;margin:8px 0}.box{break-inside:avoid}td.ref{white-space:nowrap;font-size:9.5px;letter-spacing:-.15px}td.nw{white-space:nowrap}table.d{break-inside:auto}</style>';
 
   function toPrintHTML(a, meta) {
     meta = Object.assign({}, meta || {}); ADM = a.audience === "admin";   // anything not explicitly an Administrative statement is printed as a Member statement
@@ -3804,7 +4002,7 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     const k = "fail:" + String(id || "").toUpperCase();
     const fails = Number(env.cache.get(k) || 0);
     if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    let u = findUser(db, id) || roleAlias(db, id), byName = false;
+    let u = String(id || "").indexOf("@") > 0 ? (resolveByEmail(db, id) || {}).user : (findUser(db, id) || roleAlias(db, id)), byName = false;
     if (!u) { u = memberByFullName(db, id); byName = !!u; }
     /* identity is verified here: PIN, or the SOB ID + one of the member's own names (the same trust as the view-only sign-in) */
     if (!u) {
@@ -3826,23 +4024,65 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     if (viaName) { env.cache.put("ro:" + env.hash(token), "1", SESSION_SECONDS); return { ok: true, token, user: Object.assign(publicUser(u), { mustChangePin: false, readOnly: true }) }; }
     return { ok: true, token, user: publicUser(u) };
   }
-  /* SELF-SERVICE PASSWORD. A member whose account still has an officer-issued temporary PIN proves who they are with the SOB ID + the phone number
-     on record, then chooses their own password. Refused once the member has made their own (an officer's reset re-opens it). Shares the sign-in lock-out. */
-  const digits = (x) => String(x || "").replace(/\D+/g, "");
+  /* VERIFICATION CODES. A member creates (or recovers) their own password by proving they control the contact the group holds for them: first the EMAIL on record,
+     and only when there is none, the PHONE on record (SMS). The code is 6 digits, valid 10 minutes, 5 tries, one request a minute and 5 an hour. Only a hash of it is stored.
+     The reply never reveals whether an ID or email exists. These functions are pure: the caller sends the message. */
+  const OTP_TTL = 600, OTP_TRIES = 5, OTP_GAP = 60, OTP_HOURLY = 5, digits = (x) => String(x || "").replace(/\D+/g, "");
+  const lc = (x) => String(x || "").trim().toLowerCase(), isEmail = (x) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(x || "").trim());
+  const mask = (e) => { const p = String(e).split("@"); return p[0].slice(0, 1) + "***@" + p[1]; };
+  function resolveByEmail(db, email) {
+    const e = lc(email), ms = (db.members || []).filter((m) => lc(m.email) === e);
+    const us = (db.users || []).filter((x) => x.status !== "Disabled" && (lc(x.email) === e || ms.some((m) => m.id === x.memberId)));
+    return us.length === 1 ? { user: us[0], member: (db.members || []).find((m) => m.id === us[0].memberId) || null } : null;
+  }
+  function resolve(db, ident) {
+    const r = String(ident || "").indexOf("@") > 0 ? resolveByEmail(db, ident) : (() => { const u = findUser(db, ident); return u ? { user: u, member: (db.members || []).find((m) => m.id === u.memberId) || null } : null; })();
+    return r && r.user.role === "Member" && r.member && !statusKind(r.member.status) ? r : null;
+  }
+  const newCode = (env) => String(parseInt(env.hash(env.randomToken() + env.randomToken()).slice(0, 8), 16) % 1000000).padStart(6, "0");
   const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
-  function claim(env, db, id, phone, newPassword) {
-    const k = "fail:" + String(id || "").toUpperCase(), fails = Number(env.cache.get(k) || 0);
-    if (fails >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
-    const u = findUser(db, id), m = u && u.role === "Member" && (db.members || []).find((x) => x.id === u.memberId);
-    const phones = u ? [u.phone, m && m.phone, m && m.contact].filter(Boolean) : [];
-    if (!u || u.role !== "Member" || !phones.some((p) => samePhone(p, phone))) { env.cache.put(k, fails + 1, LOCK_SECONDS); return { ok: false, error: "NOT_VERIFIED: we could not match that SOB ID and phone number" }; }
-    const kind = statusKind(m && m.status); if (kind) return blockedError(kind);
-    if (!(u.mustChange === true || u.mustChange === "true")) return { ok: false, error: "ALREADY_SET: you already created a password. Sign in, or ask an officer to reset it" };
+  /* Returns { ok:true, send:{channel,to,subject,body} | null }. send is null when nothing should go out (unknown member, no contact, too soon): the caller replies identically. */
+  function otpStart(env, db, ident) {
+    const out = { ok: true, send: null }, r = resolve(db, ident); if (!r) return out;
+    const id = r.user.id, gap = "otpgap:" + id, cnt = "otpcnt:" + id;
+    if (env.cache.get(gap) || Number(env.cache.get(cnt) || 0) >= OTP_HOURLY) return out;
+    const email = [r.member.email, r.user.email].find(isEmail), phone = [r.member.phone, r.user.phone, r.member.contact].find((p) => digits(p).length >= 9);
+    if (!email && !phone) return out;
+    const code = newCode(env), channel = email ? "email" : "sms", to = email ? String(email).trim() : phone;
+    env.cache.put("otp:" + id, JSON.stringify({ h: env.hash(code + ":" + id), n: 0 }), OTP_TTL); env.cache.put(gap, "1", OTP_GAP); env.cache.put(cnt, Number(env.cache.get(cnt) || 0) + 1, 3600);
+    const text = "Your Sons of Bethel Savings Group code is " + code + ". It works for 10 minutes. Never share it with anyone.";
+    out.send = { channel, to, subject: "Your Sons of Bethel verification code", body: channel === "email" ? text + "\n\nIf you did not ask for this code, ignore this message; your account is unchanged." : text };
+    return out;
+  }
+  /* The code proves the contact; the member then chooses a password (at least 6 characters). The same flow serves first-time sign-up and a forgotten password. */
+  function otpVerify(env, db, ident, code, newPassword) {
+    const r = resolve(db, ident), bad = { ok: false, error: "BAD_CODE: that code is wrong or has expired" };
+    if (!r) return bad; const id = r.user.id, k = "fail:" + id.toUpperCase();
+    if (Number(env.cache.get(k) || 0) >= MAX_FAILS) return { ok: false, error: "LOCKED: too many failed attempts, try again in 15 minutes" };
     if (String(newPassword || "").length < MIN_OWN) return { ok: false, error: "WEAK_PIN: use at least " + MIN_OWN + " characters" };
-    u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
-    env.cache.remove(k);
+    let e = null; try { e = JSON.parse(env.cache.get("otp:" + id) || "null"); } catch (x) { e = null; }
+    if (!e || e.n >= OTP_TRIES) return bad;
+    if (!safeEq(env.hash(String(code || "").trim() + ":" + id), e.h)) { e.n++; env.cache.put("otp:" + id, JSON.stringify(e), OTP_TTL); env.cache.put(k, Number(env.cache.get(k) || 0) + 1, LOCK_SECONDS); return bad; }
+    const u = r.user; u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
+    env.cache.remove("otp:" + id); env.cache.remove(k);
     const token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
     return { ok: true, token, user: publicUser(u), updated: u };
+  }
+  /* Adding or changing the email on record (signed in): a code goes to the NEW address and nothing is saved until it is entered. */
+  function emailStart(env, db, user, email) {
+    email = String(email || "").trim(); if (!isEmail(email)) return { ok: false, error: "INVALID: enter a valid email address" };
+    const taken = (db.members || []).some((m) => lc(m.email) === lc(email) && m.id !== user.memberId) || (db.users || []).some((x) => lc(x.email) === lc(email) && x.id !== user.id);
+    if (taken) return { ok: false, error: "INVALID: that email address cannot be used" };
+    const gap = "emailgap:" + user.id; if (env.cache.get(gap)) return { ok: false, error: "WAIT: please wait a minute before asking for another code" };
+    const code = newCode(env); env.cache.put(gap, "1", OTP_GAP);
+    env.cache.put("emailotp:" + user.id, JSON.stringify({ h: env.hash(code + ":" + lc(email)), email, n: 0 }), OTP_TTL);
+    return { ok: true, send: { channel: "email", to: email, subject: "Confirm your email for Sons of Bethel", body: "Your Sons of Bethel Savings Group code is " + code + ". It works for 10 minutes. Never share it with anyone." } };
+  }
+  function emailVerify(env, db, user, code) {
+    let e = null; try { e = JSON.parse(env.cache.get("emailotp:" + user.id) || "null"); } catch (x) { e = null; }
+    const bad = { ok: false, error: "BAD_CODE: that code is wrong or has expired" }; if (!e || e.n >= OTP_TRIES) return bad;
+    if (!safeEq(env.hash(String(code || "").trim() + ":" + lc(e.email)), e.h)) { e.n++; env.cache.put("emailotp:" + user.id, JSON.stringify(e), OTP_TTL); return bad; }
+    env.cache.remove("emailotp:" + user.id); return { ok: true, email: e.email };
   }
   /* ADMIN PIN recovery. Pure rule, called only from the Apps Script editor (never from the web app). It can change ONE thing: the PIN of the single Super Admin.
      It has no user-id parameter, so it cannot be pointed at the Chairperson, Treasurer, a member or anyone else. Returns the updated users list; the caller audits and saves. */
@@ -3877,7 +4117,7 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
     if (actor.id === t.id) delete t.mustChange; else t.mustChange = true;   // changed by its owner: private again; set by someone else: owner must change it
     return t;
   }
-  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, claim, publicUser, findUser, recoverAdminPin };
+  return { roleAlias, ROLES, MIN_PIN, makeUser, login, session, logout, setPin, otpStart, otpVerify, emailStart, emailVerify, publicUser, findUser, recoverAdminPin };
 });
 
 return module.exports; })();
@@ -3922,6 +4162,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
       members: (db.members || []).filter((m) => related[m.id]).map((m) => (m.id === me ? m : { id: m.id, name: m.name, status: m.status })),   // only the member and the people tied to their own loans/guarantees: no other member is disclosed
       transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
       loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
+      loanPurposes: G.listOptions(db, "loan.Purpose"),   // only the wording of the loan purposes on offer: no other configuration is sent
       yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
     });
   }
@@ -3931,10 +4172,19 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
     try {
       if (body.action === "ping") return { ok: true, pong: true };
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
-      if (body.action === "claim") {   // a member creates their own password (SOB ID + phone number on record)
+      /* Verification codes (public, no session): sent to the email on record, or by SMS when there is no email. The reply is the same whether or not the details matched. */
+      if (body.action === "otpStart") {
+        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id);
+        const generic = { ok: true, message: "If those details match a member, a code has been sent to the email on record (or by SMS if there is no email). It works for 10 minutes." };
+        if (!r.send) return generic;
+        if (r.send.channel === "email") { try { if (!env.mail) throw new Error("no mail"); env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); } }
+        else { const sms = env.gateways && env.gateways.SMS, to = N.normalizePhone(r.send.to); if (!sms || !sms.live || !to) return fail("SMS_UNAVAILABLE: the text message could not be sent. Ask the Secretary for help"); const x = sms.send({ to, body: r.send.body }); if (!x || !x.ok) return fail("SMS_UNAVAILABLE: the text message could not be sent. Ask the Secretary for help"); }
+        return generic;
+      }
+      if (body.action === "otpVerify") {   // the code proves the contact; the member chooses a password (first time or forgotten)
         env.lock.waitLock(20000);
         try {
-          const users = S.readCollection(env.ss, "users"), r = A.claim(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.phone, body.password);
+          const users = S.readCollection(env.ss, "users"), r = A.otpVerify(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.code, body.password);
           if (!r.ok) return r;
           S.writeCollection(env.ss, "users", users);
           return { ok: true, token: r.token, user: r.user };
@@ -3987,6 +4237,22 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
           if (body.action === "listBackups") return { ok: true, backups: B.list(env.ss) };
           if (body.action === "exportBackup") return { ok: true, backup: B.makeExport(env, S.readAll(env.ss), "export by " + user.id) };
           const r = B.read(env.ss, env, body.id); return r.ok ? { ok: true, id: r.id, revision: r.revision, counts: r.counts } : fail(r.error);
+        } finally { env.lock.releaseLock(); }
+      }
+      if (body.action === "emailStart") {
+        const r = A.emailStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, user, body.email); if (!r.ok) return r;
+        try { env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); }
+        return { ok: true, message: "A code was sent to " + r.send.to };
+      }
+      if (body.action === "emailVerify") {
+        env.lock.waitLock(20000);
+        try {
+          const members = S.readCollection(env.ss, "members"), users = S.readCollection(env.ss, "users"), r = A.emailVerify(env, { users, members }, user, body.code); if (!r.ok) return r;
+          const db = S.readAll(env.ss), before = JSON.parse(JSON.stringify(db)), ctx = G.makeCtx({ id: user.id, name: user.name, role: user.role, memberId: user.memberId });
+          const m = db.members.find((x) => x.id === user.memberId), u = db.users.find((x) => x.id === user.id), old = (m && m.email) || (u && u.email) || "";
+          if (m) m.email = r.email; else if (u) u.email = r.email; else return fail("NOT_FOUND");
+          G.audit(db, ctx, "Member", user.memberId || user.id, "Email on record changed", { email: old }, { email: r.email }, "Verified by code sent to the new address");
+          S.writeChanged(env.ss, before, db); return { ok: true, email: r.email };
         } finally { env.lock.releaseLock(); }
       }
       if (body.action === "setPin") {   // self-service (old PIN needed) or Admin for anyone
@@ -4106,9 +4372,9 @@ function testSms(){ return __gwTest("SMS"); }
 function testWhatsApp(){ return __gwTest("WHATSAPP"); }
 function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
-    randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
+    mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "580736ad18";
+var SOB_BUILD = "8fdeb82ea0";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
@@ -4125,7 +4391,7 @@ function doGet(){ return __json({ ok: true, service: "SOB Ledger", build: SOB_BU
    "authorization required" page instead of data. */
 function authorizeSOB(){
   SpreadsheetApp.getActiveSpreadsheet().getName(); CacheService.getScriptCache().get("x"); PropertiesService.getScriptProperties().getKeys();
-  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/");
+  LockService.getScriptLock(); ScriptApp.getProjectTriggers(); UrlFetchApp.getRequest("https://www.google.com/"); MailApp.getRemainingDailyQuota();
   return "SOB is authorised. Build " + SOB_BUILD + ". Now deploy it as a New version.";
 }
 /* Run ONCE from the Apps Script editor (Run > setupAdmin) after adding Script Properties SOB_INITIAL_ADMIN_ID (optional, default ADMIN)
@@ -4178,6 +4444,25 @@ function installBackupTrigger(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === "dailyBackup") ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger("dailyBackup").timeBased().everyDays(1).atHour(2).create();
   return "dailyBackup scheduled";
+}
+/* ---- Automatic loan reminders (SMS). dailyReminders() is what the trigger runs. It sends NOTHING unless the Chairperson-approved switch is on (Reminders > Automatic reminders) AND the SMS gateway is live and tested.
+   Every message and every run is recorded in the audit trail; no ledger entry, loan or balance is changed. You can also run it by hand from the editor to see what it would do today. ---- */
+function dailyReminders(){
+  var env = __env(), S = __M['backend/store'], G = __M['core/governance'], RM = __M['core/reminders'];
+  env.lock.waitLock(30000);
+  try {
+    var db = S.readAll(env.ss), before = JSON.parse(JSON.stringify(db)), ctx = G.makeCtx({ id: "AUTO", name: "Automatic reminders", role: "Admin" });
+    var r = RM.autoRun(db, ctx, env.gateways || {});
+    S.guardNoLoss(before, db); var changed = S.writeChanged(env.ss, before, db);
+    if (changed.length) { var rev = Number(S.readMeta(env.ss).revision || 0) + 1; S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() }); }
+    return JSON.stringify({ date: r.date, enabled: r.enabled, sent: r.sent.length, failed: r.failed.length, skipped: r.skipped.length, note: r.note });
+  } finally { env.lock.releaseLock(); }
+}
+/* Run once from the editor: schedules dailyReminders() every day around 09:00. Safe to run again (replaces the old trigger). */
+function installReminderTrigger(){
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === "dailyReminders") ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger("dailyReminders").timeBased().everyDays(1).atHour(9).create();
+  return "dailyReminders scheduled";
 }
 /* Disaster recovery (editor only): set Script Property SOB_RESTORE_BACKUP_ID to a Backups-sheet id, then Run > restoreFromProperty. The property is cleared afterwards. */
 function restoreFromProperty(){

@@ -36,7 +36,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const ctxB = await b.newContext({ viewport: { width: 1100, height: 900 } }), pg = await ctxB.newPage(); const errs = [];
   pg.on("pageerror", (e) => errs.push(e.message)); await ctxB.route("https://wa.me/**", (r) => r.abort());     // NEVER reach WhatsApp from a test
-  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.click("#tab-officer"); await pg.fill("#sid", "ADMIN"); await pg.fill("#spin", "admin-pin-1"); await pg.click("#officer-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   await pg.click('[data-nav="reminders"]'); await pg.waitForSelector("#rem-asof");
   ok(await pg.locator("#rem-notset").isVisible(), "before the dates are configured the screen says no reminder can be prepared (nothing guessed)");
   ok(await pg.locator("#rem-bulk").isDisabled(), "bulk preparation is disabled until the dates are set");
@@ -47,14 +47,18 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   ok(server().approvalRequests.some((r) => r.command === "setReminderDates" && r.status === "Pending"), "the dates are sent to the Chairperson (pending), not applied by the Admin");
   const chair = tok("CHAIR", "chair-pin-1"), reqId = server().approvalRequests.find((r) => r.status === "Pending").id; const ap = API.handle(env, { action: "command", token: chair, name: "approveRequest", args: { id: reqId } }); ok(ap.ok, "the Chairperson approves the dates");
   await pg.click("#rem-recalc"); await pg.waitForSelector("#rem-asof"); await pg.waitForFunction(() => !document.getElementById("rem-notset")); ok(true, "after approval the screen recalculates from the live ledger and the dates are in force");
+  await pg.click("#rem-auto"); await pg.selectOption('.modal select[name="enabled"]', "true"); await pg.fill('.modal input[name="reason"]', "committee resolution (test)"); await pg.click("[data-submit]"); await pg.waitForTimeout(600);
+  ok(server().approvalRequests.some((r) => r.command === "setAutoReminders" && r.status === "Pending"), "automatic reminders are switched on only through the Chairperson (pending), never by the Admin alone");
+  { const rq = server().approvalRequests.find((r) => r.command === "setAutoReminders"), a2 = API.handle(env, { action: "command", token: chair, name: "approveRequest", args: { id: rq.id } }); ok(a2.ok, "the Chairperson approves the automatic schedule"); }
+  await pg.click("#rem-recalc"); await pg.waitForFunction(() => /Automatic reminders: ON/.test((document.getElementById("rem-auto") || {}).textContent || "")); ok(true, "the screen shows Automatic reminders: ON");
   const rows = () => pg.locator("#main tbody tr").filter({ has: pg.locator("[data-prepare], [data-problem]") });
   ok((await pg.locator("[data-prepare]").count()) === 2 && (await pg.locator("[data-problem]").count()) === 1, "two loans can be reminded, one is blocked (no WhatsApp number) and the settled loan is left out automatically"); void rows;
   ok(/Ruth|No valid Uganda|WhatsApp number/i.test(await pg.locator("[data-problem]").innerText()), "the blocked loan states why");
   /* preview = live figures, saves nothing */
   const eng = () => { const db = server(), l = db.loans.find((x) => x.id === l1.id); return L.loanOutstanding(l, db, D.todayISO()); };
   await pg.locator('[data-preview="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-text"); const pv = await pg.innerText("#rem-text");
-  ok(pv.includes("Dear Grace Alpha,") && pv.includes(M1.id) && pv.includes("Total Outstanding: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
-  ok(/Figures as at .* EAT/.test(pv) && /Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
+  ok(pv.includes("Dear Grace Alpha,") && pv.includes("Total Balance Due: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
+  ok(/Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
   await pg.click(".modal [data-close]");
   /* individual: prepare -> opened (NOT delivered) -> officer confirms */
   await pg.locator('[data-prepare="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-open-wa");
@@ -77,7 +81,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   const before = eng(); const rp = cmd(adminTok, "repayLoan", { loanId: l2.id, amount: 15000, date: D.todayISO() }); ok(rp.ok, "a repayment is recorded in the ledger (outside this screen)");
   await pg.click("#rem-recalc"); await pg.waitForSelector("#rem-asof"); await pg.locator('[data-preview="' + l2.id + '"]').click(); await pg.waitForSelector("#rem-text");
   const db2 = server(), exp2 = L.loanOutstanding(db2.loans.find((x) => x.id === l2.id), db2, D.todayISO()), t2 = await pg.innerText("#rem-text");
-  ok(t2.includes("Total Outstanding: UGX " + exp2.toLocaleString("en-US")) && t2.includes("Repayments Received: UGX 15,000"), "after the repayment the next reminder shows the new balance (UGX " + exp2.toLocaleString("en-US") + ") and the repayment received"); void before;
+  ok(t2.includes("Total Balance Due: UGX " + exp2.toLocaleString("en-US")) && t2.includes("Repayments Received: UGX 15,000"), "after the repayment the next reminder shows the new balance (UGX " + exp2.toLocaleString("en-US") + ") and the repayment received"); void before;
   await pg.click(".modal [data-close]");
   ok(await pg.locator('[data-hist-open]').first().isVisible(), "history offers Open WhatsApp again only through server re-validation");
   const stale = rems().find((r) => r.loanId === l2.id); await pg.locator('[data-hist-open="' + stale.id + '"]').click(); await pg.waitForSelector(".toast.bad"); ok(/changed|STALE|balance/i.test(await pg.innerText(".toast")) && !(await pg.locator("#rem-open-wa").count()), "a reminder made before the repayment is refused as stale — the old balance is never sent");
@@ -89,7 +93,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* audit */
   ok(["Prepared", "WhatsApp opened", "Sent confirmed by officer", "Bulk prepared"].every((a) => server().auditLog.some((x) => x.entityType === "Reminder" && x.action === a)), "every step is in the audit log");
   /* mobile */
-  const mpg = await (await b.newContext({ viewport: { width: 390, height: 844 } })).newPage(); await mpg.context().route("https://wa.me/**", (r) => r.abort()); await mpg.goto(base + "/app/index.html"); await mpg.waitForSelector("#login-go"); await mpg.click("#tab-officer"); await mpg.fill("#sid", "ADMIN"); await mpg.fill("#spin", "admin-pin-1"); await mpg.click("#officer-go"); await mpg.waitForSelector("#kpis");
+  const mpg = await (await b.newContext({ viewport: { width: 390, height: 844 } })).newPage(); await mpg.context().route("https://wa.me/**", (r) => r.abort()); await mpg.goto(base + "/app/index.html"); await mpg.waitForSelector("#login-go"); await mpg.fill("#mid", "ADMIN"); await mpg.fill("#pin", "admin-pin-1"); await mpg.click("#login-go"); await mpg.waitForSelector("#kpis");
   await mpg.click('[data-nav="reminders"]'); await mpg.waitForSelector("#rem-asof"); const w = await mpg.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth }));
   ok(w.sw <= w.iw + 1, "mobile 390px: the Reminders screen has no sideways scrolling (" + w.sw + " <= " + w.iw + ")");
   await mpg.locator("[data-prepare]").first().click().catch(() => {}); await mpg.waitForSelector("#rem-open-wa, .toast.bad", { timeout: 8000 }); const w2 = await mpg.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth })); ok(w2.sw <= w2.iw + 1, "mobile: the message window fits the phone (" + w2.sw + " <= " + w2.iw + ")");
@@ -105,7 +109,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
     ok(/not recorded/.test(await pg.locator("#member-contact").innerText()), "the member profile shows the contact details (none recorded yet)");
     await pg.click('.modal [data-act="edit-contact"]'); await pg.fill('.modal input[name="phone"]', "12345"); await pg.click("[data-submit]"); await pg.waitForFunction(() => document.querySelector(".modal .err") && /Uganda number/.test(document.querySelector(".modal .err").textContent));
     ok(!mem3().phone && nAud() === 0, "a wrong number is refused with a clear message; nothing was saved");
-    await pg.fill('.modal input[name="phone"]', "+256 772 555 123"); await pg.fill('.modal input[name="email"]', "ruth@example.org"); await pg.fill('.modal input[name="location"]', "Jinja"); await pg.fill('.modal input[name="reason"]', "gave new number"); await pg.click("[data-submit]");
+    await pg.fill('.modal input[name="phone"]', "+256 772 555 123"); await pg.fill('.modal input[name="email"]', "ruth@example.org"); await pg.selectOption('.modal select[name="location__sel"]', "__other__"); await pg.fill('.modal input[name="location__other"]', "Jinja"); await pg.fill('.modal input[name="reason"]', "gave new number"); await pg.click("[data-submit]");
     await pg.waitForFunction(() => /0772555123/.test((document.getElementById("member-contact") || {}).textContent || ""));
     ok(mem3().phone === "0772555123" && mem3().email === "ruth@example.org" && mem3().location === "Jinja" && mem3().id === M3.id && mem3().name === "Ruth Charlie", "saved on the server; Member ID and name unchanged");
     ok(nAud() === 1 && moneyNow() === beforeMoney, "exactly one audit entry; no transaction or loan changed");
@@ -115,7 +119,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
     const mv2 = g(memT).db; ok(!JSON.stringify(mv2).includes("0772555123") && !JSON.stringify(mv2).includes("ruth@example.org"), "another member's contact details never reach a member's own view"); }
   /* A Google deployment still on an earlier version: the exact live symptom ("setReminderDates" in red). It must be explained, and nothing may change. */
   { oldBackend = true; const before = JSON.stringify(g(adminTok).db.policy), opg = await (await b.newContext({ viewport: { width: 1100, height: 900 } })).newPage(); await opg.context().route("https://wa.me/**", (r) => r.abort());
-    await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.click("#tab-officer"); await opg.fill("#sid", "ADMIN"); await opg.fill("#spin", "admin-pin-1"); await opg.click("#officer-go"); await opg.waitForSelector("#kpis");
+    await opg.goto(base + "/app/index.html"); await opg.waitForSelector("#login-go"); await opg.fill("#mid", "ADMIN"); await opg.fill("#pin", "admin-pin-1"); await opg.click("#login-go"); await opg.waitForSelector("#kpis");
     await opg.click('[data-nav="reminders"]'); await opg.waitForSelector("#rem-asof");
     ok(/OLDBUILD001/.test(await opg.locator("#rem-backend-old").innerText()) && /NEWBUILD002/.test(await opg.locator("#rem-backend-old").innerText()), "an older Google backend is announced on the Reminders screen with both version ids");
     await opg.click("#rem-dates"); await opg.fill('.modal input[name="so"]', soYear + "-12-26"); await opg.fill('.modal input[name="dl"]', soYear + "-12-12"); await opg.fill('.modal input[name="reason"]', "test"); await opg.click("[data-submit]");

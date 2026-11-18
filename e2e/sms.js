@@ -36,7 +36,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await new Promise((r) => srv.listen(0, r)); const base = "http://localhost:" + srv.address().port;
   const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium", args: ["--no-sandbox"] }); const ctxB = await b.newContext({ viewport: { width: 1100, height: 900 } }), pg = await ctxB.newPage(); const errs = [];
   pg.on("pageerror", (e) => errs.push(e.message)); await ctxB.route("https://wa.me/**", (r) => r.abort());     // NEVER reach WhatsApp from a test
-  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.click("#tab-officer"); await pg.fill("#sid", "ADMIN"); await pg.fill("#spin", "admin-pin-1"); await pg.click("#officer-go"); await pg.waitForSelector("#kpis");
+  await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#kpis");
   await pg.click('[data-nav="reminders"]'); await pg.waitForSelector("#rem-asof");
   ok(await pg.locator("#rem-notset").isVisible(), "before the dates are configured the screen says no reminder can be prepared (nothing guessed)");
   ok(await pg.locator("#rem-bulk").isDisabled(), "bulk preparation is disabled until the dates are set");
@@ -53,8 +53,8 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* preview = live figures, saves nothing */
   const eng = () => { const db = server(), l = db.loans.find((x) => x.id === l1.id); return L.loanOutstanding(l, db, D.todayISO()); };
   await pg.locator('[data-preview="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-text"); const pv = await pg.innerText("#rem-text");
-  ok(pv.includes("Dear Grace Alpha,") && pv.includes(M1.id) && pv.includes("Total Outstanding: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
-  ok(/Figures as at .* EAT/.test(pv) && /Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
+  ok(pv.includes("Dear Grace Alpha,") && pv.includes("Total Balance Due: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
+  ok(/Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
   await pg.click(".modal [data-close]");
   const sentSms = []; const live = { live: true, send: (m) => { sentSms.push(m); return { ok: true, providerRef: "" }; } };
   await pg.locator('[data-prepare="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-open-wa");

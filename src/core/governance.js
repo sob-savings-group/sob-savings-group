@@ -182,9 +182,14 @@
     "purpose.Expense": ["Administration", "Transport", "Stationery", "Meeting costs", "Bank charges"],
     "purpose.Income": ["Loan interest", "Annual subscription", "Donation"],
     "purpose.Profit": ["Profit share"],
-    "purpose.Bank Charge": ["Bank charge"]
+    "purpose.Bank Charge": ["Bank charge"],
+    "loan.Purpose": ["School fees", "Business capital", "Farming", "Medical expenses", "Household needs", "Emergency", "Rent"],
+    "member.Location": [],
+    "reason.Decline": ["Savings too low for the amount", "Existing loan not yet cleared", "Guarantors not sufficient", "Incomplete application", "Committee decision"],
+    "reason.Reject": ["Details do not match the records", "Not supported by a receipt", "Duplicate request", "Not approved by the committee"],
+    "reason.Void": ["Entered in error", "Duplicate entry", "Wrong member", "Wrong amount", "Wrong date", "Cancelled by the committee"]
   };
-  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges" };
+  const LIST_TITLES = { "purpose.Savings": "Purpose: savings deposits", "purpose.Withdraw": "Purpose: withdrawals", "purpose.Expense": "Purpose: expenses", "purpose.Income": "Purpose: income", "purpose.Profit": "Purpose: profit credits", "purpose.Bank Charge": "Purpose: bank charges", "loan.Purpose": "Loan purposes (what the loan is for)", "member.Location": "Member locations / areas", "reason.Decline": "Reasons for declining a loan", "reason.Reject": "Reasons for rejecting a request or entry", "reason.Void": "Reasons for voiding or restoring a record" };
   const listItems = (db, key) => (db.listItems || []).filter((i) => i && i.list === key);
   function listOptions(db, key) {
     const retired = {}, added = []; listItems(db, key).forEach((i) => { if (i.active === false) retired[i.label.toLowerCase()] = 1; else added.push(i.label); });

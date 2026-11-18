@@ -109,7 +109,7 @@
       t.querySelectorAll("tr").forEach((tr) => {
         if (tr.closest("table") !== t) return;
         const head = !!tr.closest("thead") || (tr.children.length && Array.from(tr.children).every((c) => c.tagName === "TH") && t.classList.contains("d")), cells = [];
-        Array.from(tr.children).forEach((c) => { const cl = c.className || ""; cells.push({ runs: runsOf(c, c.tagName === "TH" || head), num: /\bn\b/.test(cl), span: Number(c.getAttribute("colspan")) || 1, th: c.tagName === "TH" }); });
+        Array.from(tr.children).forEach((c) => { const cl = c.className || ""; cells.push({ runs: runsOf(c, c.tagName === "TH" || head || /\btot\b/.test(tr.className || "")), neg: /\bneg\b/.test(cl), num: /\bn\b/.test(cl), span: Number(c.getAttribute("colspan")) || 1, th: c.tagName === "TH" }); });
         if (cells.length) rows.push({ head, cells, cls: tr.className || "" });
       });
       return rows;
@@ -129,9 +129,10 @@
       const lay = rows.map((r) => { let ci = 0; const cs = r.cells.map((c) => { const w = xs[ci + c.span] - xs[ci] - 2 * pad, lines = wrap(c.runs, w, size); const o = { c, ci, lines, x: xs[ci], w: xs[ci + c.span] - xs[ci] }; ci += c.span; return o; }); return { r, cs, h: Math.max.apply(null, cs.map((o) => o.lines.length)) * size * 1.3 + 2 * 2.6 }; });
       const headRows = lay.filter((l) => l.r.head);
       const drawRow = (l, idx) => {
-        if (l.r.head) rect(ML, y, CW, l.h, HEADBG); else if (idx % 2 === 1) rect(ML, y, CW, l.h, ZEBRA);
-        l.cs.forEach((o) => o.lines.forEach((ln, k) => drawLine(ln, o.x + pad, y + 2.6 + size * 0.98 + k * size * 1.3, size, o.w - 2 * pad, o.c.num || (o.c.th && o.c.num) ? "right" : "left", NAVY)));
-        line(ML, y + l.h, ML + CW, y + l.h, l.r.head ? 0.9 : 0.4, l.r.head ? "#9fb0cf" : HAIR); y += l.h;
+        if (l.r.head) rect(ML, y, CW, l.h, HEADBG); else if (/\btot\b/.test(l.r.cls)) rect(ML, y, CW, l.h, "#eef2f9"); else if (idx % 2 === 1) rect(ML, y, CW, l.h, ZEBRA);
+        l.cs.forEach((o) => o.lines.forEach((ln, k) => drawLine(ln, o.x + pad, y + 2.6 + size * 0.98 + k * size * 1.3, size, o.w - 2 * pad, o.c.num || (o.c.th && o.c.num) ? "right" : "left", o.c.neg ? "#b3261e" : NAVY)));
+        const isTot = /\btot\b/.test(l.r.cls); if (isTot) line(ML, y, ML + CW, y, 1.2, DEEP);
+        line(ML, y + l.h, ML + CW, y + l.h, l.r.head ? 0.9 : isTot ? 1.6 : 0.4, l.r.head ? "#9fb0cf" : isTot ? DEEP : HAIR); y += l.h;
       };
       let body = 0; ensure((headRows[0] ? headRows[0].h : 0) + (lay.find((l) => !l.r.head) || { h: 0 }).h + 4); y += 2;
       lay.forEach((l) => {
