@@ -45,7 +45,7 @@
   function Form(title, fields, onSubmit, submitLabel) {
     const inputs = {};
     const body = h("div", null, fields.map((f) => {
-      if (f.type === "note") return h("p", { class: "mute" }, f.text);
+      if (f.type === "note") return f.node || h("p", { class: "mute" }, f.text);
       if (f.other && f.options) {   // a list with an "Other (Specify)" facility: choosing it reveals a text box and the typed text is what is recorded
         const OTHER = "__other__", sel = h("select", { name: f.name + "__sel" }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o)).concat([h("option", { value: OTHER }, "Other (Specify)")]));
         const txt = h("input", { type: "text", name: f.name + "__other", placeholder: "Please specify", maxlength: "60", "aria-label": f.label + " (specify)" }); txt.hidden = true;
