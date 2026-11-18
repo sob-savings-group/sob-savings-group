@@ -517,6 +517,28 @@
       else { const w = owedWith({ from: d, to: "" }); preview.textContent = "If locked from " + D.toDisplay(d) + ": months charged " + now.months + " → " + w.months + " (today). Owed today " + ugx(now.owed) + " → " + ugx(w.owed) + ". Interest stops growing from that date."; } };
     if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); upd(); }
   }
+  /* ONE correction for a loan: restore it, set its monthly interest and lock the interest, all in a single request. The Chairperson approves once and the system does the parts in that order. */
+  function correctForm(loan, v) {
+    const id = loan.id, T = today(), voided = !!loan.voided, canRestore = voided && L.withinRestoreWindow(loan, Date.now());
+    const preview = h("p", { class: "mute", id: "correct-preview" });
+    const note = h("div", { id: "correct-context" },
+      h("p", null, h("b", null, nameOf(loan.memberId)), " · loan paid out ", loan.date ? D.toDisplay(loan.date) : "(date not set)", " · ", Number(loan.loanAmount).toLocaleString(), " UGX", voided ? " · VOIDED" : ""),
+      h("p", { class: "mute" }, "Fill only the parts you need. The Chairperson approves this ONE request and the system then does them in order: restore, then monthly interest, then lock. Nothing is changed until approved."),
+      voided && !canRestore ? Banner("warn", "This loan was voided more than 48 hours ago, so it can no longer be restored. Use 'Record existing loan' with the original date instead.") : null, preview);
+    const fields = [{ type: "note", node: note }];
+    if (voided) fields.push({ name: "restore", label: "1. Restore the loan", options: canRestore ? [{ value: "yes", label: "Yes, restore it" }, { value: "no", label: "No, leave it voided" }] : [{ value: "no", label: "Not possible (48-hour window closed)" }] });
+    fields.push({ name: "amount", label: "2. Monthly interest (UGX). Now " + ugx(v.assignedMonthlyInterest) + "; change it only if it is wrong", type: "number", value: v.assignedMonthlyInterest },
+      { name: "lockFrom", label: "3. Stop interest from this date (optional, leave empty for no lock)", type: "date", value: "", max: T, min: loan.date || undefined },
+      { name: "reason", label: "Reason (required)" });
+    const m = Form("Correct this loan", fields, act(async (f) => { await commit("correctLoan", { loanId: id, restore: f.restore === "yes", amount: f.amount, lockFrom: f.lockFrom, reason: f.reason }); M().remove(); openLoan(id); }, "Correction sent to the Chairperson for one approval"), "Send for approval");
+    const q = (n) => m.el.querySelector('[name="' + n + '"]');
+    const upd = () => { const a = q("amount") && q("amount").value, lk = q("lockFrom") && q("lockFrom").value, amt = a === "" || a == null ? Number(v.assignedMonthlyInterest) || 0 : Number(a);
+      if (lk && !D.isISO(lk)) { preview.textContent = ""; return; }
+      if (lk && loan.date && lk < loan.date) { preview.textContent = "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ")."; return; }
+      const c2 = Object.assign({}, loan, { voided: false, assignedMonthlyInterest: amt, interestLocks: (loan.interestLocks || []).concat(lk ? [{ from: lk, to: "" }] : []) });
+      preview.textContent = "Result: " + L.loanMonthsAfterGrace(c2, T) + " month(s) charged at " + ugx(amt) + " = interest " + ugx(L.loanAccumulatedInterest(c2, T)) + (lk ? ", locked from " + D.toDisplay(lk) + "." : ", no lock."); };
+    ["amount", "lockFrom"].forEach((n) => { const e = q(n); if (e) { e.addEventListener("input", upd); e.addEventListener("change", upd); } }); upd();
+  }
   function openLoan(id, asAt0) {
     const loan0 = st.db.loans.find((l) => l.id === id); if (loan0 && asAt0 && asAt0 < today()) return openLoanAsAt(loan0, asAt0);
     const loan = st.db.loans.find((l) => l.id === id), v = LN.loanView(st.db, loan, today()), c = ctx();
@@ -549,6 +571,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
     add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
+    add("Correct loan", G.can(c, "loan.editInterest") && loan.status === "Active", () => correctForm(loan, v), "primary");
     add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
     add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => lockForm(loan, v));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [reasonField("reason.Void")], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");

@@ -2801,6 +2801,22 @@
     lockInterest: (db, ctx, a) => LN.lockInterest(db, ctx, a.loanId, a.reason, a.date), unlockInterest: (db, ctx, a) => LN.unlockInterest(db, ctx, a.loanId, a.reason, a.date),
     voidLoan: (db, ctx, a) => LN.voidLoan(db, ctx, a.loanId, a.reason),
     restoreLoan: (db, ctx, a) => LN.restoreLoan(db, ctx, a.loanId, a.reason),
+    correctLoan: (db, ctx, a) => {
+      /* ONE correction, three optional parts, run in a fixed order: restore, then monthly interest, then lock. Each part is the SAME function that stands alone, so every
+         rule (48-hour restore window, who may do it, no lock before the payout date) still applies. If any part fails nothing is saved: the server writes only after the whole command succeeds. */
+      G.need(a.reason, "reason");
+      const loan = (db.loans || []).find((x) => x.id === a.loanId); if (!loan) throw new Error("NOT_FOUND: loan " + a.loanId);
+      const wantRestore = a.restore === true || a.restore === "true" || a.restore === "yes", hasAmt = a.amount !== undefined && a.amount !== null && String(a.amount).trim() !== "", lockFrom = a.lockFrom ? String(a.lockFrom).trim() : "";
+      if (!wantRestore && !hasAmt && !lockFrom) throw new Error("INVALID: choose at least one correction (restore, monthly interest, or lock)");
+      const approved = ctx.approvedBy && ctx.approvedRequest && ctx.approvedRequest !== "trial", steps = [];
+      const stamp = () => { if (approved) { const row = db.auditLog[db.auditLog.length - 1]; row.reason = String(row.reason || "") + " · Loan correction " + ctx.approvedRequest + ": requested by " + ctx.by + " (" + ctx.role + "), approved by " + ctx.approvedBy; } };
+      if (wantRestore) { LN.restoreLoan(db, ctx, loan.id, a.reason); stamp(); steps.push("Restored the loan"); }
+      if (hasAmt) { const prev = Number(loan.assignedMonthlyInterest) || 0, amt = Number(a.amount); if (!(amt >= 0)) throw new Error("INVALID: monthly interest"); if (amt !== prev) { LN.editAssignedInterest(db, ctx, loan.id, amt, a.reason); stamp(); steps.push("Monthly interest " + prev + " to " + amt); } }
+      if (lockFrom) { LN.lockInterest(db, ctx, loan.id, a.reason, lockFrom); stamp(); steps.push("Interest locked from " + lockFrom); }
+      if (!steps.length) throw new Error("INVALID: nothing to change (the monthly interest is already that amount)");
+      G.audit(db, ctx, "Loan", loan.id, "Loan correction completed", null, { steps }, String(a.reason) + (approved ? " · Loan correction " + ctx.approvedRequest + ": requested by " + ctx.by + " (" + ctx.role + "), approved by " + ctx.approvedBy : ""));
+      return { loan, steps };
+    },
     recordSubscription: (db, ctx, a) => C.recordSubscription(db, ctx, a.memberId, a.year, a.date),
     openDiscrepancy: (db, ctx, a) => RC.openDiscrepancy(db, ctx, { kind: a.kind, subject: a.subject, summary: a.summary, platformValue: a.platformValue, sourceValue: a.sourceValue, source: a.source, detail: a.detail }),
     /* Batched forms used by the installer so a first load fits Google's six-minute limit: one read and one write for many items. Never gated, so ACCEPT_SOURCE_WITH_ENTRY (which posts an entry) is refused here. */
@@ -2887,6 +2903,7 @@
   const GATED = {
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
+    correctLoan: { perm: "loan.editInterest", label: "Correct a loan (restore, monthly interest, lock)" },
     editAssignedInterest: { perm: "loan.editInterest", label: "Change a loan's assigned interest" }, lockInterest: { perm: "loan.editInterest", label: "Lock interest on a loan" }, unlockInterest: { perm: "loan.editInterest", label: "Unlock interest on a loan" }, correctLoanDate: { perm: "reconcile.manage", label: "Correct a loan's start date" },
     offsetHistoricalLoan: { perm: "reconcile.manage", label: "Offset a member's savings against a historical loan" }, writeOffHistoricalLoan: { perm: "reserve.manage", label: "Write off an uncollectible historical loan balance" },
     markLoanDateUnknown: { perm: "reconcile.manage", label: "Mark a loan's start date as not established" }, recordLoanComponents: { perm: "reconcile.manage", label: "Record the component disbursements of a consolidated loan" },
@@ -2911,6 +2928,7 @@
   const hashRows = (rows) => { const s = JSON.stringify(rows); let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36); };
   const summaryOf = (db, name, a) => {
     if (name === "voidEntry" || name === "restoreEntry" || name === "correctEntryDate" || name === "splitRepayment") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? t.type + " " + t.amount + " on " + t.date + " (" + t.memberId + ")" : a.id; }
+    if (name === "correctLoan") { const l = (db.loans || []).find((x) => x.id === a.loanId), parts = []; if (a.restore === true || a.restore === "true" || a.restore === "yes") parts.push("restore the loan"); if (a.amount !== undefined && a.amount !== null && String(a.amount).trim() !== "") parts.push("monthly interest " + (l ? (Number(l.assignedMonthlyInterest) || 0) : "?") + " to " + Number(a.amount)); if (a.lockFrom) parts.push("lock interest from " + a.lockFrom); return "Loan " + a.loanId + (l ? " (" + l.memberId + ")" : "") + ": " + parts.join("; then "); }
     if (name === "voidLoan" || name === "restoreLoan" || name === "editAssignedInterest" || name === "lockInterest" || name === "unlockInterest" || name === "correctLoanDate" || name === "markLoanDateUnknown" || name === "recordLoanComponents" || name === "addDisbursement" || name === "settleLoanFromSavings") { const l = (db.loans || []).find((x) => x.id === a.loanId); return l ? "Loan " + l.id + " (" + l.memberId + ", " + l.loanAmount + ")" : a.loanId; }
     if (name === "offsetHistoricalLoan" || name === "writeOffHistoricalLoan") return (name === "offsetHistoricalLoan" ? "Savings offset UGX " + a.amount : "Write-off principal " + (a.principal || 0) + ", interest " + (a.interest || 0)) + " on historical loan " + a.loanId;
     if (name === "correctEntryAmount") { const t = (db.transactions || []).find((x) => x.id === a.id); return t ? "Savings " + t.amount + " on " + t.date + " (" + t.memberId + ") becomes " + a.amount : a.id; }
