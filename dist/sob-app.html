@@ -557,6 +557,81 @@ main>.backbtn{margin:0 0 var(--sp3)}
 }
 .dgrid>.first{order:-1}
 @media(min-width:1000px){.dgrid>.first{order:0}}
+
+/* ===== SOB DESIGN SYSTEM v3 — fresh, bright, light. Indigo brand; green grows, sky borrows, amber waits, coral warns; everything else is quiet slate. ===== */
+:root{
+  --bg:#f6f7fc;--bg2:#eef0fa;--surface:#fff;--surface2:#f3f4fb;--line:#e1e4f0;--line2:#e8ebf4;--hair:#e8ebf4;
+  --text:#1c2033;--mute:#4b5268;--mute2:#6b7390;--slate:#4b5268;
+  --navy:#1c2033;--ink:#1c2033;--navy2:#4338ca;--ink2:#4338ca;--navy-soft:#eef0ff;
+  --brand:#4f46e5;--brand2:#4338ca;--brand-soft:#eef0ff;
+  --save:#10b981;--save-t:#047857;--save-soft:#e7f8f1;
+  --loanc:#0ea5e9;--loan-t:#0369a1;--loan-soft:#e6f4fd;
+  --income:#22c55e;--income-t:#15803d;--income-soft:#e8f9ee;
+  --pend:#f59e0b;--pend-t:#b45309;--pend-soft:#fef6e3;
+  --bad:#f04438;--bad-t:#c8281d;--bad-soft:#fef0ee;
+  --avail:#10b981;--loan:#0ea5e9;--interest:#0ea5e9;--profit:#22c55e;--ok:#10b981;--commit:#f59e0b;--warn:#f59e0b;--blue:#0ea5e9;
+  --gold:#4f46e5;--gold2:#4338ca;--gold-soft:#eef0ff;
+  --shadow:0 1px 2px rgba(28,32,51,.04),0 8px 24px rgba(79,70,229,.07);--shadow-s:0 1px 2px rgba(28,32,51,.05);--r:16px;--rc:12px}
+body,body:has(.shell){background:var(--bg)}
+.panel,.card,.fig-wrap,.periodbar{border-radius:16px;border-color:var(--line2);box-shadow:0 1px 2px rgba(28,32,51,.04)}
+.card::before{background:var(--line2);opacity:1}
+button{border-radius:12px;border-color:var(--line);color:var(--text)}
+button:hover{border-color:#c7cbf5;background:var(--brand-soft)}
+button.primary{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 14px rgba(79,70,229,.28)}
+button.primary:hover{background:var(--brand2);border-color:var(--brand2);color:#fff}
+button.danger{background:var(--bad-soft);border-color:#f9c9c4;color:var(--bad-t)}
+button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 4px rgba(79,70,229,.14)}
+.chip.on,.chip.active{background:var(--brand);border-color:var(--brand);color:#fff}
+.avatar,.acct .avatar{background:var(--brand)}
+.pill,header.top .pill{background:var(--brand-soft);color:var(--brand2);border:1px solid #d9dcfb}
+header.top{background:#fff;border-bottom:1px solid var(--line2)}
+h1,h2,.pagetitle h1,header.top .bt1{color:var(--text)}
+/* navigation: light everywhere, brand-coloured when active */
+nav.nav button.active{color:var(--brand);background:transparent}
+nav.nav button.active::after{background:var(--brand)}
+@media(min-width:1000px){
+  nav.nav{background:#fff;border-right:1px solid var(--line2)}
+  nav.nav button{color:var(--mute)}
+  nav.nav button:hover{background:var(--surface2);color:var(--text)}
+  nav.nav button.active{background:var(--brand-soft);color:var(--brand2);font-weight:650}
+  nav.nav button.active::before{background:var(--brand);left:-12px}
+  nav.nav .nav-sec{color:#9aa1bb}
+}
+.cat.on{color:var(--brand);border-bottom-color:var(--brand)}.cat:hover{color:var(--brand)}
+/* dashboard */
+.focus{background:linear-gradient(180deg,color-mix(in srgb,var(--tone,#10b981) 9%,#fff),#fff 70%)}
+.focus .fv{color:var(--text)}
+.bar1.on .bb{background:var(--tone,var(--brand))}.bar1 .bb{background:#dfe3f1}
+.fig .val,.arow .ac,td.m-v,.rrow .rv{color:var(--text)}
+.fi{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.fi.k-save{background:var(--save-soft);color:var(--save-t)}.fi.k-loan{background:var(--loan-soft);color:var(--loan-t)}
+.fi.k-income{background:var(--income-soft);color:var(--income-t)}.fi.k-expense{background:var(--bad-soft);color:var(--bad-t)}
+.fi.k-cash{background:var(--brand-soft);color:var(--brand2)}
+.dot.pending{background:var(--pend)}.dot.overdue{background:var(--bad)}.dot.info{background:var(--loanc)}.dot.ok{background:var(--save)}
+.delta{background:var(--surface2)}
+/* badges */
+.badge.ok,.b-ok{background:var(--save-soft);color:var(--save-t)}.badge.warn,.b-warn{background:var(--pend-soft);color:var(--pend-t)}.badge.bad,.b-bad{background:var(--bad-soft);color:var(--bad-t)}
+/* semantic text */
+.card .val.t-avail,.t-avail{color:var(--save-t)}.card .val.t-loan,.t-loan{color:var(--loan-t)}.card .val.t-interest,.t-interest{color:var(--loan-t)}
+.card .val.t-profit,.t-profit{color:var(--income-t)}.card .val.t-commit,.t-commit{color:var(--pend-t)}
+.card:has(.t-avail)::before{background:var(--save)}.card:has(.t-loan)::before,.card:has(.t-interest)::before{background:var(--loanc)}.card:has(.t-profit)::before{background:var(--income)}.card:has(.t-commit)::before{background:var(--pend)}
+/* login */
+body:has(.login){background:linear-gradient(160deg,#eef0ff 0,#f6f7fc 55%,#e7f8f1 100%);background-attachment:fixed}
+.card.login{border:0;box-shadow:0 20px 50px rgba(79,70,229,.16);border-radius:24px}
+.lg-head{background:linear-gradient(135deg,#4f46e5,#7c6cf5);padding:28px 24px 22px}
+.lg-head .tag{color:#e0e3ff}
+.card.login::before,.hero-card::before{display:none}
+/* phone table rows + menus */
+.mrow .ic,.pselect{color:var(--brand2)}
+.pb-note b{color:var(--text)}
+.kv.tot{border-top-color:var(--brand)}
+.spin{border-top-color:var(--brand)}
+.badge-n{background:var(--pend)}
+@media(max-width:700px){.fig{padding:12px var(--sp4);gap:10px}.fig .val{font-size:14.5px}.fig .fk{font-size:14.5px;white-space:nowrap}.fi{width:34px;height:34px}}
+.b-loan,.badge.loan{background:var(--loan-soft);color:var(--loan-t)}
+/* small gold highlight only: the demo/preview pill and the Share-Out icon */
+.pill,header.top .pill{background:#fff6d6;color:#8a6500;border:1px solid #f3e19a}
 </style></head><body><div id="app"></div><script>(function(){var u="https://script.google.com/macros/s/AKfycbxrFoc4MIEJW_z5zOfb2RnKnxoDixcJB9zVSIbW9EuHnw_AWXe_mmQJ7sCniiDIwkWI/exec";try{var d=new URLSearchParams(location.search).get("dev");if(d&&/^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$|^http:\/\/localhost(:\d+)?\//.test(d))u=d;}catch(e){}
 try{localStorage.removeItem("sobUrl");}catch(e){}
 window.SOB_DEMO_NAMES=["Demo Member 001","Demo Member 002","Demo Member 003","Demo Member 004","Demo Member 005","Demo Member 006","Demo Member 007","Demo Member 008","Demo Member 009","Demo Member 010","Demo Member 011","Demo Member 012","Demo Member 013","Demo Member 014","Demo Member 015","Demo Member 016","Demo Member 017","Demo Member 018","Demo Member 019","Demo Member 020","Demo Member 021","Demo Member 022","Demo Member 023","Demo Member 024","Demo Member 025","Demo Member 026","Demo Member 027","Demo Member 028","Demo Member 029","Demo Member 030","Demo Member 031","Demo Member 032","Demo Member 033","Demo Member 034","Demo Member 035","Demo Member 036","Demo Member 037","Demo Member 038","Demo Member 039","Demo Member 040","Demo Member 041","Demo Member 042","Demo Member 043","Demo Member 044","Demo Member 045","Demo Member 046","Demo Member 047","Demo Member 048","Demo Member 049","Demo Member 050","Demo Member 051","Demo Member 052","Demo Member 053","Demo Member 054","Demo Member 055"];
@@ -5377,7 +5452,7 @@ window.SOBMember = function (E) {
 
   /* ---------- drill-down helpers ---------- */
   const loanRows = (filter) => K.loanBook(st.db, today()).filter(filter || (() => true));
-  const loanCols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Principal", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "Status", render: (v) => badge(v.status, v.balance > 0 ? "warn" : "ok") }];
+  const loanCols = [{ label: "Loan", key: "id" }, { label: "Member", render: (v) => nameOf(st.db.loans.find((l) => l.id === v.id).memberId) }, { label: "Principal", num: 1, render: (v) => num(v.principal) }, { label: "Interest", num: 1, render: (v) => num(v.accumulatedInterest) }, { label: "Repaid", num: 1, render: (v) => num(v.repaid) }, { label: "Balance", num: 1, render: (v) => num(v.balance) }, { label: "Status", render: (v) => badge(v.status, v.balance > 0 ? "loan" : "ok") }];
   function drill(title, definition, body) { const dm = Modal(title, h("div", null, privacyToggle(), definition ? h("p", { class: "mute" }, "How this is calculated: " + definition) : null, body)); dm.el.setAttribute("data-rep", "1"); }
 
   /* ---------- Admin: dashboard ---------- */
@@ -5450,13 +5525,13 @@ window.SOBMember = function (E) {
   const STANDS = ["totalSavings", "availableCash", "outstandingLoans", "interestReceivable", "loanExposure", "members"], HAPPENED = ["savingsReceived", "withdrawals", "loansDisbursed", "repaymentsReceived", "interestReceived", "subscriptions", "otherIncome", "profit", "expenses"];
   /* category registry: lead figure (the big number), the figures listed, the colour that carries its meaning, and who may see it */
   const DCATS = [
-    { k: "overview", t: "Overview", lead: "totalSavings", tone: "#0e8a5f" },
-    { k: "savings", t: "Savings", lead: "totalSavings", keys: ["totalSavings", "savingsReceived", "subscriptions"], tone: "#0e8a5f", recent: ["Savings"], recentT: "Recent savings" },
-    { k: "loans", t: "Loans", lead: "outstandingLoans", keys: ["outstandingLoans", "loanExposure", "loansDisbursed", "repaymentsReceived"], tone: "#0f2d52", recentT: "Largest loan balances" },
-    { k: "income", t: "Income", lead: "interestReceived", keys: ["interestReceived", "interestReceivable", "otherIncome", "profit"], tone: "#0e8a5f", recent: ["Loan Repayment"], recentT: "Recent repayments" },
-    { k: "cash", t: "Cash", lead: "availableCash", keys: ["availableCash", "withdrawals", "expenses"], tone: "#3b6ea5", recent: ["Withdraw", "Expense", "Bank Charge"], recentT: "Recent payments out" },
-    { k: "members", t: "Members", lead: "members", keys: ["members"], tone: "#0f2d52", recentT: "Subscriptions" },
-    { k: "governance", t: "Governance", roles: ["Admin", "Chairperson"], lead: null, tone: "#475569", recentT: "Latest audit entries" }];
+    { k: "overview", t: "Overview", lead: "totalSavings", tone: "#10b981" },
+    { k: "savings", t: "Savings", lead: "totalSavings", keys: ["totalSavings", "savingsReceived", "subscriptions"], tone: "#10b981", recent: ["Savings"], recentT: "Recent savings" },
+    { k: "loans", t: "Loans", lead: "outstandingLoans", keys: ["outstandingLoans", "loanExposure", "loansDisbursed", "repaymentsReceived"], tone: "#0ea5e9", recentT: "Largest loan balances" },
+    { k: "income", t: "Income", lead: "interestReceived", keys: ["interestReceived", "interestReceivable", "otherIncome", "profit"], tone: "#22c55e", recent: ["Loan Repayment"], recentT: "Recent repayments" },
+    { k: "cash", t: "Cash", lead: "availableCash", keys: ["availableCash", "withdrawals", "expenses"], tone: "#6366f1", recent: ["Withdraw", "Expense", "Bank Charge"], recentT: "Recent payments out" },
+    { k: "members", t: "Members", lead: "members", keys: ["members"], tone: "#6366f1", recentT: "Subscriptions" },
+    { k: "governance", t: "Governance", roles: ["Admin", "Chairperson"], lead: null, tone: "#64748b", recentT: "Latest audit entries" }];
   const dcatsFor = () => DCATS.filter((c) => !c.roles || c.roles.includes(st.user.role));
   const dcatNow = () => { const l = dcatsFor(); return l.find((c) => c.k === st.dcat) || l[0]; };
   const compact = (n) => { n = Math.round(Number(n) || 0); const a = Math.abs(n), f = (v, u) => (n < 0 ? "-" : "") + (v >= 100 ? Math.round(v) : Math.round(v * 10) / 10) + u; return a >= 1e9 ? f(a / 1e9, "B") : a >= 1e6 ? f(a / 1e6, "M") : a >= 1e3 ? f(a / 1e3, "K") : String(n); };
@@ -5478,10 +5553,12 @@ window.SOBMember = function (E) {
   const attnPanel = (rows, max) => h("section", { class: "panel attn", id: "attention" }, h("h2", null, "Needs your attention"),
     rows.length ? h("div", null, rows.slice(0, max || 4).map((r) => h("button", { class: "arow", "data-go": r.go, onclick: () => go(r.go) }, h("span", { class: "dot " + r.kind }), h("span", { class: "at" }, r.text), r.n ? h("span", { class: "ac" }, String(r.n)) : null, Icon("chevron", 16))))
       : h("div", { class: "allclear" }, Icon("check", 20), "Nothing needs attention right now."));
+  const FKIND = { totalSavings: ["save", "wallet"], savingsReceived: ["save", "up"], subscriptions: ["save", "receipt"], availableCash: ["cash", "wallet"], outstandingLoans: ["loan", "loan"], loanExposure: ["loan", "shield"], loansDisbursed: ["loan", "loan"], interestReceivable: ["loan", "chart"], repaymentsReceived: ["loan", "down"], interestReceived: ["income", "chart"], otherIncome: ["income", "plus"], profit: ["income", "up"], expenses: ["expense", "down"], withdrawals: ["expense", "up"], members: ["cash", "users"] };
   const figRow = (key, o, prev) => {
     const d = o[key], [label, subf] = FIG[key]; let dl = null;
     if (prev && prev[key] && d.unit !== "%" && Number(prev[key].value)) { const pc = (Number(d.value) - Number(prev[key].value)) / Math.abs(Number(prev[key].value)) * 100; if (isFinite(pc)) dl = h("span", { class: "delta", title: "Compared with the previous financial year" }, (pc >= 0 ? "▲ " : "▼ ") + Math.abs(Math.round(pc * 10) / 10) + "%"); }
-    return h("button", { class: "fig", "data-card": label, onclick: () => openKpi(key) }, h("span", { class: "fm" }, h("span", { class: "fk" }, label), h("span", { class: "fd", style: "display:block" }, subf(o))), h("span", { class: "val" }, kpiShow(d)), dl, Icon("chevron", 16, "go"));
+    const fk = FKIND[key] || ["cash", "chart"];
+    return h("button", { class: "fig", "data-card": label, onclick: () => openKpi(key) }, h("span", { class: "fi k-" + fk[0] }, Icon(fk[1], 18)), h("span", { class: "fm" }, h("span", { class: "fk" }, label), h("span", { class: "fd", style: "display:block" }, subf(o))), h("span", { class: "val" }, kpiShow(d)), dl, Icon("chevron", 16, "go"));
   };
   const figList = (id, title, keys, o, prev, note) => h("section", { class: "panel figs", id }, h("div", { class: "fh" }, h("h2", null, title), note ? h("span", null, note) : null), keys.map((k) => figRow(k, o, prev)));
   /* the same figure across the financial years: bars you can tap. Shows the latest six; every year stays reachable */
@@ -5606,11 +5683,11 @@ window.SOBMember = function (E) {
         h("h2", { class: "sec" }, "By financial year"), Table([{ label: "Year", render: (y) => y.label + (y.open ? " (open)" : "") }, { label: "Opening", num: 1, render: (y) => num(y.opening) }, { label: "Deposits", num: 1, render: (y) => num(y.deposits) }, { label: "Profit", num: 1, render: (y) => num(y.profit) }, { label: "Withdrawn", num: 1, render: (y) => num(y.withdrawals) }, { label: "Share-out", num: 1, render: (y) => num(y.shareOuts) }, { label: "Closing", num: 1, render: (y) => num(y.closing) }], a.years, null, "No financial year in this period"),
         adm ? h("p", { class: "mute rg-blurb" }, a.reserve.text) : null,
         h("h2", { class: "sec" }, "Loans"), a.loans.length || a.earlier.length ? null : h("p", { class: "mute" }, "No loans on record for this member."),
-        a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "warn" : "ok")),
+        a.loans.map((l) => h("div", { class: "panel loanp", "data-loan-ref": l.ref }, h("div", { class: "lh" }, h("b", null, "Loan " + l.ref), badge(l.status, l.totalOwed ? "loan" : "ok")),
           lines([["Loan paid out", l.principal], ["Date paid out", l.dateText]].concat(adm ? [["Payout entry", l.disbursementRef || "—"]] : []).concat([["Agreed interest per month", l.monthlyInterest], ["Interest charged to date", l.accruedInterest], ["Interest paid", l.interestPaid], ["Interest still due", l.interestDue], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft], ["TOTAL OWED", l.totalOwed, "tot"]])),
           h("p", { class: "mute rg-blurb" }, adm ? "Interest working: " + l.working : "Interest is UGX " + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself."), l.checks.partsAddUp ? null : Banner("bad", "This loan's parts do not add up to the ledger."),
           l.repayments.length ? Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Paid", num: 1, render: (r) => num(r.amount) }, { label: "To interest", num: 1, render: (r) => num(r.interest) }, { label: "To loan", num: 1, render: (r) => num(r.principal) }, { label: "Loan left", num: 1, render: (r) => num(r.principalLeft) }]), l.repayments, null) : h("p", { class: "mute rg-blurb" }, "No repayments recorded yet. " + l.rule))),
-        a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, adm ? "Earlier loan " + l.ref : "Earlier loan" + (l.dateText ? " (" + l.dateText + ")" : "")), badge(l.status, l.totalOwed ? "warn" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
+        a.earlier.map((l) => h("div", { class: "panel loanp" }, h("div", { class: "lh" }, h("b", null, adm ? "Earlier loan " + l.ref : "Earlier loan" + (l.dateText ? " (" + l.dateText + ")" : "")), badge(l.status, l.totalOwed ? "loan" : "ok")), lines([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", l.interestReceived], ["Loan repaid", l.principalRepaid], ["Still owed", l.totalOwed, "tot"]]), Table([{ label: "Date", render: (r) => r.date }, { label: "Event", key: "event" }, { label: "Amount", num: 1, render: (r) => num(r.amount) }, { label: "Owed after", num: 1, render: (r) => num(r.owedAfter) }], l.rows, null))),
         h("h2", { class: "sec" }, adm ? "Every transaction · tap one to review it" : "Every transaction"), Table([{ label: "Date", render: (x) => D.toDisplay(x.date) }].concat(adm ? [{ label: "Ref", key: "ref" }] : []).concat([{ label: "Transaction", key: "type" }, { label: "Details", key: "details" }, { label: "Amount", num: 1, render: (x) => num(x.amount) }, { label: "Effect", num: 1, render: (x) => num(x.effect) }, { label: "Balance", num: 1, render: (x) => num(x.balance) }]), a.transactions.slice().reverse().slice(0, 150), adm ? (x) => openEntry(x.ref) : null, "No transactions in this period"),
         a.transactions.length > 150 ? h("p", { class: "mute" }, "Showing the latest 150 of " + a.transactions.length + " — the PDF has all of them.") : null,
         adm && a.notes.length ? h("div", null, h("h2", { class: "sec" }, "Corrections and audit notes"), Table([{ label: "Date", render: (n) => D.toDisplay(n.date) }, { label: "Ref", key: "ref" }, { label: "Note", key: "note" }], a.notes.slice(0, 60), null)) : null,

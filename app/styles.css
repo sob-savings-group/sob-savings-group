@@ -557,3 +557,78 @@ main>.backbtn{margin:0 0 var(--sp3)}
 }
 .dgrid>.first{order:-1}
 @media(min-width:1000px){.dgrid>.first{order:0}}
+
+/* ===== SOB DESIGN SYSTEM v3 — fresh, bright, light. Indigo brand; green grows, sky borrows, amber waits, coral warns; everything else is quiet slate. ===== */
+:root{
+  --bg:#f6f7fc;--bg2:#eef0fa;--surface:#fff;--surface2:#f3f4fb;--line:#e1e4f0;--line2:#e8ebf4;--hair:#e8ebf4;
+  --text:#1c2033;--mute:#4b5268;--mute2:#6b7390;--slate:#4b5268;
+  --navy:#1c2033;--ink:#1c2033;--navy2:#4338ca;--ink2:#4338ca;--navy-soft:#eef0ff;
+  --brand:#4f46e5;--brand2:#4338ca;--brand-soft:#eef0ff;
+  --save:#10b981;--save-t:#047857;--save-soft:#e7f8f1;
+  --loanc:#0ea5e9;--loan-t:#0369a1;--loan-soft:#e6f4fd;
+  --income:#22c55e;--income-t:#15803d;--income-soft:#e8f9ee;
+  --pend:#f59e0b;--pend-t:#b45309;--pend-soft:#fef6e3;
+  --bad:#f04438;--bad-t:#c8281d;--bad-soft:#fef0ee;
+  --avail:#10b981;--loan:#0ea5e9;--interest:#0ea5e9;--profit:#22c55e;--ok:#10b981;--commit:#f59e0b;--warn:#f59e0b;--blue:#0ea5e9;
+  --gold:#4f46e5;--gold2:#4338ca;--gold-soft:#eef0ff;
+  --shadow:0 1px 2px rgba(28,32,51,.04),0 8px 24px rgba(79,70,229,.07);--shadow-s:0 1px 2px rgba(28,32,51,.05);--r:16px;--rc:12px}
+body,body:has(.shell){background:var(--bg)}
+.panel,.card,.fig-wrap,.periodbar{border-radius:16px;border-color:var(--line2);box-shadow:0 1px 2px rgba(28,32,51,.04)}
+.card::before{background:var(--line2);opacity:1}
+button{border-radius:12px;border-color:var(--line);color:var(--text)}
+button:hover{border-color:#c7cbf5;background:var(--brand-soft)}
+button.primary{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 14px rgba(79,70,229,.28)}
+button.primary:hover{background:var(--brand2);border-color:var(--brand2);color:#fff}
+button.danger{background:var(--bad-soft);border-color:#f9c9c4;color:var(--bad-t)}
+button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+input:focus,select:focus,textarea:focus{border-color:var(--brand);box-shadow:0 0 0 4px rgba(79,70,229,.14)}
+.chip.on,.chip.active{background:var(--brand);border-color:var(--brand);color:#fff}
+.avatar,.acct .avatar{background:var(--brand)}
+.pill,header.top .pill{background:var(--brand-soft);color:var(--brand2);border:1px solid #d9dcfb}
+header.top{background:#fff;border-bottom:1px solid var(--line2)}
+h1,h2,.pagetitle h1,header.top .bt1{color:var(--text)}
+/* navigation: light everywhere, brand-coloured when active */
+nav.nav button.active{color:var(--brand);background:transparent}
+nav.nav button.active::after{background:var(--brand)}
+@media(min-width:1000px){
+  nav.nav{background:#fff;border-right:1px solid var(--line2)}
+  nav.nav button{color:var(--mute)}
+  nav.nav button:hover{background:var(--surface2);color:var(--text)}
+  nav.nav button.active{background:var(--brand-soft);color:var(--brand2);font-weight:650}
+  nav.nav button.active::before{background:var(--brand);left:-12px}
+  nav.nav .nav-sec{color:#9aa1bb}
+}
+.cat.on{color:var(--brand);border-bottom-color:var(--brand)}.cat:hover{color:var(--brand)}
+/* dashboard */
+.focus{background:linear-gradient(180deg,color-mix(in srgb,var(--tone,#10b981) 9%,#fff),#fff 70%)}
+.focus .fv{color:var(--text)}
+.bar1.on .bb{background:var(--tone,var(--brand))}.bar1 .bb{background:#dfe3f1}
+.fig .val,.arow .ac,td.m-v,.rrow .rv{color:var(--text)}
+.fi{width:38px;height:38px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.fi.k-save{background:var(--save-soft);color:var(--save-t)}.fi.k-loan{background:var(--loan-soft);color:var(--loan-t)}
+.fi.k-income{background:var(--income-soft);color:var(--income-t)}.fi.k-expense{background:var(--bad-soft);color:var(--bad-t)}
+.fi.k-cash{background:var(--brand-soft);color:var(--brand2)}
+.dot.pending{background:var(--pend)}.dot.overdue{background:var(--bad)}.dot.info{background:var(--loanc)}.dot.ok{background:var(--save)}
+.delta{background:var(--surface2)}
+/* badges */
+.badge.ok,.b-ok{background:var(--save-soft);color:var(--save-t)}.badge.warn,.b-warn{background:var(--pend-soft);color:var(--pend-t)}.badge.bad,.b-bad{background:var(--bad-soft);color:var(--bad-t)}
+/* semantic text */
+.card .val.t-avail,.t-avail{color:var(--save-t)}.card .val.t-loan,.t-loan{color:var(--loan-t)}.card .val.t-interest,.t-interest{color:var(--loan-t)}
+.card .val.t-profit,.t-profit{color:var(--income-t)}.card .val.t-commit,.t-commit{color:var(--pend-t)}
+.card:has(.t-avail)::before{background:var(--save)}.card:has(.t-loan)::before,.card:has(.t-interest)::before{background:var(--loanc)}.card:has(.t-profit)::before{background:var(--income)}.card:has(.t-commit)::before{background:var(--pend)}
+/* login */
+body:has(.login){background:linear-gradient(160deg,#eef0ff 0,#f6f7fc 55%,#e7f8f1 100%);background-attachment:fixed}
+.card.login{border:0;box-shadow:0 20px 50px rgba(79,70,229,.16);border-radius:24px}
+.lg-head{background:linear-gradient(135deg,#4f46e5,#7c6cf5);padding:28px 24px 22px}
+.lg-head .tag{color:#e0e3ff}
+.card.login::before,.hero-card::before{display:none}
+/* phone table rows + menus */
+.mrow .ic,.pselect{color:var(--brand2)}
+.pb-note b{color:var(--text)}
+.kv.tot{border-top-color:var(--brand)}
+.spin{border-top-color:var(--brand)}
+.badge-n{background:var(--pend)}
+@media(max-width:700px){.fig{padding:12px var(--sp4);gap:10px}.fig .val{font-size:14.5px}.fig .fk{font-size:14.5px;white-space:nowrap}.fi{width:34px;height:34px}}
+.b-loan,.badge.loan{background:var(--loan-soft);color:var(--loan-t)}
+/* small gold highlight only: the demo/preview pill and the Share-Out icon */
+.pill,header.top .pill{background:#fff6d6;color:#8a6500;border:1px solid #f3e19a}
