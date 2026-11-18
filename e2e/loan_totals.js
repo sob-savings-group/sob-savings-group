@@ -20,6 +20,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   ok(true, "tapping a loan opens it, and the Admin sees Lock interest");
   await pg.click('.modal [data-act="Lock interest"]'); await pg.waitForSelector(".modal textarea, .modal input[name=reason], .modal input");
   ok((await pg.locator("body").innerText()).includes("Lock interest on this loan"), "the lock form asks for a date and a reason");
+  const ctxTxt = await pg.locator("#lock-context").innerText();
+  ok(/months charged/i.test(ctxTxt) && /monthly interest/i.test(ctxTxt) && /repaid so far/i.test(ctxTxt) && /owed today/i.test(ctxTxt) && /paid out/.test(ctxTxt), "the lock form shows the loan's history: months charged, interest, repaid, owed");
+  await pg.fill('.modal input[name="date"]', "2026-11-01"); await pg.dispatchEvent('.modal input[name="date"]', "input");
+  ok(/If locked from/.test(await pg.locator("#lock-preview").innerText()), "choosing a date previews the effect on months and amount owed");
   ok(errs.length === 0, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close(); srv.close(); console.log(fails ? "loan totals e2e FAILED" : "loan totals e2e passed");
 })().catch((e) => { console.error(e); process.exit(1); });
