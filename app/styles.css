@@ -645,22 +645,30 @@ body:has(.login) #app,body:has(.login) main{position:relative;z-index:1}
 .focus .delta{background:rgba(255,255,255,.18);color:#fff}
 .focus *{position:relative;z-index:1}
 
-/* ===== THEME: GRAPHITE (final). Graphite brand; green grows, blue borrows, amber waits, red warns. ===== */
-:root{--bg:#f6f6f7;--bg2:#eeeef0;--line:#e4e4e8;--line2:#ebebee;--text:#16181d;--navy:#16181d;--ink:#16181d;--brand:#16181d;--brand2:#000;--brand-soft:#efeff2;--navy-soft:#efeff2;--save:#12b76a;--save-t:#0a7a46;--save-soft:#e6f8ee;--loanc:#3b82f6;--loan-t:#1d4ed8;--loan-soft:#e8f0ff;--bad:#ef4444;--bad-t:#b91c1c;--bad-soft:#fef0f0;--h1:#1f232b;--h2:#3a4150;--hs:rgba(22,24,29,.25);--shadow:0 4px 18px rgba(22,24,29,.06)}
-.lg-head{background:linear-gradient(135deg,#1f232b,#3a4150)}
-button.primary{box-shadow:0 6px 16px rgba(22,24,29,.22)}
-button:hover{border-color:#c9c9d1;background:var(--brand-soft)}button.primary:hover{background:#000;border-color:#000}
-nav.nav button.active{color:#16181d}nav.nav button.active::after{background:#16181d}
-@media(min-width:1000px){nav.nav button.active{background:#efeff2;color:#16181d}nav.nav button.active::before{background:#16181d}}
-.cat.on{color:#16181d;border-bottom-color:#16181d}.cat:hover{color:#16181d}.chip.on{background:#16181d;border-color:#16181d}
-.pselect,.mrow .ic{color:#16181d}.avatar,.acct .avatar{background:#16181d}
-input:focus,select:focus,textarea:focus{border-color:#16181d;box-shadow:0 0 0 4px rgba(22,24,29,.10)}
-button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline-color:#16181d}
-.kv.tot{border-top-color:#16181d}.spin{border-top-color:#16181d}
-.fi.k-cash{background:#efeff2;color:#3a4150}
-body:has(.login){background:linear-gradient(160deg,#f1f1f4 0,#f6f6f7 60%,#e9f7ef 100%);background-attachment:fixed}
-.card.login{box-shadow:0 20px 50px rgba(22,24,29,.14)}
-body:has(.login)::before{filter:grayscale(1) contrast(1.1)}
+/* ===== THEME: BANK BLUE (final). Royal-blue brand; green grows, violet borrows, amber waits, red warns. ===== */
+:root{--bg:#f2f5fc;--bg2:#e8eefb;--line:#dde4f3;--line2:#e6ebf6;--text:#12203f;--navy:#12203f;--ink:#12203f;--brand:#1b4fd8;--brand2:#123fb0;--brand-soft:#e9efff;--navy-soft:#e9efff;--save:#12b76a;--save-t:#0a7a46;--save-soft:#e6f8ee;--loanc:#7c5ce6;--loan-t:#5b3fc4;--loan-soft:#f0ebff;--bad:#e5484d;--bad-t:#b8262b;--bad-soft:#fff0f0;--h1:#0f3ba8;--h2:#2f6bff;--hs:rgba(27,79,216,.30);--shadow:0 4px 18px rgba(27,79,216,.08)}
+.lg-head{background:linear-gradient(135deg,#0f3ba8,#2f6bff)}
+button.primary{box-shadow:0 6px 16px rgba(27,79,216,.30)}
+button:hover{border-color:#c3d0f2;background:var(--brand-soft)}button.primary:hover{background:#123fb0;border-color:#123fb0}
+nav.nav button.active{color:#1b4fd8}nav.nav button.active::after{background:#1b4fd8}
+@media(min-width:1000px){nav.nav button.active{background:#e9efff;color:#1b4fd8}nav.nav button.active::before{background:#1b4fd8}}
+.cat.on{color:#1b4fd8;border-bottom-color:#1b4fd8}.cat:hover{color:#1b4fd8}.chip.on{background:#1b4fd8;border-color:#1b4fd8}
+.pselect,.mrow .ic{color:#1b4fd8}.avatar,.acct .avatar{background:#1b4fd8}
+input:focus,select:focus,textarea:focus{border-color:#1b4fd8;box-shadow:0 0 0 4px rgba(27,79,216,.14)}
+button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline-color:#1b4fd8}
+.kv.tot{border-top-color:#1b4fd8}.spin{border-top-color:#1b4fd8}
+.fi.k-cash{background:#e9efff;color:#1b4fd8}
+body:has(.login){background:linear-gradient(160deg,#e4ecff 0,#f2f5fc 60%,#e6f8ee 100%);background-attachment:fixed}
+.card.login{box-shadow:0 20px 50px rgba(27,79,216,.16)}
+body:has(.login)::before{filter:none}
 .pill,header.top .pill{background:#fff6d6;color:#8a6500;border:1px solid #f3e19a}
-:root{--gold:#16181d;--gold2:#000;--gold-soft:#efeff2;--navy2:#3a4150;--ink2:#3a4150}
+:root{--gold:#1b4fd8;--gold2:#123fb0;--gold-soft:#e9efff;--navy2:#123fb0;--ink2:#123fb0}
 .focus .bar1 .bb{background:rgba(255,255,255,.28)}.focus .bar1.on .bb{background:#fff}
+
+/* quick actions inside the balance card */
+.qas{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:var(--sp2);padding-top:0;border-top:0}
+.qa{display:flex;flex-direction:column;align-items:center;gap:8px;min-height:84px;padding:8px 2px;background:transparent;border:0;color:#fff;box-shadow:none;border-radius:14px}
+.qa:hover{background:rgba(255,255,255,.10);border:0}
+.qi{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;color:#fff}
+.qa .ql{font-size:12.5px;font-weight:600;line-height:1.15;text-align:center;color:#fff}
+.focus .trend-d{order:2}

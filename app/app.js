@@ -293,10 +293,17 @@
     const types = cat.recent || ["Savings", "Loan Repayment", "Withdraw", "Loan Disbursement"], rows = recentTx(types, cat.k === "overview" ? 6 : 5);
     return sectionD(cat.k === "overview" ? "Recent activity" : cat.recentT, "recent", rows.length ? h("div", null, rows.map(txRow), h("div", { class: "rrow-more" }, h("button", { onclick: () => go("ledger") }, "Open the ledger"))) : h("div", { class: "rbody mute" }, "Nothing recorded yet."), rows.length);
   }
+  /* one-tap shortcuts inside the balance card, like a mobile banking app: each role gets its own most-used screens */
+  const QA = { Admin: [["ledger", "New entry"], ["members", "Members"], ["loans", "Loans"], ["reports", "Reports"]], Treasurer: [["ledger", "New entry"], ["subs", "Subscriptions"], ["loans", "Loans"], ["reports", "Reports"]], Chairperson: [["approvals", "Approvals"], ["loans", "Loans"], ["members", "Members"], ["reports", "Reports"]], Secretary: [["members", "Members"], ["reports", "Reports"], ["ledger", "Ledger"], ["loans", "Loans"]], Committee: [["members", "Members"], ["loans", "Loans"], ["reports", "Reports"], ["ledger", "Ledger"]] };
+  function quickActions() {
+    const items = (QA[st.user.role] || QA.Admin).map(([k, label]) => { const n = NAV_STAFF.find((x) => x[0] === k); return n && (!n[2] || n[2] === st.user.role) ? h("button", { class: "qa", "data-qa": k, onclick: () => go(k) }, h("span", { class: "qi" }, Icon(n[3], 22)), h("span", { class: "ql" }, label)) : null; }).filter(Boolean);
+    return h("div", { class: "qas" }, items);
+  }
   function dashboard() {
     const p = periodNow(), o = ovFor(p), pipe = K.pipeline(st.db), cat = dcatNow(), fo = cat.lead ? focusPanel(cat, o, p) : { prev: null, node: null }, prev = fo.prev, wrap = h("div", { id: "dash" });
     wrap.append(periodBar(), h("div", { class: "cats", role: "tablist", id: "tiles" }, dcatsFor().map((c) => h("button", { class: "cat" + (c.k === cat.k ? " on" : ""), role: "tab", "aria-selected": String(c.k === cat.k), "data-tile": c.k, onclick: () => { st.dcat = c.k; render(); } }, c.t))), fo.node);
     const rows = attnItems(o, pipe), lists = h("div", { class: "dlists" });
+    if (cat.lead && cat.k === "overview" && isStaff()) fo.node.append(quickActions());
     const ap = attnPanel(rows, cat.k === "governance" ? 8 : 4); if (st.user.role === "Chairperson" && rows.length) ap.classList.add("first");
     wrap.append(h("div", { class: "dgrid" + (cat.lead ? "" : " solo") }, cat.lead ? fo.node : null, ap), lists);
     if (cat.k === "overview") {

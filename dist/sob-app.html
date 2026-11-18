@@ -645,25 +645,33 @@ body:has(.login) #app,body:has(.login) main{position:relative;z-index:1}
 .focus .delta{background:rgba(255,255,255,.18);color:#fff}
 .focus *{position:relative;z-index:1}
 
-/* ===== THEME: GRAPHITE (final). Graphite brand; green grows, blue borrows, amber waits, red warns. ===== */
-:root{--bg:#f6f6f7;--bg2:#eeeef0;--line:#e4e4e8;--line2:#ebebee;--text:#16181d;--navy:#16181d;--ink:#16181d;--brand:#16181d;--brand2:#000;--brand-soft:#efeff2;--navy-soft:#efeff2;--save:#12b76a;--save-t:#0a7a46;--save-soft:#e6f8ee;--loanc:#3b82f6;--loan-t:#1d4ed8;--loan-soft:#e8f0ff;--bad:#ef4444;--bad-t:#b91c1c;--bad-soft:#fef0f0;--h1:#1f232b;--h2:#3a4150;--hs:rgba(22,24,29,.25);--shadow:0 4px 18px rgba(22,24,29,.06)}
-.lg-head{background:linear-gradient(135deg,#1f232b,#3a4150)}
-button.primary{box-shadow:0 6px 16px rgba(22,24,29,.22)}
-button:hover{border-color:#c9c9d1;background:var(--brand-soft)}button.primary:hover{background:#000;border-color:#000}
-nav.nav button.active{color:#16181d}nav.nav button.active::after{background:#16181d}
-@media(min-width:1000px){nav.nav button.active{background:#efeff2;color:#16181d}nav.nav button.active::before{background:#16181d}}
-.cat.on{color:#16181d;border-bottom-color:#16181d}.cat:hover{color:#16181d}.chip.on{background:#16181d;border-color:#16181d}
-.pselect,.mrow .ic{color:#16181d}.avatar,.acct .avatar{background:#16181d}
-input:focus,select:focus,textarea:focus{border-color:#16181d;box-shadow:0 0 0 4px rgba(22,24,29,.10)}
-button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline-color:#16181d}
-.kv.tot{border-top-color:#16181d}.spin{border-top-color:#16181d}
-.fi.k-cash{background:#efeff2;color:#3a4150}
-body:has(.login){background:linear-gradient(160deg,#f1f1f4 0,#f6f6f7 60%,#e9f7ef 100%);background-attachment:fixed}
-.card.login{box-shadow:0 20px 50px rgba(22,24,29,.14)}
-body:has(.login)::before{filter:grayscale(1) contrast(1.1)}
+/* ===== THEME: BANK BLUE (final). Royal-blue brand; green grows, violet borrows, amber waits, red warns. ===== */
+:root{--bg:#f2f5fc;--bg2:#e8eefb;--line:#dde4f3;--line2:#e6ebf6;--text:#12203f;--navy:#12203f;--ink:#12203f;--brand:#1b4fd8;--brand2:#123fb0;--brand-soft:#e9efff;--navy-soft:#e9efff;--save:#12b76a;--save-t:#0a7a46;--save-soft:#e6f8ee;--loanc:#7c5ce6;--loan-t:#5b3fc4;--loan-soft:#f0ebff;--bad:#e5484d;--bad-t:#b8262b;--bad-soft:#fff0f0;--h1:#0f3ba8;--h2:#2f6bff;--hs:rgba(27,79,216,.30);--shadow:0 4px 18px rgba(27,79,216,.08)}
+.lg-head{background:linear-gradient(135deg,#0f3ba8,#2f6bff)}
+button.primary{box-shadow:0 6px 16px rgba(27,79,216,.30)}
+button:hover{border-color:#c3d0f2;background:var(--brand-soft)}button.primary:hover{background:#123fb0;border-color:#123fb0}
+nav.nav button.active{color:#1b4fd8}nav.nav button.active::after{background:#1b4fd8}
+@media(min-width:1000px){nav.nav button.active{background:#e9efff;color:#1b4fd8}nav.nav button.active::before{background:#1b4fd8}}
+.cat.on{color:#1b4fd8;border-bottom-color:#1b4fd8}.cat:hover{color:#1b4fd8}.chip.on{background:#1b4fd8;border-color:#1b4fd8}
+.pselect,.mrow .ic{color:#1b4fd8}.avatar,.acct .avatar{background:#1b4fd8}
+input:focus,select:focus,textarea:focus{border-color:#1b4fd8;box-shadow:0 0 0 4px rgba(27,79,216,.14)}
+button:focus-visible,input:focus-visible,select:focus-visible,.fig:focus-visible{outline-color:#1b4fd8}
+.kv.tot{border-top-color:#1b4fd8}.spin{border-top-color:#1b4fd8}
+.fi.k-cash{background:#e9efff;color:#1b4fd8}
+body:has(.login){background:linear-gradient(160deg,#e4ecff 0,#f2f5fc 60%,#e6f8ee 100%);background-attachment:fixed}
+.card.login{box-shadow:0 20px 50px rgba(27,79,216,.16)}
+body:has(.login)::before{filter:none}
 .pill,header.top .pill{background:#fff6d6;color:#8a6500;border:1px solid #f3e19a}
-:root{--gold:#16181d;--gold2:#000;--gold-soft:#efeff2;--navy2:#3a4150;--ink2:#3a4150}
+:root{--gold:#1b4fd8;--gold2:#123fb0;--gold-soft:#e9efff;--navy2:#123fb0;--ink2:#123fb0}
 .focus .bar1 .bb{background:rgba(255,255,255,.28)}.focus .bar1.on .bb{background:#fff}
+
+/* quick actions inside the balance card */
+.qas{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:var(--sp2);padding-top:0;border-top:0}
+.qa{display:flex;flex-direction:column;align-items:center;gap:8px;min-height:84px;padding:8px 2px;background:transparent;border:0;color:#fff;box-shadow:none;border-radius:14px}
+.qa:hover{background:rgba(255,255,255,.10);border:0}
+.qi{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;color:#fff}
+.qa .ql{font-size:12.5px;font-weight:600;line-height:1.15;text-align:center;color:#fff}
+.focus .trend-d{order:2}
 </style></head><body><div id="app"></div><script>(function(){var u="https://script.google.com/macros/s/AKfycbxrFoc4MIEJW_z5zOfb2RnKnxoDixcJB9zVSIbW9EuHnw_AWXe_mmQJ7sCniiDIwkWI/exec";try{var d=new URLSearchParams(location.search).get("dev");if(d&&/^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$|^http:\/\/localhost(:\d+)?\//.test(d))u=d;}catch(e){}
 try{localStorage.removeItem("sobUrl");}catch(e){}
 window.SOB_DEMO_NAMES=["Demo Member 001","Demo Member 002","Demo Member 003","Demo Member 004","Demo Member 005","Demo Member 006","Demo Member 007","Demo Member 008","Demo Member 009","Demo Member 010","Demo Member 011","Demo Member 012","Demo Member 013","Demo Member 014","Demo Member 015","Demo Member 016","Demo Member 017","Demo Member 018","Demo Member 019","Demo Member 020","Demo Member 021","Demo Member 022","Demo Member 023","Demo Member 024","Demo Member 025","Demo Member 026","Demo Member 027","Demo Member 028","Demo Member 029","Demo Member 030","Demo Member 031","Demo Member 032","Demo Member 033","Demo Member 034","Demo Member 035","Demo Member 036","Demo Member 037","Demo Member 038","Demo Member 039","Demo Member 040","Demo Member 041","Demo Member 042","Demo Member 043","Demo Member 044","Demo Member 045","Demo Member 046","Demo Member 047","Demo Member 048","Demo Member 049","Demo Member 050","Demo Member 051","Demo Member 052","Demo Member 053","Demo Member 054","Demo Member 055"];
@@ -5619,10 +5627,17 @@ window.SOBMember = function (E) {
     const types = cat.recent || ["Savings", "Loan Repayment", "Withdraw", "Loan Disbursement"], rows = recentTx(types, cat.k === "overview" ? 6 : 5);
     return sectionD(cat.k === "overview" ? "Recent activity" : cat.recentT, "recent", rows.length ? h("div", null, rows.map(txRow), h("div", { class: "rrow-more" }, h("button", { onclick: () => go("ledger") }, "Open the ledger"))) : h("div", { class: "rbody mute" }, "Nothing recorded yet."), rows.length);
   }
+  /* one-tap shortcuts inside the balance card, like a mobile banking app: each role gets its own most-used screens */
+  const QA = { Admin: [["ledger", "New entry"], ["members", "Members"], ["loans", "Loans"], ["reports", "Reports"]], Treasurer: [["ledger", "New entry"], ["subs", "Subscriptions"], ["loans", "Loans"], ["reports", "Reports"]], Chairperson: [["approvals", "Approvals"], ["loans", "Loans"], ["members", "Members"], ["reports", "Reports"]], Secretary: [["members", "Members"], ["reports", "Reports"], ["ledger", "Ledger"], ["loans", "Loans"]], Committee: [["members", "Members"], ["loans", "Loans"], ["reports", "Reports"], ["ledger", "Ledger"]] };
+  function quickActions() {
+    const items = (QA[st.user.role] || QA.Admin).map(([k, label]) => { const n = NAV_STAFF.find((x) => x[0] === k); return n && (!n[2] || n[2] === st.user.role) ? h("button", { class: "qa", "data-qa": k, onclick: () => go(k) }, h("span", { class: "qi" }, Icon(n[3], 22)), h("span", { class: "ql" }, label)) : null; }).filter(Boolean);
+    return h("div", { class: "qas" }, items);
+  }
   function dashboard() {
     const p = periodNow(), o = ovFor(p), pipe = K.pipeline(st.db), cat = dcatNow(), fo = cat.lead ? focusPanel(cat, o, p) : { prev: null, node: null }, prev = fo.prev, wrap = h("div", { id: "dash" });
     wrap.append(periodBar(), h("div", { class: "cats", role: "tablist", id: "tiles" }, dcatsFor().map((c) => h("button", { class: "cat" + (c.k === cat.k ? " on" : ""), role: "tab", "aria-selected": String(c.k === cat.k), "data-tile": c.k, onclick: () => { st.dcat = c.k; render(); } }, c.t))), fo.node);
     const rows = attnItems(o, pipe), lists = h("div", { class: "dlists" });
+    if (cat.lead && cat.k === "overview" && isStaff()) fo.node.append(quickActions());
     const ap = attnPanel(rows, cat.k === "governance" ? 8 : 4); if (st.user.role === "Chairperson" && rows.length) ap.classList.add("first");
     wrap.append(h("div", { class: "dgrid" + (cat.lead ? "" : " solo") }, cat.lead ? fo.node : null, ap), lists);
     if (cat.k === "overview") {
