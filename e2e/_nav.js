@@ -6,10 +6,17 @@ pw.chromium.launch = async function (...a) {
   const b = await launch(...a);
   const probe = await b.newPage(), P = Object.getPrototypeOf(probe); await probe.close();
   if (!P.__sobNav) {
-    P.__sobNav = true; const orig = P.click;
+    P.__sobNav = true; const orig = P.click, origFill = P.fill;
+    /* sign-in is two short steps (ID, then password): tests that fill both boxes follow the same two taps a person makes */
+    P.fill = async function (sel, val, opts) {
+      if (sel === "#mid" && (await this.locator("#pw-back").isVisible().catch(() => false))) await this.locator("#pw-back").click();
+      if (sel === "#pin" && (await this.locator("#pin").count()) && !(await this.locator("#pin").isVisible()) && (await this.locator("#login-go").isVisible())) await this.locator("#login-go").click();
+      return origFill.call(this, sel, val, opts);
+    };
     P.click = async function (sel, opts) {
       const m = typeof sel === "string" && /^\[data-nav="([a-z]+)"\]$/.exec(sel);
       if (m && m[1] !== "menu") { const loc = this.locator(sel); if ((await loc.count()) && !(await loc.first().isVisible()) && (await this.locator('[data-nav="menu"]').count())) { await this.locator('[data-nav="menu"]').click(); await this.waitForSelector('[data-menu="' + m[1] + '"]'); return orig.call(this, '[data-menu="' + m[1] + '"]', opts); } }
+      if (sel === "#login-go" && !(await this.locator("#login-go").isVisible().catch(() => false)) && (await this.locator("#login-submit").isVisible().catch(() => false))) return orig.call(this, "#login-submit", opts);
       return orig.call(this, sel, opts);
     };
   }

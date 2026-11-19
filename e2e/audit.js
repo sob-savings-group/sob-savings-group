@@ -34,7 +34,7 @@ const iso = (d) => d.toISOString().slice(0, 10);
     await ctx.route(/wa\.me/, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "wa" }));
     await pg.goto(base + "/app/index.html"); await pg.waitForSelector("#login-go");
     /* sign-in guidance + exact access messages */
-    ok((await pg.locator("#fname").count()) === 0 && /SOB ID/.test(await pg.getAttribute("#mid", "placeholder")) && (await pg.locator("#pin").isVisible()) && (await pg.locator("#login-go").count()) === 1, T("login screen: one ID field and one password field"));
+    ok((await pg.locator("#fname").count()) === 0 && /SOB/.test(await pg.getAttribute("#mid", "placeholder")) && (await pg.locator("#pin").count()) === 1 && (await pg.locator("#login-go").isVisible()), T("login screen: one ID field and one password field"));
     const DENIED = "Incorrect ID or password. Please check and try again.", PENDING = "Your membership is pending approval. Please contact the Administrator.", INACTIVE = "Your account is currently inactive or restricted. Please contact the Administrator.";
     const tryLogin = async (idText, pinText, nameText) => { await pg.fill("#mid", idText); await pg.evaluate((v) => { const r = document.getElementById("pin-row"); if (r) r.hidden = false; document.getElementById("pin").value = v; }, pinText); await pg.click("#login-go"); await pg.waitForSelector("#login-error", { timeout: 15000 }); const m = (await pg.innerText("#login-error")).trim(); await pg.evaluate(() => { const e = document.getElementById("login-error"); if (e) e.remove(); }); return m; };
     const setStatus = (id, status) => { const ms = S.readCollection(env.ss, "members"); ms.forEach((m) => { if (m.id === id) m.status = status; }); S.writeCollection(env.ss, "members", ms); };

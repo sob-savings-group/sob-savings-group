@@ -36,7 +36,7 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter"))));
     } else {
       /* ONE sign-in for everybody: SOB ID, Staff ID or email + password. The server finds the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB ID (SOB-014) or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const mid = h("input", { id: "mid", placeholder: "SOB-014, email or phone", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const pin = h("input", { type: "password", id: "pin", placeholder: "Password", autocomplete: "current-password", enterkeyhint: "go" });
       const show = h("button", { type: "button", id: "pin-show", class: "ghost", "aria-label": "Show or hide password", onclick: () => { const on = pin.type === "password"; pin.type = on ? "text" : "password"; show.textContent = on ? "Hide" : "Show"; } }, "Show");
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
@@ -55,13 +55,18 @@
           else problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, e.code === "LOCKED" ? "Too many attempts. Please try again in 15 minutes." : friendly(e)));
         } finally { working = false; }
       };
-      const go = () => attempt(async () => {
+      const submit = () => attempt(async () => {
         const id = normId(mid.value), secret = pin.value.trim();
         if (!id) throw Object.assign(new Error("Enter your SOB ID, Staff ID or email"), { code: "FORMAT" });
         if (!secret) throw Object.assign(new Error("Enter your password"), { code: "FORMAT" });
         return st.store.login(id, secret);
       });
-      [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
+      /* two short steps: 1) who you are  2) your password. The password box is filled by a password manager too, so a filled password signs in at once. */
+      let idStep, pwStep, who, toggleRef;
+      const next = () => { problem.replaceChildren(); if (!mid.value.trim()) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID, email or phone"));
+        if (pin.value) return submit(); who.textContent = normId(mid.value); idStep.hidden = true; pwStep.hidden = false; if (toggleRef) toggleRef.hidden = true; setTimeout(() => pin.focus(), 0); };
+      const back = () => { problem.replaceChildren(); pwStep.hidden = true; idStep.hidden = false; pin.value = ""; if (toggleRef) toggleRef.hidden = false; mid.focus(); };
+      mid.addEventListener("keydown", (ev) => { if (ev.key === "Enter") next(); }); pin.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
       /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
       const rid = h("input", { id: "reg-id", placeholder: "SOB-014, email or phone", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
       const rcode = h("input", { id: "reg-code", placeholder: "6-digit code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
@@ -77,10 +82,14 @@
         if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID, email or phone"));
         working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
-      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "First time or forgot password"), h("p", { class: "lg-help" }, "Type your SOB ID, email or phone number. The 6-digit code goes to your email; if you have none, to your phone by SMS."), h("label", { for: "reg-id" }, "SOB ID, email or phone"), rid,
+      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "Get a code"), h("p", { class: "lg-help" }, "Type your SOB ID, email or phone. We send a 6-digit code to your email, or by SMS if you have none."), h("label", { for: "reg-id" }, "SOB ID, email or phone"), rid,
         h("button", { class: "secondary big", id: "reg-send", onclick: sendCode }, "Send verification code"), rmsg, step2);
-      const signBox = h("div", { id: "sign-box" }, h("label", { for: "mid" }, "SOB ID or email"), mid, h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show), h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign in"));
-      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time or forgot password? Get a code"; if (c) rid.value = mid.value; } }, "First time or forgot password? Get a code");
+      const signBox = h("div", { id: "sign-box" },
+        (idStep = h("div", { id: "id-step" }, h("label", { for: "mid" }, "SOB ID, email or phone"), mid, h("button", { class: "primary big", id: "login-go", onclick: next }, "Continue"))),
+        (pwStep = h("div", { id: "pw-step", hidden: true }, h("div", { class: "who-row" }, (who = h("b", { id: "pw-who" }, "")), h("button", { type: "button", class: "linkbtn", id: "pw-back", onclick: back }, "Change")), h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show),
+          h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; regBox.hidden = false; signBox.hidden = true; toggleRef.hidden = false; toggleRef.textContent = "Back to sign in"; sendCode(); } }, "Forgot password? Send me a code"))));
+      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time? Get a code"; if (!c) back(); if (c) rid.value = mid.value; } }, "First time? Get a code");
+      toggleRef = toggle;
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in")),
