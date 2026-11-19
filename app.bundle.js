@@ -2620,9 +2620,38 @@
   function receiptText(db, e, asOf) {
     const k = RECEIPT_KIND[e.type], amount = money(e.amount), day = D.isISO(e.date) ? Number(e.date.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(e.date.slice(5, 7)) - 1] : "";
     const sav = Math.round(L.memberPosition(db, e.memberId).savings), loans = L.activeLoans(db).filter((l) => !l.voided && l.memberId === e.memberId && /^Active$/i.test(String(l.status))), owed = Math.round(loans.reduce((x, l) => x + L.loanOutstanding(l, db, asOf), 0));
+    if (e.type === "Loan Repayment" && e.viaSavings) {          // paid from the member's own savings: say so plainly (no cash came in)
+      const all = owed <= 0, h2 = (d) => "SOB: " + (all ? "Your loan was fully paid from your savings (" + amount + ")" : amount + " of your loan was paid from your savings") + (d && day ? " on " + day : "") + ".", sb2 = " Savings bal " + money(sav) + ".", lb2 = all ? " Loan cleared." : " Loan bal " + money(owed) + ".";
+      for (const t of [h2(true) + sb2 + lb2, h2(false) + sb2 + lb2, h2(false) + lb2]) if (t.length <= RECEIPT_MAX) return t; return h2(false);
+    }
     const head = (d) => "SOB: " + k[0] + " " + amount + " " + k[1] + (d && day ? " " + day : "") + ".", sb = " Savings bal " + money(sav) + ".", lb = owed > 0 ? " Loan bal " + money(owed) + "." : (e.type === "Loan Repayment" ? " Loan cleared." : "");
     for (const t of [head(true) + sb + lb, head(false) + sb + lb, head(false) + sb, head(false)]) if (t.length <= RECEIPT_MAX) return t;
     return head(false);
+  }
+  /* ---------- INTEREST RELIEF NOTICE ----------
+     When the interest on a loan was reduced by stopping it (Lock interest), the member is told how many months of interest now apply instead of how many would have, and how much was taken off.
+     Facts come from the loan's own records; the officer chooses who is told and presses Send; each loan is told once per lock. Nothing here changes a loan, an entry or a balance. */
+  function interestRelief(db, asOf) {
+    asOf = asOf || D.todayISO();
+    return (db.loans || []).filter((l) => !l.voided && l.status === "Active" && (l.interestLocks || []).length && D.isISO(l.date)).map((l) => {
+      const open = Object.assign({}, l, { interestLocks: [] }), monthsNow = L.loanMonthsAfterGrace(l, asOf), monthsBefore = L.loanMonthsAfterGrace(open, asOf);
+      const cut = Math.max(0, Math.round(L.loanAccumulatedInterest(open, asOf, db) - L.loanAccumulatedInterest(l, asOf, db))), key = "relief:" + l.id + ":" + (l.interestLocks || []).map((x) => x.from + ">" + (x.to || "")).join(",");
+      const told = (db.outbox || []).some((m) => m.dedupeKey === key && m.status !== "CANCELLED" && m.status !== "FAILED");
+      const owed = Math.round(L.loanOutstanding(l, db, asOf)), member = (db.members || []).find((m) => m.id === l.memberId) || {};
+      const text = "SOB: Good news. Interest on your loan is now charged for " + monthsNow + " month" + (monthsNow === 1 ? "" : "s") + " instead of " + monthsBefore + ", to help you pay. Interest reduced by " + money(cut) + ". Loan bal " + money(owed) + ".";
+      return { loanId: l.id, memberId: l.memberId, name: member.name || l.memberName || l.memberId, monthsNow, monthsBefore, cut, owed, key, told, hasPhone: !!N.normalizePhone(member.phone), text, eligible: cut > 0 && monthsBefore > monthsNow };
+    });
+  }
+  function sendInterestRelief(db, ctx, a) {
+    G.require(ctx, "loan.editInterest"); const ids = (a && a.loanIds) || []; if (!ids.length) throw new Error("REQUIRED: choose at least one loan");
+    const by = {}; interestRelief(db, ctx.today).forEach((r) => { by[r.loanId] = r; }); const out = { queued: [], skipped: [] };
+    ids.forEach((id) => { const r = by[id];
+      if (!r || !r.eligible) return out.skipped.push({ loanId: id, why: "no interest reduction to report" });
+      if (r.told) return out.skipped.push({ loanId: id, why: "already told" });
+      const m = N.queue(db, ctx, { memberId: r.memberId, template: "transactionReceipt", vars: { text: r.text }, dedupeKey: r.key, channel: "SMS" });
+      G.audit(db, ctx, "ReceiptSms", m.id, "Interest relief notice", null, { loanId: id, memberId: r.memberId, monthsNow: r.monthsNow, monthsBefore: r.monthsBefore, cut: r.cut, status: m.status }, "Member told that interest was reduced");
+      out.queued.push({ loanId: id, msgId: m.id, status: m.status, reason: m.reason }); });
+    return out;
   }
   /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
   function receiptAfter(db, ctx, name, args, result) {
@@ -2703,7 +2732,7 @@
     G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
     return out;
   }
-  return { getReceipts, setReceipts, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { getReceipts, setReceipts, interestRelief, sendInterestRelief, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 
@@ -2900,6 +2929,7 @@
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    sendInterestRelief: (db, ctx, a) => RM.sendInterestRelief(db, ctx, { loanIds: a.loanIds }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
     setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
     queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
@@ -5358,8 +5388,22 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         Card("Backing needed", ugx(a.required), a.guarantorsApply ? "Only the part beyond the guideline" : "Guarantor policy starts " + D.longDate(a.guarantorPolicyStart) + "; none required yet"), Card("Backing accepted", ugx(a.backing), "Guarantees " + num(a.guaranteeCover) + " · security " + num(a.securityCover))),
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
+  /* Tell borrowers their interest was reduced (interest stopped after fewer months). The officer picks who; each text is shown first; it is sent once per loan. */
+  function reliefForm(list) {
+    const picked = new Set(list.map((r) => r.loanId)), go = h("button", { class: "primary", id: "relief-go" }, "Send"), err = h("div", { class: "err", id: "relief-err", role: "alert" });
+    const sync = () => { go.textContent = "Send to " + picked.size; go.disabled = !picked.size; };
+    const m = Modal("Tell borrowers their interest was reduced", h("div", null, h("p", { class: "mute" }, "Each member gets this text from the figures in their loan. Untick anyone who should not get it. Nothing is sent until you press Send."),
+      h("div", { class: "preview" }, list.map((r) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", checked: true, "data-loan": r.loanId, onchange: (e) => { e.target.checked ? picked.add(r.loanId) : picked.delete(r.loanId); sync(); } }), " ", h("b", null, r.name), " · ", r.monthsNow + " instead of " + r.monthsBefore + " months · " + ugx(r.cut) + " off", h("div", { class: "mute", style: "font-size:13px;margin-left:24px" }, r.text)))),
+      err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
+    go.onclick = async () => { go.disabled = true; err.textContent = "";
+      try { const r = await commit("sendInterestRelief", { loanIds: [...picked] }), q = r.queued || [], ok = q.filter((x) => x.status !== "SKIPPED").length, no = q.filter((x) => x.status === "SKIPPED").length, sk = (r.skipped || []).length;
+        m.close(); toast(ok + " text" + (ok === 1 ? "" : "s") + " prepared for sending" + (no ? ". " + no + " member(s) have no valid phone number" : "") + (sk ? ". " + sk + " skipped (already told)" : "") + ". If the SMS service is not live, they are cancelled, not sent later.", no || sk ? "warn" : false); render();
+      } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+    sync();
+  }
   function loans() {
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }, listField("purpose", "What is the loan for?", "loan.Purpose")], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt, purpose: f.purpose }), "Application recorded")) }, "New application") : null,
+    const relief = G.can(ctx(), "loan.editInterest") ? RMD.interestRelief(st.db, today()).filter((r) => r.eligible && !r.told) : [];
+    return h("div", null, h("div", { class: "row" }, relief.length ? h("button", { id: "tell-borrowers", onclick: () => reliefForm(relief) }, "Tell borrowers (" + relief.length + ")") : null, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }, listField("purpose", "What is the loan for?", "loan.Purpose")], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt, purpose: f.purpose }), "Application recorded")) }, "New application") : null,
       G.can(ctx(), "loan.disburse") ? h("button", { id: "record-existing-loan", onclick: () => Form("Record a loan that was already paid out", [{ type: "note", text: "Use this for a loan paid out earlier (backdated). It starts on the date you choose and interest runs from that date. If the member's loan is only voided, open it and use Restore loan instead, so its history is kept." }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount paid out (UGX)", type: "number" }, dateF("date", "Date it was paid out"), { name: "rate", label: "Monthly interest (UGX) — required", type: "number" }, { name: "remarks", label: "Reason / note (required)" }], act(async (f) => { if (!String(f.remarks || "").trim()) throw new Error("REQUIRED: reason / note"); await commit("recordExistingLoan", { memberId: f.m, amount: Number(f.amt), date: f.date, assignedMonthlyInterest: f.rate, remarks: f.remarks }); }, "Loan recorded")) }, "Record existing loan") : null),
       loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), null);
