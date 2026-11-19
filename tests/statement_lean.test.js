@@ -16,4 +16,15 @@ t("the Administrative statement is short too: no interest working, no explanator
   a.notes = [{ date: "2026-01-01", ref: "TXN-X", note: "Split into dated repayments | Approved by: Treasurer | evidence: SOB_SYSTEM_.xlsx MEMBERS rows 1, 2" }]; const html = S.toPrintHTML(a);
   BANNED.filter((r) => !/decision/.test(r)).forEach((r) => assert.ok(!r.test(html), String(r))); assert.ok(/ADMINISTRATIVE — INTERNAL/.test(html) && /Corrections and audit notes/.test(html) && /Approved by: Treasurer/.test(html) && !/SOB_SYSTEM_/.test(html)); });
 t("if a total does not agree with the ledger the statement still says so", () => { const a = member({}); a.checks.all = false; assert.ok(/does not agree with the ledger/.test(S.toPrintHTML(a))); });
+
+t("a loan whose interest was reduced shows one line saying by how much, on the Member and the Administrative statement; an unreduced loan shows none", () => {
+  const G = require("../src/core/governance.js"), CMD = require("../src/core/commands.js"), TODAY = "2026-11-19", mk = (id, role, day, h) => G.makeCtx({ id, name: id, role }, { today: day, now: day + "T" + (h || "08") + ":00:00Z" });
+  const d = db(); G.createEntry(d, mk("A", "Admin", "2026-11-01"), { date: "2025-12-01", memberId: "SOB-900", amount: 900000, type: "Savings" });
+  CMD.run(d, mk("A", "Admin", "2026-11-01"), "recordExistingLoan", { memberId: "SOB-900", amount: 200000, date: "2026-01-11", assignedMonthlyInterest: 30000, remarks: "test" });
+  const q = () => S.memberAccount(d, "SOB-900", { from: "2025-12-21", to: TODAY }, { today: TODAY, audience: "member" });
+  assert.ok(!/Interest reduced by/.test(S.toPrintHTML(q())));
+  const r = CMD.run(d, mk("A", "Admin", TODAY), "lockInterest", { loanId: d.loans[0].id, reason: "Committee reduced the interest period", date: "2026-06-19" }); if (r && r.requestId) CMD.run(d, mk("C", "Chairperson", TODAY, "09"), "approveRequest", { id: r.requestId });
+  const a = q(), l = a.loans[0]; assert.ok(l.interestCut > 0 && l.interestFull === l.accruedInterest + l.interestCut);
+  const txt = "Interest reduced by (charged " + l.accruedInterest.toLocaleString("en-US") + " instead of " + l.interestFull.toLocaleString("en-US") + ")";
+  assert.ok(S.toPrintHTML(a).includes(txt)); const ad = S.memberAccount(d, "SOB-900", { from: "2025-12-21", to: TODAY }, { today: TODAY, audience: "admin" }); assert.ok(S.toPrintHTML(ad).includes(txt)); });
 console.log(n + " lean-statement tests passed");
