@@ -18,6 +18,7 @@
     const out = res; st.sentForApproval = !!(out && out.pendingApproval);
     render(); return res;
   }
+  const M = () => ({ remove() { document.querySelectorAll(".modal-bg").forEach((m) => m.remove()); } });   /* the one place that closes an open form, usable from every screen */
   const act = (fn, okMsg) => async (...a) => { try { st.sentForApproval = false; await fn(...a); if (st.sentForApproval) toast("Sent to the Chairperson — nothing changes until a different person approves it (see Approvals)"); else if (okMsg) toast(okMsg); } catch (e) { toast(friendly(e), true); throw e; } };
 
   /* ---------- brand: the official eagle/globe logo and the shield-and-tree ALWAYS appear as a pair (one helper, so every screen, and any future module, stays identical) ---------- */
@@ -35,7 +36,7 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter"))));
     } else {
       /* ONE sign-in for everybody: SOB ID, Staff ID or email + password. The server finds the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB ID, Staff ID or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const mid = h("input", { id: "mid", placeholder: "SOB ID (SOB-014) or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
       const pin = h("input", { type: "password", id: "pin", placeholder: "Password", autocomplete: "current-password", enterkeyhint: "go" });
       const show = h("button", { type: "button", id: "pin-show", class: "ghost", "aria-label": "Show or hide password", onclick: () => { const on = pin.type === "password"; pin.type = on ? "text" : "password"; show.textContent = on ? "Hide" : "Show"; } }, "Show");
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
@@ -62,7 +63,7 @@
       });
       [mid, pin].forEach((i) => i.addEventListener("keydown", (ev) => { if (ev.key === "Enter") go(); }));
       /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
-      const rid = h("input", { id: "reg-id", placeholder: "SOB ID or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rid = h("input", { id: "reg-id", placeholder: "SOB ID (SOB-014) or email", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
       const rcode = h("input", { id: "reg-code", placeholder: "6-digit code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
       const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "New password (6+ characters)", autocomplete: "new-password" });
       const rmsg = h("div", { id: "reg-msg", class: "ok-note", role: "status" });
@@ -76,13 +77,13 @@
         if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID or email"));
         working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
-      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "Create or reset your password"), h("label", { for: "reg-id" }, "SOB ID or email"), rid,
+      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "First time or forgot password"), h("p", { class: "lg-help" }, "Type your SOB ID or email. We send a 6-digit code to your phone or email on record."), h("label", { for: "reg-id" }, "SOB ID or email"), rid,
         h("button", { class: "secondary big", id: "reg-send", onclick: sendCode }, "Send verification code"), rmsg, step2);
-      const signBox = h("div", { id: "sign-box" }, h("label", { for: "mid" }, "SOB ID, Staff ID or email"), mid, h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show), h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign in"));
-      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time, or forgot your password?"; if (c) rid.value = mid.value; } }, "First time, or forgot your password?");
+      const signBox = h("div", { id: "sign-box" }, h("label", { for: "mid" }, "SOB ID or email"), mid, h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show), h("button", { class: "primary big", id: "login-go", onclick: go }, "Sign in"));
+      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time or forgot password? Get a code"; if (c) rid.value = mid.value; } }, "First time or forgot password? Get a code");
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in to your account")),
+      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in")),
         h("div", { class: "lg-body" }, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
           h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
     }
@@ -126,6 +127,10 @@
     if (st.user && !state.sobView) { try { history.pushState({ sobView: st.view }, ""); } catch (x) {} toast("You are still signed in. Use the sign-out button (top right) to leave."); return; }   // Back never drops a signed-in user out of the app
     const sv = state.sobView; if (st.user && sv && sv !== st.view) go(sv, true);
   });
+  /* safety net: any error nobody caught is logged for developers and shown to people only as a plain message (never the code) */
+  let lastSafety = 0; const safety = (e) => { try { console.error("[SOB] uncaught:", e); const now = Date.now(); if (now - lastSafety > 4000) { lastSafety = now; toast(friendly(e && e.message ? e : new Error("internal")), true); } } catch (x) {} };
+  window.addEventListener("error", (ev) => { if (ev && ev.error) safety(ev.error); });
+  window.addEventListener("unhandledrejection", (ev) => safety(ev && ev.reason));
   window.addEventListener("beforeunload", (e) => { if (document.querySelector(".modal-bg form, .modal-bg input[name]")) { e.preventDefault(); e.returnValue = ""; } });
   const MORE_VIEWS = ["more", "mysubs", "myshare", "airtime"];
   const NAV_GROUP = { dash: "Overview", members: "Members and loans", loans: "Members and loans", ledger: "Accounts", subs: "Accounts", fyears: "Year-end", profit: "Year-end", shareout: "Year-end", reserve: "Year-end", approvals: "Governance", recon: "Governance", audit: "Governance", reports: "Reports", airtime: "Communication", messages: "Communication", reminders: "Communication", system: "System" };
@@ -521,6 +526,47 @@
       else { const w = owedWith({ from: d, to: "" }); preview.textContent = "If locked from " + D.toDisplay(d) + ": months charged " + now.months + " → " + w.months + " (today). Owed today " + ugx(now.owed) + " → " + ugx(w.owed) + ". Interest stops growing from that date."; } };
     if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); upd(); }
   }
+  /* a small live-preview panel for a form: compute() returns {rows:[[label,value,cls]], error, note}; the Save button is off while there is an error */
+  function livePanel(m, names, compute) {
+    const box = h("div", { class: "preview" }), go = m.el.querySelector("[data-submit]"); m.el.querySelector(".err").before(box);
+    const q = (n) => m.el.querySelector('[name="' + n + '"]'), row = (r) => h("div", { class: "pv-row " + (r[2] || "") }, h("span", null, r[0]), h("b", null, r[1]));
+    const upd = () => { let r; try { r = compute((n) => (q(n) ? q(n).value : "")); } catch (e) { console.error("[SOB] preview:", e); r = { error: "Cannot show the result for these values." }; }
+      box.replaceChildren(...(r.rows || []).map(row), r.error ? Banner("bad", r.error) : null, r.note ? h("p", { class: "mute" }, r.note) : null); if (go) go.disabled = !!r.error; };
+    names.forEach((n) => { const e = q(n); if (e) { e.addEventListener("input", upd); e.addEventListener("change", upd); } }); upd();
+  }
+  function repayForm(loan, id) {
+    const m = Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded"));
+    livePanel(m, ["amount", "date"], (g) => { const a = Number(g("amount")), d = g("date");
+      if (!D.isISO(d)) return { error: "Pick a date." }; if (loan.date && d < loan.date) return { error: "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ")." };
+      const owed = L.loanOutstanding(loan, st.db, d); if (!(a > 0)) return { rows: [["Owed on " + D.toDisplay(d), ugx(owed)]], note: "Type the amount to see the result." };
+      if (a > owed) return { rows: [["Owed on " + D.toDisplay(d), ugx(owed)]], error: "This is more than is owed (" + ugx(owed) + ")." };
+      return { rows: [["Owed on " + D.toDisplay(d), ugx(owed)], ["This payment", ugx(a)], ["Owed after", ugx(owed - a), "good"], ["Loan after", owed - a === 0 ? "Cleared · interest stops" : "Still running", owed - a === 0 ? "good" : ""]] }; });
+  }
+  function payoutForm(loan, id) {
+    const m = Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"));
+    livePanel(m, ["amount", "date"], (g) => { const a = Number(g("amount")), d = g("date"); if (!(a > 0)) return { rows: [["Loan now", ugx(loan.loanAmount)]], note: "Type the amount to see the result." };
+      if (D.isISO(d) && loan.date && d < loan.date) return { error: "A further payout cannot be before the first payout (" + D.toDisplay(loan.date) + ")." };
+      return { rows: [["Loan now", ugx(loan.loanAmount)], ["Further payout", ugx(a)], ["Loan after", ugx(Number(loan.loanAmount) + a), "good"]], note: "The Chairperson approves before it counts." }; });
+  }
+  /* ONE business action: settle the loan from the member's savings. It also clears the loan and stops its interest, so there is no separate lock step. The impact is shown LIVE before anything is saved. */
+  function settleForm(loan, id) {
+    const T = today(), first = (LN.settlementReview(st.db, T).find((r) => r.loanId === id) || {}).firstCovered, box = h("div", { id: "settle-preview", class: "preview" });
+    const m = Form("Settle from savings", [{ type: "note", node: h("div", null, h("p", null, h("b", null, nameOf(loan.memberId)), " · loan ", ugx(loan.loanAmount)), box) },
+      Object.assign(dateF("date", "Settle on"), { value: (first && first.date) || T, min: loan.date || undefined })],
+      act(async (f) => { await commit("settleLoanFromSavings", { loanId: id, date: f.date }); M().remove(); openLoan(id); }, "Settlement sent to the Chairperson for approval"), "Settle loan");
+    const di = m.el.querySelector('input[name="date"]'), go = m.el.querySelector("[data-submit]");
+    const row = (k, v, cls) => h("div", { class: "pv-row " + (cls || "") }, h("span", null, k), h("b", null, v));
+    const upd = () => { const d = di && di.value, say = (kids, ok) => { box.replaceChildren(...kids); if (go) go.disabled = !ok; };
+      if (!D.isISO(d)) return say([h("p", { class: "mute" }, "Pick a date.")], false);
+      if (d > T) return say([Banner("bad", "The date cannot be in the future.")], false);
+      if (loan.date && d < loan.date) return say([Banner("bad", "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ").")], false);
+      const owed = L.loanOutstanding(loan, st.db, d), sav = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), w = L.loanInterestPosition(loan, st.db, d), intr = (w.unpaidInterest || 0) + (w.unpaidPenalties || 0);
+      if (!(owed > 0)) return say([Banner("warn", "Nothing is owed on " + D.toDisplay(d) + ".")], false);
+      if (sav < owed) return say([row("Owed", ugx(owed)), row("Member's savings", ugx(sav)), Banner("bad", "Savings are short by " + ugx(owed - sav) + ". The loan cannot be settled on " + D.toDisplay(d) + "; interest keeps running.")], false);
+      say([row("Interest paid first", ugx(intr)), row("Loan paid", ugx(owed - intr)), row("Total from savings", ugx(owed)), row("Savings now", ugx(sav)), row("Savings after", ugx(sav - owed), "good"), row("Loan after", "Cleared · UGX 0 owed · interest stops", "good"),
+        h("p", { class: "mute" }, "No cash moves. The Chairperson approves once; nothing changes until then.")], true); };
+    if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); } upd();
+  }
   /* ONE correction for a loan: restore it, set its monthly interest and lock the interest, all in a single request. The Chairperson approves once and the system does the parts in that order. */
   function correctForm(loan, v) {
     const id = loan.id, T = today(), voided = !!loan.voided, canRestore = voided && L.withinRestoreWindow(loan, Date.now());
@@ -563,20 +609,21 @@
       ["Active", "Cleared"].includes(loan.status) && (st.db.guarantees || []).some((g) => g.loanId === id) ? h("div", null, h("h2", { class: "sec" }, "Linked ledger: borrower and guarantors"), (() => { const lr = R.loanStatement(st.db, id, today()); return h("div", null, printButton(lr), tableFromReport(lr)); })()) : null,
       h("h2", { class: "sec" }, "Interest history"), Table([{ label: "Date", key: "date" }, { label: "From", num: 1, render: (x) => x.previousAmount == null ? "—" : num(x.previousAmount) }, { label: "To", num: 1, render: (x) => num(x.newAmount) }, { label: "Reason", key: "reason" }], v.interestHistory),
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
-    const M = () => document.querySelector(".modal-bg");
     const add = (label, cond, fn, cls) => cond && row.append(h("button", { class: cls || "", "data-act": label, onclick: fn }, label));
     const preDisb = ["Pending", "AwaitingApproval", "Approved"].includes(loan.status);
-add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" && !loan.dateUnknown, () => Form("Settle from the member's savings (interest first, then the loan; no cash moves)", [Object.assign(dateF("date", "Effective date (the first day verified savings covered the loan, when known)"), { value: ((LN.settlementReview(st.db, today()).find((r) => r.loanId === id) || {}).firstCovered || {}).date || D.todayISO() })], act(async (f) => { await commit("settleLoanFromSavings", { loanId: id, date: f.date }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"))),
+add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" && !loan.dateUnknown, () => settleForm(loan, id));
     add("Request guarantee", G.can(c, "guarantee.manage") && preDisb, () => Form("Request a guarantee (more than one guarantor may back a loan)", [{ name: "g", label: "Guarantor", options: st.db.members.filter((m) => m.id !== loan.memberId).map((m) => ({ value: m.id, label: m.name + " — available " + num(L.memberAvailable(st.db, m.id)) })) }, { name: "amt", label: "Amount guaranteed (UGX)", type: "number" }], act(async (f) => { await commit("addGuarantee", { loanId: id, guarantorId: f.g, amount: Number(f.amt) }); M().remove(); openLoan(id); }, "Requested - it binds only when the guarantor accepts")));
     add("Propose other security", G.can(c, "security.manage") && preDisb, () => Form("Propose exceptional security (not the normal route)", [{ name: "kind", label: "Kind", options: S.security.KINDS }, { name: "description", label: "Description (what, where, who owns it)" }, { name: "owner", label: "Owner of the security" }, { name: "valuation", label: "Valuation (UGX)", type: "number" }, dateF("valuationDate", "Valuation date"), { name: "valuedBy", label: "Valued by" }, { name: "doc", label: "Document / evidence title" }, { name: "ref", label: "Document reference" }], act(async (f) => { await commit("proposeSecurity", { loanId: id, kind: f.kind, description: f.description, owner: f.owner, valuation: f.valuation ? Number(f.valuation) : undefined, valuationDate: f.valuationDate, valuedBy: f.valuedBy, documents: [{ name: f.doc, reference: f.ref }] }); M().remove(); openLoan(id); }, "Proposed - the Chairperson must approve it")));
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
     add(loan.status === "AwaitingApproval" ? "Approve (second approval)" : "Approve", (G.can(c, "loan.review") && loan.status === "Pending") || (G.can(c, "loan.secondApprove") && loan.status === "AwaitingApproval"), act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Done"), "primary");
     add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [reasonField("reason.Decline")], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
     add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
-    add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval")));
-    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => Form("Record repayment", [{ name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date", "Payment date (today unless you change it)")], act(async (f) => { await commit("repayLoan", { loanId: id, amount: f.amount, date: f.date }); M().remove(); openLoan(id); }, "Repayment recorded")), "primary");
+    add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => payoutForm(loan, id));
+    add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => repayForm(loan, id), "primary");
     add("Correct loan", G.can(c, "loan.editInterest") && loan.status === "Active", () => correctForm(loan, v), "primary");
-    add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited")));
+    add("Change interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => { const m = Form("Change assigned interest", [{ name: "amt", label: "New monthly interest (UGX)", type: "number", value: v.assignedMonthlyInterest }, { name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("editAssignedInterest", { loanId: id, amount: f.amt, reason: f.reason }); M().remove(); openLoan(id); }, "Interest updated and audited"));
+      livePanel(m, ["amt"], (g) => { const a = Number(g("amt")); if (g("amt") === "" || !(a >= 0)) return { rows: [["Owed today", ugx(v.balance)]], note: "Type the new monthly interest to see the result." };
+        const c2 = Object.assign({}, loan, { assignedMonthlyInterest: a }); return { rows: [["Owed today now", ugx(v.balance)], ["Owed today after", ugx(L.loanOutstanding(c2, st.db, today())), "good"], ["Interest so far after", ugx(L.loanAccumulatedInterest(c2, today()))]] }; }); });
     add(v.interestLocked ? "Unlock interest" : "Lock interest", G.can(c, "loan.editInterest") && loan.status === "Active", () => lockForm(loan, v));
     add(loan.voided ? "Restore loan" : "Void loan", G.can(c, loan.voided ? "loan.reverse" : "loan.reverse"), () => Form(loan.voided ? "Restore loan" : "Void loan", [reasonField("reason.Void")], act(async (f) => { await commit(loan.voided ? "restoreLoan" : "voidLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Done")), "danger");
     Modal("Loan " + id, b);

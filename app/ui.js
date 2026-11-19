@@ -83,8 +83,10 @@
     } }, submitLabel || "Save"), h("button", { "data-cancel": "1", onclick: () => m.close() }, "Cancel"))), { sticky: true });
     return m;
   }
+  const RAW_JS = /\b(is not defined|is not a function|is not iterable|Cannot read propert|Cannot set propert|undefined|null is not|Unexpected token|SyntaxError|ReferenceError|TypeError|RangeError|at \w+ \()/;
   const friendly = (e) => {
     const m = String((e && e.message) || e);
+    if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost. Please try again. If it happens again, tell the Treasurer or Secretary."; }
     if (/PENDING_SOB_DECISION/.test(m)) return "Blocked: SOB has not yet decided this rule. " + m.replace(/^.*?PENDING_SOB_DECISION:?\s*/, "");
     if (e && e.code === "CONFLICT") return "Someone else changed the ledger. Your change was not saved — reload and try again.";
     if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return "We could not reach the server. Check your internet connection and try again.";
