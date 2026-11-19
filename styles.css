@@ -721,3 +721,5 @@ header.top .brand img{width:auto}
 .pickrow{display:inline-flex;align-items:center;gap:10px}.pickrow input[type=checkbox]{width:22px;height:22px;flex:none}
 .reqdet{display:none}
 @media(max-width:699px){.reqdet{display:block;font-weight:400;font-size:13px;color:#44546f;margin-top:4px;line-height:1.35;white-space:normal}}
+.sp-lockup{width:min(78vw,300px);height:auto;border-radius:22px;box-shadow:0 10px 30px rgba(15,59,168,.18);display:block}
+.marks.lg .logo-shield{border-radius:0}
