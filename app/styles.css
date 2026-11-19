@@ -718,3 +718,6 @@ header.top .brand img{width:auto}
 .who-row{display:flex;align-items:baseline;gap:10px;margin-top:4px}.who-row b{font-size:16px}
 #pw-forgot,#pw-back{background:none;border:0;padding:12px 0;color:#1b4fd8;font-weight:600;text-decoration:none}
 #pw-back{padding:0;font-size:14px;text-decoration:underline}
+.pickrow{display:inline-flex;align-items:center;gap:10px}.pickrow input[type=checkbox]{width:22px;height:22px;flex:none}
+.reqdet{display:none}
+@media(max-width:699px){.reqdet{display:block;font-weight:400;font-size:13px;color:#44546f;margin-top:4px;line-height:1.35;white-space:normal}}
