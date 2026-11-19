@@ -1,0 +1,27 @@
+/* Savings-offset receipt wording, and the "tell borrowers interest was reduced" notice. Synthetic data only. */
+const assert = require("assert"), G = require("../src/core/governance.js"), CMD = require("../src/core/commands.js"), L = require("../src/core/ledger.js"), RM = require("../src/core/reminders.js");
+let n = 0; const t = (name, fn) => { fn(); n++; console.log("  ok  " + name); };
+const mk = (id, role, day, hour) => G.makeCtx({ id, name: id, role }, { today: day, now: day + "T" + (hour || "08") + ":00:00Z" }), admin = (d) => mk("ADMIN", "Admin", d), chair = (d) => mk("CHAIR", "Chairperson", d, "09"), TODAY = "2026-11-19";
+const fresh = () => { const db = { members: [{ id: "M-A", name: "Member A", status: "Active", phone: "0772000100" }, { id: "M-B", name: "Member B", status: "Active", phone: "" }], transactions: [], loans: [], guarantees: [], auditLog: [], approvalRequests: [], outbox: [] };
+  ["M-A", "M-B"].forEach((m) => G.createEntry(db, admin("2026-11-01"), { date: "2025-12-01", memberId: m, amount: 900000, type: "Savings" }));
+  ["M-A", "M-B"].forEach((m) => CMD.run(db, admin("2026-11-01"), "recordExistingLoan", { memberId: m, amount: 500000, date: "2025-12-19", assignedMonthlyInterest: 30000, remarks: "test" })); return db; };
+const run = (db, who, name, args) => { const r = CMD.run(db, who, name, args); if (r && r.requestId) CMD.run(db, chair(TODAY), "approveRequest", { id: r.requestId }); return r; };
+const lock = (db, id, from) => run(db, admin(TODAY), "lockInterest", { loanId: id, reason: "Committee reduced the interest period", date: from });
+t("a part payment from savings says it came from savings, with the new savings and loan balances", () => { const db = fresh(); run(db, admin(TODAY), "settleLoanFromSavings", { loanId: db.loans[0].id, date: TODAY, amount: 200000 });
+  const e = db.transactions.filter((x) => x.viaSavings).pop(), s = RM.receiptText(db, e, TODAY); assert.match(s, /^SOB: UGX 200,000 of your loan was paid from your savings on 19 Nov\./); assert.match(s, /Savings bal UGX 700,000\./); assert.match(s, /Loan bal UGX/); assert.ok(!/received/.test(s)); assert.ok(s.length <= 160, s); });
+t("a full payment from savings says the loan was fully paid from savings and is cleared", () => { const db = fresh(); run(db, admin(TODAY), "settleLoanFromSavings", { loanId: db.loans[0].id, date: TODAY });
+  const e = db.transactions.filter((x) => x.viaSavings).pop(), s = RM.receiptText(db, e, TODAY); assert.match(s, /fully paid from your savings/); assert.match(s, /Loan cleared\./); });
+t("an ordinary repayment still reads as received", () => { const db = fresh(); run(db, admin(TODAY), "repayLoan", { loanId: db.loans[0].id, amount: 10000, date: TODAY }); const e = db.transactions.filter((x) => x.type === "Loan Repayment").pop(); assert.match(RM.receiptText(db, e, TODAY), /Loan repayment UGX 10,000 received/); });
+t("no lock, no reduction: nothing to tell", () => { const db = fresh(); assert.ok(RM.interestRelief(db, TODAY).length === 0); });
+t("interest stopped after 6 months shows 6 instead of 11, the amount taken off, and the member's text", () => { const db = fresh(); lock(db, db.loans[0].id, "2026-06-19");
+  const r = RM.interestRelief(db, TODAY).find((x) => x.loanId === db.loans[0].id); assert.ok(r.eligible); assert.ok(r.monthsNow < r.monthsBefore, JSON.stringify(r)); assert.strictEqual(r.cut, (r.monthsBefore - r.monthsNow) * 30000);
+  assert.match(r.text, new RegExp("charged for " + r.monthsNow + " months instead of " + r.monthsBefore)); assert.match(r.text, /Interest reduced by UGX/); assert.match(r.text, /Loan bal UGX/); assert.strictEqual(r.told, false); });
+t("sending queues one text per chosen loan, once only, and changes no money", () => { const db = fresh(); lock(db, db.loans[0].id, "2026-06-19"); const owed = L.loanOutstanding(db.loans[0], db, TODAY), n0 = db.transactions.length;
+  const a = RM.sendInterestRelief(db, admin(TODAY), { loanIds: [db.loans[0].id] }); assert.strictEqual(a.queued.length, 1); assert.strictEqual(db.outbox.length, 1); assert.strictEqual(db.outbox[0].to, "+256772000100");
+  const b = RM.sendInterestRelief(db, admin(TODAY), { loanIds: [db.loans[0].id] }); assert.strictEqual(b.queued.length, 0); assert.strictEqual(b.skipped[0].why, "already told"); assert.strictEqual(db.outbox.length, 1);
+  assert.strictEqual(L.loanOutstanding(db.loans[0], db, TODAY), owed); assert.strictEqual(db.transactions.length, n0); assert.ok(db.auditLog.some((x) => x.action === "Interest relief notice")); });
+t("a loan with no reduction is skipped; a member without a phone is recorded as not sent, not lost", () => { const db = fresh(); lock(db, db.loans[1].id, "2026-06-19");
+  const a = RM.sendInterestRelief(db, admin(TODAY), { loanIds: [db.loans[0].id, db.loans[1].id] }); assert.strictEqual(a.skipped.length, 1); assert.strictEqual(a.queued[0].status, "SKIPPED"); assert.strictEqual(a.queued[0].reason, "NO_VALID_PHONE"); });
+t("only an officer who may change interest can send; it runs through the normal command path", () => { const db = fresh(); lock(db, db.loans[0].id, "2026-06-19");
+  assert.throws(() => CMD.run(db, mk("V", "Viewer", TODAY), "sendInterestRelief", { loanIds: [db.loans[0].id] })); const r = CMD.run(db, admin(TODAY), "sendInterestRelief", { loanIds: [db.loans[0].id] }); assert.strictEqual(r.queued.length, 1); });
+console.log(n + " interest-relief tests passed");

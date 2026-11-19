@@ -2412,9 +2412,38 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   function receiptText(db, e, asOf) {
     const k = RECEIPT_KIND[e.type], amount = money(e.amount), day = D.isISO(e.date) ? Number(e.date.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(e.date.slice(5, 7)) - 1] : "";
     const sav = Math.round(L.memberPosition(db, e.memberId).savings), loans = L.activeLoans(db).filter((l) => !l.voided && l.memberId === e.memberId && /^Active$/i.test(String(l.status))), owed = Math.round(loans.reduce((x, l) => x + L.loanOutstanding(l, db, asOf), 0));
+    if (e.type === "Loan Repayment" && e.viaSavings) {          // paid from the member's own savings: say so plainly (no cash came in)
+      const all = owed <= 0, h2 = (d) => "SOB: " + (all ? "Your loan was fully paid from your savings (" + amount + ")" : amount + " of your loan was paid from your savings") + (d && day ? " on " + day : "") + ".", sb2 = " Savings bal " + money(sav) + ".", lb2 = all ? " Loan cleared." : " Loan bal " + money(owed) + ".";
+      for (const t of [h2(true) + sb2 + lb2, h2(false) + sb2 + lb2, h2(false) + lb2]) if (t.length <= RECEIPT_MAX) return t; return h2(false);
+    }
     const head = (d) => "SOB: " + k[0] + " " + amount + " " + k[1] + (d && day ? " " + day : "") + ".", sb = " Savings bal " + money(sav) + ".", lb = owed > 0 ? " Loan bal " + money(owed) + "." : (e.type === "Loan Repayment" ? " Loan cleared." : "");
     for (const t of [head(true) + sb + lb, head(false) + sb + lb, head(false) + sb, head(false)]) if (t.length <= RECEIPT_MAX) return t;
     return head(false);
+  }
+  /* ---------- INTEREST RELIEF NOTICE ----------
+     When the interest on a loan was reduced by stopping it (Lock interest), the member is told how many months of interest now apply instead of how many would have, and how much was taken off.
+     Facts come from the loan's own records; the officer chooses who is told and presses Send; each loan is told once per lock. Nothing here changes a loan, an entry or a balance. */
+  function interestRelief(db, asOf) {
+    asOf = asOf || D.todayISO();
+    return (db.loans || []).filter((l) => !l.voided && l.status === "Active" && (l.interestLocks || []).length && D.isISO(l.date)).map((l) => {
+      const open = Object.assign({}, l, { interestLocks: [] }), monthsNow = L.loanMonthsAfterGrace(l, asOf), monthsBefore = L.loanMonthsAfterGrace(open, asOf);
+      const cut = Math.max(0, Math.round(L.loanAccumulatedInterest(open, asOf, db) - L.loanAccumulatedInterest(l, asOf, db))), key = "relief:" + l.id + ":" + (l.interestLocks || []).map((x) => x.from + ">" + (x.to || "")).join(",");
+      const told = (db.outbox || []).some((m) => m.dedupeKey === key && m.status !== "CANCELLED" && m.status !== "FAILED");
+      const owed = Math.round(L.loanOutstanding(l, db, asOf)), member = (db.members || []).find((m) => m.id === l.memberId) || {};
+      const text = "SOB: Good news. Interest on your loan is now charged for " + monthsNow + " month" + (monthsNow === 1 ? "" : "s") + " instead of " + monthsBefore + ", to help you pay. Interest reduced by " + money(cut) + ". Loan bal " + money(owed) + ".";
+      return { loanId: l.id, memberId: l.memberId, name: member.name || l.memberName || l.memberId, monthsNow, monthsBefore, cut, owed, key, told, hasPhone: !!N.normalizePhone(member.phone), text, eligible: cut > 0 && monthsBefore > monthsNow };
+    });
+  }
+  function sendInterestRelief(db, ctx, a) {
+    G.require(ctx, "loan.editInterest"); const ids = (a && a.loanIds) || []; if (!ids.length) throw new Error("REQUIRED: choose at least one loan");
+    const by = {}; interestRelief(db, ctx.today).forEach((r) => { by[r.loanId] = r; }); const out = { queued: [], skipped: [] };
+    ids.forEach((id) => { const r = by[id];
+      if (!r || !r.eligible) return out.skipped.push({ loanId: id, why: "no interest reduction to report" });
+      if (r.told) return out.skipped.push({ loanId: id, why: "already told" });
+      const m = N.queue(db, ctx, { memberId: r.memberId, template: "transactionReceipt", vars: { text: r.text }, dedupeKey: r.key, channel: "SMS" });
+      G.audit(db, ctx, "ReceiptSms", m.id, "Interest relief notice", null, { loanId: id, memberId: r.memberId, monthsNow: r.monthsNow, monthsBefore: r.monthsBefore, cut: r.cut, status: m.status }, "Member told that interest was reduced");
+      out.queued.push({ loanId: id, msgId: m.id, status: m.status, reason: m.reason }); });
+    return out;
   }
   /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
   function receiptAfter(db, ctx, name, args, result) {
@@ -2495,7 +2524,7 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
     G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
     return out;
   }
-  return { getReceipts, setReceipts, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { getReceipts, setReceipts, interestRelief, sendInterestRelief, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 return module.exports; })();
@@ -2692,6 +2721,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    sendInterestRelief: (db, ctx, a) => RM.sendInterestRelief(db, ctx, { loanIds: a.loanIds }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
     setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
     queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
@@ -4465,7 +4495,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "9a4f59fa4b";
+var SOB_BUILD = "f03ee6c51c";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

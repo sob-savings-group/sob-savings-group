@@ -190,6 +190,7 @@
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    sendInterestRelief: (db, ctx, a) => RM.sendInterestRelief(db, ctx, { loanIds: a.loanIds }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
     setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
     queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
