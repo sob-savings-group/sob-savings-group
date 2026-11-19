@@ -946,7 +946,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     const tone = { PREPARED: "warn", OPENED: "warn", SMS_ACCEPTED: "ok", SENT_CONFIRMED: "ok", CANCELLED: "mute" };
     const sentLike = (d) => d === "SENT_CONFIRMED" || d === "SMS_ACCEPTED";
     /* Send ONE reminder by SMS through the gateway: queue (re-checked against the ledger) -> targeted send -> record what the gateway answered */
-    const smsSend = (rec, phone, m) => Form("Send by SMS", [{ type: "note", text: "Send this reminder as an SMS to " + rec.memberName + " (" + phone + ") now? It cannot be unsent." }], act(async () => {
+    const smsSend = (rec, phone, m) => Form("Send by SMS", [{ type: "note", text: "This exact SMS goes to " + rec.memberName + " (" + phone + ") now. It cannot be unsent." }, { type: "note", text: (() => { try { return RM.composeSms(st.db, rec, RM.figures(st.db, (st.db.loans || []).find((l) => l.id === rec.loanId), today())); } catch (e) { return "The SMS cannot be shown: " + friendly(e); } })() }], act(async () => {
       const q = await commit("queueReminderSms", { id: rec.id }); const out = q && q.outboxId ? q : { outboxId: ((st.db.reminders.find((x) => x.id === rec.id) || {}).smsOutboxId) };
       const r = await st.store.call({ action: "dispatchOutbox", ids: [out.outboxId] }); const s = await commit("syncReminderSms", { id: rec.id });
       if (s && s.outboxStatus === "SENT") { m && m.close(); } else if (s && s.outboxStatus === "FAILED") throw new Error("The SMS was not sent: " + (s.reason || "gateway error")); else throw new Error("The SMS gateway is not switched on, so nothing was sent."); }, "SMS accepted by the gateway. This does not prove the member received it."));
