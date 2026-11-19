@@ -21,6 +21,11 @@ const RAW = /is not defined|is not a function|ReferenceError|TypeError|Cannot re
   await pg.click(".modal [data-submit]"); await pg.waitForTimeout(600); const toast = await pg.locator(".toast").last().innerText().catch(() => "");
   ok(/Chairperson|approval/i.test(toast) && !RAW.test(toast), "it is sent to the Chairperson, with no raw error: " + toast.slice(0, 80));
   const pend = await pg.evaluate(() => (window.__SOB.db.approvalRequests || []).filter((r) => r.status === "Pending" && r.command === "correctEntryDate").length); ok(pend >= 1, "a date-change request is waiting for approval (" + pend + ")");
+  const fr = await pg.evaluate(() => { const f = window.SOBUI.friendly, mk = (code, msg) => Object.assign(new Error(msg), { code }); return [f(mk("NETWORK", "NETWORK: the app could not reach Google (offline, blocked, or the web-app address is wrong).")), f(mk("TIMEOUT", "TIMEOUT: slow")), f(mk("ENDPOINT_NOT_PUBLIC", "ENDPOINT_NOT_PUBLIC: Google asked for a sign-in. In Apps Script: Deploy > Manage deployments")), f(new TypeError("x is not defined"))]; });
+  ok(/^No internet connection/.test(fr[0]) && !/Google|Apps Script/.test(fr[0]), "no internet is said in plain words: " + fr[0]);
+  ok(/taking too long/.test(fr[1]), "a slow connection is said in plain words");
+  ok(/not available right now/.test(fr[2]) && !/Apps Script|Deploy/.test(fr[2]), "a Google/deployment problem shows members a short plain message, not the Apps Script steps: " + fr[2]);
+  ok(/Something went wrong on our side/.test(fr[3]), "a code error is still hidden");
   ok(!errs.length, "no browser errors" + (errs.length ? ": " + errs[0] : ""));
   await b.close(); srv.close(); console.log(fails ? fails + " failed" : "change date e2e passed");
 })();
