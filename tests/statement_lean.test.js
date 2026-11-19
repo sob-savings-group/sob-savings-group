@@ -25,6 +25,6 @@ t("a loan whose interest was reduced shows one line saying by how much, on the M
   assert.ok(!/Interest reduced by/.test(S.toPrintHTML(q())));
   const r = CMD.run(d, mk("A", "Admin", TODAY), "lockInterest", { loanId: d.loans[0].id, reason: "Committee reduced the interest period", date: "2026-06-19" }); if (r && r.requestId) CMD.run(d, mk("C", "Chairperson", TODAY, "09"), "approveRequest", { id: r.requestId });
   const a = q(), l = a.loans[0]; assert.ok(l.interestCut > 0 && l.interestFull === l.accruedInterest + l.interestCut);
-  const txt = "Interest reduced by (charged " + l.accruedInterest.toLocaleString("en-US") + " instead of " + l.interestFull.toLocaleString("en-US") + ")";
+  const txt = "Interest reduced by — " + l.monthsNow + " months charged instead of " + l.monthsBefore + " (" + l.accruedInterest.toLocaleString("en-US") + " instead of " + l.interestFull.toLocaleString("en-US") + ")"; const _old = "(charged " + l.accruedInterest.toLocaleString("en-US") + " instead of " + l.interestFull.toLocaleString("en-US") + ")";
   assert.ok(S.toPrintHTML(a).includes(txt)); const ad = S.memberAccount(d, "SOB-900", { from: "2025-12-21", to: TODAY }, { today: TODAY, audience: "admin" }); assert.ok(S.toPrintHTML(ad).includes(txt)); });
 console.log(n + " lean-statement tests passed");
