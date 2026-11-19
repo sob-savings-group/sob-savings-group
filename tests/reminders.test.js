@@ -251,4 +251,10 @@ t("AUTO: opted-out members are skipped; a failed send is cancelled and tried aga
   assert.equal(JSON.stringify([db.transactions, db.loans]), before); db.members[0].notifyOptOut = true; assert.equal(auto(db, "2026-11-20", good.g).sent.length, 0);
 });
 t("AUTO: the schedule can be changed without code, and bad values are refused", () => { const { db } = autoWorld(); setAuto(db, "2026-11-10", { enabled: true, regularEveryDays: 3, adminAfterDays: 2, bishopDaysBefore: 4 }); assert.deepEqual([RM.getAuto(db).regularEveryDays, RM.getAuto(db).adminAfterDays, RM.getAuto(db).bishopDaysBefore], [3, 2, 4]); assert.throws(() => run(db, "Admin", "2026-11-10", "setAutoReminders", { adminAfterDays: 0, reason: "x" }), /INVALID/); });
+t("after a repayment, the old unsent reminder is withdrawn automatically and a new one with the right balance can be prepared the same day", () => {
+  const { db, l } = world(); setDates(db, "2026-10-22"); const r1 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "URGENT" });
+  run(db, "Admin", "2026-10-22", "repayLoan", { loanId: l.id, amount: 50000, date: "2026-10-22" });
+  const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "URGENT" }); assert.notEqual(r2.id, r1.id); assert.match(r2.body, /UGX 130,000/);
+  assert.equal(db.reminders.find((x) => x.id === r1.id).delivery, "CANCELLED"); assert.match(db.reminders.find((x) => x.id === r1.id).cancelReason, /balance changed/);
+  assert.throws(() => run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "URGENT" }), /DUPLICATE_REMINDER/, "an unchanged balance is still protected from a double reminder"); });
 console.log(n + " reminder tests passed");
