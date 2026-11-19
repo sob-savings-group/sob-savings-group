@@ -838,7 +838,7 @@
      interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
      entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
   const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
-  function settleFromSavings(db, ctx, loanId, date) {
+  function settleFromSavings(db, ctx, loanId, date, amount) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
@@ -847,12 +847,17 @@
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
     const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
-    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
-    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
-    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
-      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    /* The amount is freely adjustable: leave it out to settle everything owed, or give any amount up to what is owed (and up to the member's savings) to part-pay the loan. */
+    const part = amount !== undefined && amount !== null && amount !== "";
+    const take = part ? Number(amount) : owed;
+    if (!(take > 0)) throw new Error("INVALID: amount");
+    if (take > owed) throw new Error("OVERPAYMENT: the amount is more than is owed (" + owed + ") on " + date);
+    if (savings < take) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach " + take + " on " + date + (part ? "" : "; interest keeps running and nothing is deducted"));
+    const w = L.loanInterestPosition(loan, db, date), due = w.unpaidInterest + (w.unpaidPenalties || 0), interest = Math.min(take, due), principal = take - interest, full = take === owed;
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: take, type: "Loan Repayment", purpose: (full ? "Loan settled from savings (offset)" : "Part of the loan paid from savings (offset)") + ": interest " + interest + ", loan " + principal, loanId: loan.id, viaSavings: true,
+      offset: { interest, principal, savingsBefore: savings, savingsAfter: savings - take, owedAfter: owed - take } });
     if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
-    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    G.audit(db, ctx, "Loan", loan.id, full ? "Settled from savings" : "Part-paid from savings", { owed, savings }, { offset: take, interest, principal, savingsAfter: savings - take, owedAfter: owed - take, date, entry: entry.id }, full ? "Savings covered the loan; interest cleared first, then the loan; no cash movement" : "Savings part-paid the loan, interest first, then the loan; the loan stays open; no cash movement");
     return loan;
   }
   /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),
@@ -2808,7 +2813,7 @@
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }),
-    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date),
+    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date, a.amount),
     addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
@@ -2925,7 +2930,7 @@
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
     closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
     postOutstandingWithdrawal: { perm: "ledger.create", label: "Post a confirmed withdrawal that was not yet entered" },
-    settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
+    settleLoanFromSavings: { perm: "loan.repay", label: "Pay a loan from the member's savings (all or part)" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
@@ -5254,24 +5259,34 @@ window.SOBMember = function (E) {
       if (D.isISO(d) && loan.date && d < loan.date) return { error: "A further payout cannot be before the first payout (" + D.toDisplay(loan.date) + ")." };
       return { rows: [["Loan now", ugx(loan.loanAmount)], ["Further payout", ugx(a)], ["Loan after", ugx(Number(loan.loanAmount) + a), "good"]], note: "The Chairperson approves before it counts." }; });
   }
-  /* ONE business action: settle the loan from the member's savings. It also clears the loan and stops its interest, so there is no separate lock step. The impact is shown LIVE before anything is saved. */
+  /* ONE business action: pay the loan from the member's savings, ALL or ANY PART of it (amount freely adjustable). Interest is paid first, then the loan. No cash moves.
+     Paying everything owed clears the loan and stops its interest, so there is no separate lock step. Part-paying leaves the loan open at the lower balance. The impact is shown LIVE before anything is saved. */
   function settleForm(loan, id) {
     const T = today(), first = (LN.settlementReview(st.db, T).find((r) => r.loanId === id) || {}).firstCovered, box = h("div", { id: "settle-preview", class: "preview" });
-    const m = Form("Settle from savings", [{ type: "note", node: h("div", null, h("p", null, h("b", null, nameOf(loan.memberId)), " · loan ", ugx(loan.loanAmount)), box) },
-      Object.assign(dateF("date", "Settle on"), { value: (first && first.date) || T, min: loan.date || undefined })],
-      act(async (f) => { await commit("settleLoanFromSavings", { loanId: id, date: f.date }); M().remove(); openLoan(id); }, "Settlement sent to the Chairperson for approval"), "Settle loan");
-    const di = m.el.querySelector('input[name="date"]'), go = m.el.querySelector("[data-submit]");
+    const m = Form("Pay from savings", [{ type: "note", node: h("div", null, h("p", null, h("b", null, nameOf(loan.memberId)), " · loan ", ugx(loan.loanAmount)), box) },
+      Object.assign(dateF("date", "Pay on"), { value: (first && first.date) || T, min: loan.date || undefined }),
+      { name: "amount", label: "Amount from savings (UGX) · change it to pay part", type: "number" }],
+      act(async (f) => { await commit("settleLoanFromSavings", { loanId: id, date: f.date, amount: Number(f.amount) }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"), "Pay from savings");
+    const di = m.el.querySelector('input[name="date"]'), ai = m.el.querySelector('input[name="amount"]'), go = m.el.querySelector("[data-submit]");
+    let touched = false;
     const row = (k, v, cls) => h("div", { class: "pv-row " + (cls || "") }, h("span", null, k), h("b", null, v));
     const upd = () => { const d = di && di.value, say = (kids, ok) => { box.replaceChildren(...kids); if (go) go.disabled = !ok; };
       if (!D.isISO(d)) return say([h("p", { class: "mute" }, "Pick a date.")], false);
       if (d > T) return say([Banner("bad", "The date cannot be in the future.")], false);
       if (loan.date && d < loan.date) return say([Banner("bad", "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ").")], false);
-      const owed = L.loanOutstanding(loan, st.db, d), sav = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), w = L.loanInterestPosition(loan, st.db, d), intr = (w.unpaidInterest || 0) + (w.unpaidPenalties || 0);
+      const owed = L.loanOutstanding(loan, st.db, d), sav = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), w = L.loanInterestPosition(loan, st.db, d), due = (w.unpaidInterest || 0) + (w.unpaidPenalties || 0);
       if (!(owed > 0)) return say([Banner("warn", "Nothing is owed on " + D.toDisplay(d) + ".")], false);
-      if (sav < owed) return say([row("Owed", ugx(owed)), row("Member's savings", ugx(sav)), Banner("bad", "Savings are short by " + ugx(owed - sav) + ". The loan cannot be settled on " + D.toDisplay(d) + "; interest keeps running.")], false);
-      say([row("Interest paid first", ugx(intr)), row("Loan paid", ugx(owed - intr)), row("Total from savings", ugx(owed)), row("Savings now", ugx(sav)), row("Savings after", ugx(sav - owed), "good"), row("Loan after", "Cleared · UGX 0 owed · interest stops", "good"),
-        h("p", { class: "mute" }, "No cash moves. The Chairperson approves once; nothing changes until then.")], true); };
-    if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); } upd();
+      if (ai && !touched) ai.value = Math.min(owed, sav) > 0 ? Math.min(owed, sav) : "";
+      const take = Number(ai && ai.value);
+      const head = [row("Owed on " + D.toDisplay(d), ugx(owed)), row("Member's savings", ugx(sav))];
+      if (!(take > 0)) return say(head.concat([h("p", { class: "mute" }, "Type the amount to take from savings.")]), false);
+      if (take > owed) return say(head.concat([Banner("bad", "That is more than is owed (" + ugx(owed) + ").")]), false);
+      if (take > sav) return say(head.concat([Banner("bad", "Savings are short by " + ugx(take - sav) + ". Lower the amount to " + ugx(sav) + " or less.")]), false);
+      const intr = Math.min(take, due), left = owed - take;
+      say(head.concat([row("Interest paid first", ugx(intr)), row("Loan paid", ugx(take - intr)), row("Total from savings", ugx(take)), row("Savings after", ugx(sav - take), "good"),
+        row("Still owed after", left === 0 ? "UGX 0 · loan cleared · interest stops" : ugx(left) + " · loan stays open", "good"),
+        h("p", { class: "mute" }, "No cash moves. The Chairperson approves once; nothing changes until then.")]), true); };
+    if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); } if (ai) ai.addEventListener("input", () => { touched = true; upd(); }); upd();
   }
   /* ONE correction for a loan: restore it, set its monthly interest and lock the interest, all in a single request. The Chairperson approves once and the system does the parts in that order. */
   function correctForm(loan, v) {
@@ -5317,7 +5332,7 @@ window.SOBMember = function (E) {
       h("h2", { class: "sec" }, "Repayments"), Table([{ label: "Date", render: (t) => D.toDisplay(t.date) }, { label: "Amount", num: 1, render: (t) => num(t.amount) }], L.activeTransactions(st.db).filter((t) => t.loanId === id && t.type === "Loan Repayment")));
     const add = (label, cond, fn, cls) => cond && row.append(h("button", { class: cls || "", "data-act": label, onclick: fn }, label));
     const preDisb = ["Pending", "AwaitingApproval", "Approved"].includes(loan.status);
-add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" && !loan.dateUnknown, () => settleForm(loan, id));
+add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !loan.dateUnknown, () => settleForm(loan, id));
     add("Request guarantee", G.can(c, "guarantee.manage") && preDisb, () => Form("Request a guarantee (more than one guarantor may back a loan)", [{ name: "g", label: "Guarantor", options: st.db.members.filter((m) => m.id !== loan.memberId).map((m) => ({ value: m.id, label: m.name + " — available " + num(L.memberAvailable(st.db, m.id)) })) }, { name: "amt", label: "Amount guaranteed (UGX)", type: "number" }], act(async (f) => { await commit("addGuarantee", { loanId: id, guarantorId: f.g, amount: Number(f.amt) }); M().remove(); openLoan(id); }, "Requested - it binds only when the guarantor accepts")));
     add("Propose other security", G.can(c, "security.manage") && preDisb, () => Form("Propose exceptional security (not the normal route)", [{ name: "kind", label: "Kind", options: S.security.KINDS }, { name: "description", label: "Description (what, where, who owns it)" }, { name: "owner", label: "Owner of the security" }, { name: "valuation", label: "Valuation (UGX)", type: "number" }, dateF("valuationDate", "Valuation date"), { name: "valuedBy", label: "Valued by" }, { name: "doc", label: "Document / evidence title" }, { name: "ref", label: "Document reference" }], act(async (f) => { await commit("proposeSecurity", { loanId: id, kind: f.kind, description: f.description, owner: f.owner, valuation: f.valuation ? Number(f.valuation) : undefined, valuationDate: f.valuationDate, valuedBy: f.valuedBy, documents: [{ name: f.doc, reference: f.ref }] }); M().remove(); openLoan(id); }, "Proposed - the Chairperson must approve it")));
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
@@ -5445,7 +5460,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
         else if (q.command === "unlockInterest") rows.push(["Action", "Let interest grow again from " + D.toDisplay(a.date)]);
         else if (q.command === "editAssignedInterest") { const w = owed(null, a.amount); rows.push(["Monthly interest", money(loan.assignedMonthlyInterest) + " → " + money(a.amount)], ["Owed today", money(now.owed) + " → " + money(w.owed)]); }
         else if (q.command === "correctLoan") { if (yes(a.restore)) rows.push(["1. Restore", "Yes, restore the voided loan"]); if (a.amount !== undefined && String(a.amount).trim() !== "") rows.push(["2. Monthly interest", money(loan.assignedMonthlyInterest) + " → " + money(a.amount)]); if (a.lockFrom) rows.push(["3. Lock", "Stop interest from " + D.toDisplay(a.lockFrom)]); const w = owed(a.lockFrom || null, a.amount); rows.push(["Owed after", money(now.owed) + " → " + money(w.owed)]); }
-        else if (q.command === "settleLoanFromSavings") { const d = a.date || T, ow = L.loanOutstanding(loan, st.db, d), sv = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d); rows.push(["Action", "Settle from savings on " + D.toDisplay(d)], ["Owed", money(ow)], ["Savings now → after", money(sv) + " → " + money(sv - ow)], ["Result", "Loan cleared, interest stops"]); }
+        else if (q.command === "settleLoanFromSavings") { const d = a.date || T, ow = L.loanOutstanding(loan, st.db, d), sv = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), tk = a.amount > 0 ? Number(a.amount) : ow; rows.push(["Action", "Pay from savings on " + D.toDisplay(d)], ["Owed", money(ow)], ["From savings", money(tk)], ["Savings now → after", money(sv) + " → " + money(sv - tk)], ["Result", tk >= ow ? "Loan cleared, interest stops" : "Still owed " + money(ow - tk) + ", loan stays open"]); }
         else if (q.command === "voidLoan" || q.command === "restoreLoan") rows.push(["Action", q.command === "voidLoan" ? "Void (cancel) this loan" : "Restore this voided loan"]);
         else if (q.command === "addDisbursement") rows.push(["Further payout", money(a.amount) + " on " + D.toDisplay(a.date)], ["Loan after", money(Number(loan.loanAmount) + Number(a.amount))]);
         else rows.push(["Action", q.label]);
