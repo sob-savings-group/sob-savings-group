@@ -15,6 +15,7 @@ fs.copyFileSync(path.join(root, "app/styles.css"), path.join(out, "styles.css"))
 fs.mkdirSync(path.join(out, "icons"), { recursive: true });
 fs.readdirSync(path.join(root, "app/icons")).forEach((f) => fs.copyFileSync(path.join(root, "app/icons", f), path.join(out, "icons", f)));
 fs.writeFileSync(path.join(out, "manifest.webmanifest"), JSON.stringify({ name: "SOB Lifetime Platform", short_name: "SOB", description: "Sons of Bethel Savings Group", start_url: "./", display: "standalone", background_color: "#ffffff", theme_color: "#1b4fd8", icons: [192, 512].map((n) => ({ src: "icons/icon-" + n + ".png", sizes: n + "x" + n, type: "image/png", purpose: "any" })) }, null, 1));
+const bid = require("./common.js").buildId() + "-" + Date.now().toString(36);
 const prodTitle = (h) => (url ? h.replace(/<title>[^<]*<\/title>/, "<title>Sons of Bethel Savings Group</title>") : h);
-fs.writeFileSync(path.join(out, "index.html"), prodTitle(html).replace(/(<script src="[^"]+"><\/script>)+/, '<script src="config.js"></script><script src="app.bundle.js"></script>'));
+fs.writeFileSync(path.join(out, "index.html"), prodTitle(html).replace(/(<script src="[^"]+"><\/script>)+/, '<script src="config.js?v=' + bid + '"></script><script src="app.bundle.js?v=' + bid + '"></script>').replace('href="styles.css"', 'href="styles.css?v=' + bid + '"'));
 console.log("site built:", out, "| backend:", url || "(none - demo disabled; set SOB_URL)");

@@ -3,10 +3,10 @@ const fs = require("fs"), path = require("path"), assert = require("assert"), ro
 const R = require("../src/core/reports.js");
 let n = 0; const t = (name, fn) => { fn(); n++; console.log("  ok  " + name); };
 t("both logos are exported and are real images", () => { assert(/^data:image\/jpeg;base64,/.test(R.LOGO)); assert(/^data:image\/jpeg;base64,/.test(R.SHIELD)); assert.notStrictEqual(R.LOGO, R.SHIELD); });
-t("the branded printable letterhead holds the eagle first, then the shield", () => {
+t("the branded printable letterhead holds the shield first, then the eagle", () => {
   const html = R.brandedPage("Test report", "<p>x</p>", { period: "p", generated: "g" });
   const imgs = [...html.matchAll(/<div class="hd">(.*?)<div class="t">/g)][0][1];
-  assert(imgs.includes(R.LOGO) && imgs.includes(R.SHIELD)); assert(imgs.indexOf(R.LOGO) < imgs.indexOf(R.SHIELD));
+  assert(imgs.includes(R.LOGO) && imgs.includes(R.SHIELD)); assert(imgs.indexOf(R.SHIELD) < imgs.indexOf(R.LOGO));
 });
 t("index.html links favicon, touch icon, manifest and loads the brand marks", () => {
   const h = fs.readFileSync(path.join(root, "app/index.html"), "utf8");

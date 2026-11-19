@@ -71,7 +71,7 @@
     const title = textOf(doc.querySelector(".hd .r") || doc.querySelector("title") || doc.body) || "SOB document";
     const groupName = textOf(doc.querySelector(".hd .g") || { childNodes: [] }) || "Sons of Bethel (SOB) Savings Group";
     const subtitle = doc.querySelector(".hd .p") ? textOf(doc.querySelector(".hd .p")) : "";
-    const hdImgs = Array.from(doc.querySelectorAll(".hd img")), logoSrc = hdImgs[0] ? hdImgs[0].getAttribute("src") : "", shieldSrc = hdImgs[1] ? hdImgs[1].getAttribute("src") : "";
+    const imgSrc = (sel) => { const e = doc.querySelector(".hd img" + sel); return e ? e.getAttribute("src") : ""; }, logoSrc = imgSrc(".eg") || imgSrc(":not(.sh)"), shieldSrc = imgSrc(".sh");
     const officers = Array.from(doc.querySelectorAll(".ft .o > div")).map((d) => { const b = d.querySelector("b"), n = b ? textOf(b) : "", rest = textOf(d).slice(n.length).trim(); return [n, rest]; });
     const logo = parseJpeg(logoSrc), shield = parseJpeg(shieldSrc);
     const pages = []; let page = null, y = 0;
@@ -188,9 +188,9 @@
     pages.forEach((pg, i) => {
       page = pg; const first = i === 0, ops = pg.ops; pg.ops = [];
       const logoH = first ? 52 : 26, lx = ML, ly = first ? 20 : 14;
-      let mx = ML;   /* the official eagle/globe logo and the shield-and-tree sit side by side at one height */
-      if (logo) { const w = (logo.w / logo.h) * logoH; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx) + " " + num(PH - ly - logoH) + " cm /Im1 Do Q"); mx += w; }
-      if (shield) { const w = (shield.w / shield.h) * logoH, gap = logo ? 4 : 0; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx + gap) + " " + num(PH - ly - logoH) + " cm /Im2 Do Q"); mx += gap + w; }
+      let mx = ML;   /* the SOB shield-and-tree leads; the official eagle/globe logo sits beside it at the same height */
+      if (shield) { const w = (shield.w / shield.h) * logoH; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx) + " " + num(PH - ly - logoH) + " cm /Im2 Do Q"); mx += w; }
+      if (logo) { const w = (logo.w / logo.h) * logoH, gap = shield ? 6 : 0; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx + gap) + " " + num(PH - ly - logoH) + " cm /Im1 Do Q"); mx += gap + w; }
       const tx = mx + (logo || shield ? 12 : 0), tw = PW - MR - tx;
       if (first) {
         text(tx, ly + 15, groupName, true, 15, "#0b1f3a");
