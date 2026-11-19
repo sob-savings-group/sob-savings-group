@@ -694,10 +694,20 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       Searchable("Search ledger", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
       return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", m: "s2", render: (t) => D.toDisplay(t.date) }, { label: "Member", m: "t", render: (t) => nameOf(t.memberId) }, { label: "Type", m: "s", key: "type" }, { label: "Amount", num: 1, m: "v", render: (t) => num(t.amount) }, { label: "State", m: "b", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
+  /* Correct the date of an entry that was recorded on the wrong day (e.g. paid in November, recorded in December). Nothing else changes. A savings offset and the loan repayment it belongs to move together. The Chairperson approves. */
+  function changeDateForm(t) {
+    const pair = (st.db.transactions || []).find((x) => x.id !== t.id && !x.voided && x.memberId === t.memberId && x.date === t.date && Number(x.amount) === Number(t.amount) && ((t.type === "Savings Offset" && x.type === "Historical Loan Repayment") || (t.type === "Historical Loan Repayment" && x.type === "Savings Offset")));
+    const m = Form("Change date", [{ type: "note", node: h("div", null, h("p", null, nameOf(t.memberId), " · ", t.type, " · ", ugx(t.amount), " · now dated ", D.toDisplay(t.date)), pair ? h("p", { class: "mute" }, "Its linked entry (" + pair.type + ", " + ugx(pair.amount) + ") moves to the same date.") : null, h("p", { class: "mute" }, "Only the date changes. The Chairperson approves; nothing changes until then.")) },
+      dateF("date", "Correct date"), { name: "evidence", label: "What shows the right date (bank slip, your own record)" }, { name: "reason", label: "Reason" }],
+      act(async (f) => { if (!D.isISO(f.date) || f.date === t.date) throw new Error("Pick a different date."); if (f.date > today()) throw new Error("The date cannot be in the future.");
+        for (const id of [t.id].concat(pair ? [pair.id] : [])) await commit("correctEntryDate", { id, date: f.date, reason: f.reason, evidence: f.evidence }); M().remove(); }, "Sent to the Chairperson for approval"), "Send for approval");
+    return m;
+  }
   function openEntry(id) {
     const t = st.db.transactions.find((x) => x.id === id), c = ctx(), row = h("div", { class: "row" });
     const perm = t.voided ? "ledger.restore" : "ledger.void";
     if (G.can(c, perm)) row.append(h("button", { class: "danger", "data-act": "void", onclick: () => Form(t.voided ? "Restore entry" : "Void entry", [reasonField("reason.Void")], act(async (f) => { await commit(t.voided ? "restoreEntry" : "voidEntry", { id, reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Done")) }, t.voided ? "Restore" : "Void"));
+    if (G.can(c, "reconcile.manage") && !t.voided) row.append(h("button", { "data-act": "change-date", onclick: () => changeDateForm(t) }, "Change date"));
     if (t.approvalStatus === "PendingApproval" && G.can(c, "ledger.approve")) row.append(h("button", { class: "primary", "data-act": "approve-entry", onclick: act(async () => { await commit("approveEntry", { id, decision: "approve" }); document.querySelector(".modal-bg").remove(); }, "Approved") }, "Approve (second approval)"),
       h("button", { class: "danger", "data-act": "reject-entry", onclick: () => Form("Reject entry", [reasonField("reason.Reject")], act(async (f) => { await commit("approveEntry", { id, decision: "reject", reason: f.reason }); document.querySelector(".modal-bg").remove(); }, "Rejected")) }, "Reject"));
     const aud = (st.db.auditLog || []).filter((a) => a.entityId === id);
