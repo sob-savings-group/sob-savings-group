@@ -2505,10 +2505,13 @@
   const smsText = (t) => asciiSms(String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, ""));
   const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function composeSms(db, rec, f) {
-    const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, list = custom ? [custom] : SMS_TEMPLATES[rec.level];
+    const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, left = D.isISO(rec.deadline) && D.isISO(rec.asOf) ? daysBetween(rec.asOf, rec.deadline) : null;
+    /* the friendly reminder counts down to the deadline, so each day's SMS reads differently: "5 days left", "4 days left" ... "Due tomorrow", "Due TODAY" */
+    const COUNT = left === null || left < 0 ? null : left === 0 ? ["SOB: Due TODAY {dl}. Pay {total} now.", "SOB: Due today. Pay {amt} now.", "SOB: Due today. Pay {amt}."] : left === 1 ? ["SOB: Due TOMORROW. Pay {total} today.", "SOB: Due tomorrow. Pay {amt} today.", "SOB: Due tomorrow. Pay {amt}."] : left === 2 ? ["SOB: Only 2 days left! Pay {total} by {dl}.", "SOB: 2 days left! Pay {amt} by {dl}.", "SOB: 2 days left. Pay {amt}."] : ["SOB: {n} days left. Pay {total} by {dl}.", "SOB: {n} days left. Pay {amt} by {dl}.", "SOB: {n} days left. Pay {amt}."];
+    const list = custom ? [custom] : (rec.level === "FRIENDLY" && COUNT ? COUNT : SMS_TEMPLATES[rec.level]);
     /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
     const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
-    const v = { total: money(n), amt: n.toLocaleString("en-US"), dl };
+    const v = { total: money(n), amt: n.toLocaleString("en-US"), dl, n: String(left === null ? "" : left) };
     for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return t; }
     throw new Error("SMS_TOO_LONG: the message would be longer than " + SMS_MAX + " characters, so it was not sent. Use WhatsApp for this member.");
   }
@@ -2706,12 +2709,12 @@
         const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
         if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
         const mine = (db.reminders || []).filter((r) => r.auto && r.loanId === loan.id && r.deadline === sch.deadline && done(r)), has = (st) => mine.some((r) => r.stage === st);
-        const first = mine.slice().sort((x, y) => (x.asOf < y.asOf ? -1 : 1))[0], last = mine.filter((r) => r.stage === "REGULAR").sort((x, y) => (x.asOf < y.asOf ? 1 : -1))[0];
+        const first = mine.slice().sort((x, y) => (x.asOf < y.asOf ? -1 : 1))[0], last = mine.slice().sort((x, y) => (x.asOf < y.asOf ? 1 : -1))[0];   // "last" = the latest automatic message of any kind, so the daily countdown carries on between the two notices
         const repaidSince = first && L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > first.asOf);
         let stage = null;
         if (sch.daysToDeadline <= auto.bishopDaysBefore && !has("BISHOP")) stage = "BISHOP";
         else if (first && !has("ADMIN") && !has("BISHOP") && !repaidSince && daysBetween(first.asOf, today) >= auto.adminAfterDays) stage = "ADMIN";
-        else if (!has("ADMIN") && !has("BISHOP") && (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays)) stage = "REGULAR";
+        else if (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays) stage = "REGULAR";
         if (!stage) continue;
         rec = prepare(db, ctx, { loanId: loan.id, level: STAGE_LEVEL[stage] }); rec.auto = true; rec.stage = stage;
         const q = queueSms(db, ctx, { id: rec.id }); N.dispatch(db, ctx, gateways, { ids: [q.outboxId] }); syncSms(db, ctx, { id: rec.id });
@@ -4494,7 +4497,9 @@
     if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost. Please try again. If it happens again, tell the Treasurer or Secretary."; }
     if (/PENDING_SOB_DECISION/.test(m)) return "Blocked: SOB has not yet decided this rule. " + m.replace(/^.*?PENDING_SOB_DECISION:?\s*/, "");
     if (e && e.code === "CONFLICT") return "Someone else changed the ledger. Your change was not saved — reload and try again.";
-    if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return "We could not reach the server. Check your internet connection and try again.";
+    if ((e && e.code === "NETWORK") || /^NETWORK:/.test(m) || /Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection. Check your data or Wi-Fi and try again.";
+    if ((e && e.code === "TIMEOUT") || /^TIMEOUT/.test(m)) return "This is taking too long. Check your connection and try again.";
+    if (/^ENDPOINT_/.test((e && e.code) || m)) return "The SOB records are not available right now. Please try again in a few minutes. If it continues, tell the Treasurer or Secretary.";
     if (e && e.code === "UNAUTHENTICATED") return "Your session has ended. Please sign in again.";
     if (/^\s*UNKNOWN_COMMAND:/.test(m)) return "The Google backend is out of date. Paste the latest Code.gs in Apps Script, deploy a New version and reload. (Action: " + m.replace(/^\s*UNKNOWN_COMMAND:\s*/, "") + ")";
     const PLAIN = { ALREADY_APPLIED: "You already have a loan application in progress. Please wait until it is decided.", ALREADY_VOIDED: "This record has already been cancelled.", NOT_VOIDED: "This record is not cancelled.", RESTORE_WINDOW_CLOSED: "The time allowed to restore this record has passed. Please enter a new correcting entry instead.", OFFLINE_MODE: "This copy is not connected to the SOB server.", FORBIDDEN: "You do not have permission to do this.", NOT_FOUND: "We could not find that record. Please refresh and try again.", UNKNOWN_MEMBER: "That member was not found.", UNKNOWN_ACTION: "Something went wrong. Please refresh and try again.", INVALID_REQUEST: "Something went wrong. Please refresh and try again.", UNAUTHENTICATED: "Your session has ended. Please sign in again.", BAD_CREDENTIALS: "That did not match. Please check and try again." };
@@ -5939,8 +5944,8 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
-  const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the Google script is an older version (" + r.build + "; this app expects " + CFG.build + "). Redeploy the latest Code_Ledger.gs as a New version of the SAME deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (app " + String(CFG.build || "").slice(0, 6) + " · server " + String(r.build).slice(0, 6) + ")" : "") + "."; };
-  const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or password."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
+  const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the SOB backend is older than this app (server " + String(r.build).slice(0, 6) + ", app " + String(CFG.build || "").slice(0, 6) + "). Admin: redeploy the latest Code_Ledger.gs as a New version of the same deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (app " + String(CFG.build || "").slice(0, 6) + " · server " + String(r.build).slice(0, 6) + ")" : "") + "."; };
+  const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "Cannot reach the SOB records. Your ID and password are fine."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), err && /^ENDPOINT_/.test(err.code || "") ? h("div", { class: "hint", id: "login-admin-detail" }, "For the Admin: " + String(err.message || "").replace(/^[A-Z_]+:\s*/, "")) : null, h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
     if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
     app.append(splash());
@@ -5961,7 +5966,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const touch = () => { clearTimeout(idleT); if (!st.user) return; idleT = setTimeout(async () => { if (!st.user) return; try { if (st.live) await st.store.logout(); } catch (e) { /* ignore */ } st.user = null; st.view = null; render(); toast("You were signed out after 20 minutes of inactivity.", "warn"); }, window.SOB_IDLE_MS || IDLE_MS); };
   ["click", "keydown", "touchstart", "scroll"].forEach((ev) => document.addEventListener(ev, touch, { passive: true })); window.__SOB_IDLE = { touch, ms: IDLE_MS };
   /* connection awareness: say so plainly instead of letting buttons look dead */
-  const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "You are offline. Changes cannot be saved until the connection returns.")); };
+  const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "No internet. Changes will not save until it returns.")); };
   window.addEventListener("offline", offline); window.addEventListener("online", () => { const o = document.getElementById("offline"); if (o) o.remove(); toast("Back online"); });
   if (navigator.onLine === false) offline();
   boot();
