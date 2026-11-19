@@ -229,7 +229,7 @@ t("AUTO: nothing is sent while it is switched off, and switching it on needs the
 });
 t("AUTO: with the gateway not live nothing is sent and no record is created", () => { const { db } = autoWorld(), { g, sent } = gw(false); setAuto(db, "2026-11-10", { enabled: true }); const r = auto(db, "2026-11-10", g); assert.equal(sent.length, 0); assert.equal(db.reminders.length, 0); assert.match(r.note, /not live/); });
 t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then the Bishop before the deadline; every SMS is 50 characters or fewer; each goes once", () => {
-  const { db } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true });
+  const { db } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true, regularEveryDays: 30 });   // 30 days apart so this test sees only the three stages
   assert.equal(auto(db, "2026-11-10", g).sent[0].stage, "REGULAR"); assert.equal(auto(db, "2026-11-10", g).sent.length, 0, "same day: not sent twice");
   assert.equal(auto(db, "2026-11-12", g).sent.length, 0, "only 2 days after the first reminder");
   assert.equal(auto(db, "2026-11-13", g).sent[0].stage, "ADMIN"); assert.equal(auto(db, "2026-11-14", g).sent.length, 0, "the Church Administration notice goes once");
@@ -239,6 +239,14 @@ t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then 
   const recs = db.reminders.filter((r) => r.auto); assert.deepEqual(recs.map((r) => r.stage), ["REGULAR", "ADMIN", "BISHOP"]); assert.ok(recs.every((r) => r.deadline === "2026-11-24" && r.delivery === "SMS_ACCEPTED" && /Church Administration/.test(r.body)));
   assert.ok(db.auditLog.filter((a) => a.entityType === "AutoReminderRun").length >= 3 && db.auditLog.some((a) => a.entityType === "Reminder" && a.action === "Prepared"));
 });
+t("AUTO daily: every day brings a different SMS that counts down to the deadline (24 Nov), with the two notices on their own days", () => {
+  const { db } = autoWorld(), { g, sent } = gw(true); const rs = run(db, "Admin", "2026-11-18", "setReminderSettings", { minIntervalDays: 1, reason: "daily reminders (test)" }); if (rs.pendingApproval) run(db, "Chairperson", "2026-11-18", "approveRequest", { id: rs.requestId });
+  setAuto(db, "2026-11-18", { enabled: true, regularEveryDays: 1, adminAfterDays: 2, bishopDaysBefore: 2 });
+  const days = ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22", "2026-11-23", "2026-11-24"], stages = days.map((d) => { const r = auto(db, d, g); assert.equal(r.sent.length, 1, d + " " + JSON.stringify(r)); return r.sent[0].stage; });
+  assert.deepEqual(stages, ["REGULAR", "REGULAR", "ADMIN", "BISHOP", "REGULAR", "REGULAR"]);
+  assert.equal(new Set(sent.map((m) => m.body)).size, 6, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body));
+  assert.match(sent[0].body, /5 days left/); assert.match(sent[1].body, /4 days left/); assert.match(sent[4].body, /tomorrow/i); assert.match(sent[5].body, /today/i);
+  assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up"); });
 t("AUTO: someone who has paid since the first reminder skips the Church Administration notice; a loan paid in full is not messaged again", () => {
   const { db, l } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true }); auto(db, "2026-11-10", g);
   run(db, "Admin", "2026-11-12", "repayLoan", { loanId: l.id, amount: 10000, date: "2026-11-12" }); assert.equal(auto(db, "2026-11-13", g).sent.length, 0, "no Church Administration notice for someone who has been paying");

@@ -249,10 +249,13 @@
   const smsText = (t) => asciiSms(String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, ""));
   const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function composeSms(db, rec, f) {
-    const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, list = custom ? [custom] : SMS_TEMPLATES[rec.level];
+    const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, left = D.isISO(rec.deadline) && D.isISO(rec.asOf) ? daysBetween(rec.asOf, rec.deadline) : null;
+    /* the friendly reminder counts down to the deadline, so each day's SMS reads differently: "5 days left", "4 days left" ... "Due tomorrow", "Due TODAY" */
+    const COUNT = left === null || left < 0 ? null : left === 0 ? ["SOB: Due TODAY {dl}. Pay {total} now.", "SOB: Due today. Pay {amt} now.", "SOB: Due today. Pay {amt}."] : left === 1 ? ["SOB: Due TOMORROW. Pay {total} today.", "SOB: Due tomorrow. Pay {amt} today.", "SOB: Due tomorrow. Pay {amt}."] : left === 2 ? ["SOB: Only 2 days left! Pay {total} by {dl}.", "SOB: 2 days left! Pay {amt} by {dl}.", "SOB: 2 days left. Pay {amt}."] : ["SOB: {n} days left. Pay {total} by {dl}.", "SOB: {n} days left. Pay {amt} by {dl}.", "SOB: {n} days left. Pay {amt}."];
+    const list = custom ? [custom] : (rec.level === "FRIENDLY" && COUNT ? COUNT : SMS_TEMPLATES[rec.level]);
     /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
     const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
-    const v = { total: money(n), amt: n.toLocaleString("en-US"), dl };
+    const v = { total: money(n), amt: n.toLocaleString("en-US"), dl, n: String(left === null ? "" : left) };
     for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return t; }
     throw new Error("SMS_TOO_LONG: the message would be longer than " + SMS_MAX + " characters, so it was not sent. Use WhatsApp for this member.");
   }
@@ -450,12 +453,12 @@
         const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
         if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
         const mine = (db.reminders || []).filter((r) => r.auto && r.loanId === loan.id && r.deadline === sch.deadline && done(r)), has = (st) => mine.some((r) => r.stage === st);
-        const first = mine.slice().sort((x, y) => (x.asOf < y.asOf ? -1 : 1))[0], last = mine.filter((r) => r.stage === "REGULAR").sort((x, y) => (x.asOf < y.asOf ? 1 : -1))[0];
+        const first = mine.slice().sort((x, y) => (x.asOf < y.asOf ? -1 : 1))[0], last = mine.slice().sort((x, y) => (x.asOf < y.asOf ? 1 : -1))[0];   // "last" = the latest automatic message of any kind, so the daily countdown carries on between the two notices
         const repaidSince = first && L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > first.asOf);
         let stage = null;
         if (sch.daysToDeadline <= auto.bishopDaysBefore && !has("BISHOP")) stage = "BISHOP";
         else if (first && !has("ADMIN") && !has("BISHOP") && !repaidSince && daysBetween(first.asOf, today) >= auto.adminAfterDays) stage = "ADMIN";
-        else if (!has("ADMIN") && !has("BISHOP") && (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays)) stage = "REGULAR";
+        else if (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays) stage = "REGULAR";
         if (!stage) continue;
         rec = prepare(db, ctx, { loanId: loan.id, level: STAGE_LEVEL[stage] }); rec.auto = true; rec.stage = stage;
         const q = queueSms(db, ctx, { id: rec.id }); N.dispatch(db, ctx, gateways, { ids: [q.outboxId] }); syncSms(db, ctx, { id: rec.id });
