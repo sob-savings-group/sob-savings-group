@@ -839,7 +839,7 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
      interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
      entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
   const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
-  function settleFromSavings(db, ctx, loanId, date) {
+  function settleFromSavings(db, ctx, loanId, date, amount) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
@@ -848,12 +848,17 @@ __M['core/loans'] = (function(){ const module = {exports:{}}; const require = __
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
     const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
-    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
-    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
-    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
-      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    /* The amount is freely adjustable: leave it out to settle everything owed, or give any amount up to what is owed (and up to the member's savings) to part-pay the loan. */
+    const part = amount !== undefined && amount !== null && amount !== "";
+    const take = part ? Number(amount) : owed;
+    if (!(take > 0)) throw new Error("INVALID: amount");
+    if (take > owed) throw new Error("OVERPAYMENT: the amount is more than is owed (" + owed + ") on " + date);
+    if (savings < take) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach " + take + " on " + date + (part ? "" : "; interest keeps running and nothing is deducted"));
+    const w = L.loanInterestPosition(loan, db, date), due = w.unpaidInterest + (w.unpaidPenalties || 0), interest = Math.min(take, due), principal = take - interest, full = take === owed;
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: take, type: "Loan Repayment", purpose: (full ? "Loan settled from savings (offset)" : "Part of the loan paid from savings (offset)") + ": interest " + interest + ", loan " + principal, loanId: loan.id, viaSavings: true,
+      offset: { interest, principal, savingsBefore: savings, savingsAfter: savings - take, owedAfter: owed - take } });
     if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
-    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    G.audit(db, ctx, "Loan", loan.id, full ? "Settled from savings" : "Part-paid from savings", { owed, savings }, { offset: take, interest, principal, savingsAfter: savings - take, owedAfter: owed - take, date, entry: entry.id }, full ? "Savings covered the loan; interest cleared first, then the loan; no cash movement" : "Savings part-paid the loan, interest first, then the loan; the loan stays open; no cash movement");
     return loan;
   }
   /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),
@@ -2600,7 +2605,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }),
-    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date),
+    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date, a.amount),
     addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
@@ -2717,7 +2722,7 @@ __M['core/commands'] = (function(){ const module = {exports:{}}; const require =
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
     closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
     postOutstandingWithdrawal: { perm: "ledger.create", label: "Post a confirmed withdrawal that was not yet entered" },
-    settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
+    settleLoanFromSavings: { perm: "loan.repay", label: "Pay a loan from the member's savings (all or part)" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
@@ -4460,7 +4465,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "ea1d2bd245";
+var SOB_BUILD = "9a4f59fa4b";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){

@@ -279,7 +279,7 @@
      interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
      entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
   const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
-  function settleFromSavings(db, ctx, loanId, date) {
+  function settleFromSavings(db, ctx, loanId, date, amount) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
@@ -288,12 +288,17 @@
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
     const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
-    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
-    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
-    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
-      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    /* The amount is freely adjustable: leave it out to settle everything owed, or give any amount up to what is owed (and up to the member's savings) to part-pay the loan. */
+    const part = amount !== undefined && amount !== null && amount !== "";
+    const take = part ? Number(amount) : owed;
+    if (!(take > 0)) throw new Error("INVALID: amount");
+    if (take > owed) throw new Error("OVERPAYMENT: the amount is more than is owed (" + owed + ") on " + date);
+    if (savings < take) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach " + take + " on " + date + (part ? "" : "; interest keeps running and nothing is deducted"));
+    const w = L.loanInterestPosition(loan, db, date), due = w.unpaidInterest + (w.unpaidPenalties || 0), interest = Math.min(take, due), principal = take - interest, full = take === owed;
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: take, type: "Loan Repayment", purpose: (full ? "Loan settled from savings (offset)" : "Part of the loan paid from savings (offset)") + ": interest " + interest + ", loan " + principal, loanId: loan.id, viaSavings: true,
+      offset: { interest, principal, savingsBefore: savings, savingsAfter: savings - take, owedAfter: owed - take } });
     if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
-    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    G.audit(db, ctx, "Loan", loan.id, full ? "Settled from savings" : "Part-paid from savings", { owed, savings }, { offset: take, interest, principal, savingsAfter: savings - take, owedAfter: owed - take, date, entry: entry.id }, full ? "Savings covered the loan; interest cleared first, then the loan; no cash movement" : "Savings part-paid the loan, interest first, then the loan; the loan stays open; no cash movement");
     return loan;
   }
   /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),

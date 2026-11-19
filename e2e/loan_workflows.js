@@ -14,16 +14,19 @@ const RAW = /is not defined|is not a function|ReferenceError|TypeError|Cannot re
   pg.on("pageerror", (e) => errs.push(e.message)); pg.on("console", (m) => { if (m.type() === "error" && !/\[SOB\]/.test(m.text())) errs.push(m.text()); });
   await pg.goto(base); await pg.waitForSelector("#demo-go"); await pg.selectOption("#demo-role", "Admin"); await pg.click("#demo-go"); await pg.waitForSelector("#hero");
   const openFirstActive = async () => { await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click('[data-nav="loans"]'); await pg.waitForSelector("#loan-totals");
-    const rows = pg.locator("tbody tr"), n = await rows.count(); for (let i = 0; i < n; i++) { await rows.nth(i).click(); await pg.waitForSelector(".modal"); if (await pg.locator('.modal [data-act="Settle from savings"]').count()) return true; await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); } return false; };
+    const rows = pg.locator("tbody tr"), n = await rows.count(); for (let i = 0; i < n; i++) { await rows.nth(i).click(); await pg.waitForSelector(".modal"); if (await pg.locator('.modal [data-act="Pay from savings"]').count()) return true; await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); } return false; };
   const clean = async (what) => { await pg.waitForTimeout(600); const body = await pg.locator("body").innerText(); ok(!RAW.test(body.replace(/Demo|undefined behaviour/g, "")) && !errs.length, what + ": no raw code error on screen" + (errs.length ? " (" + errs[0] + ")" : "")); };
   ok(await openFirstActive(), "an active loan opens with its action buttons");
-  /* Settle from savings: live impact BEFORE saving, one step. Try loans until one whose member's savings cover it. */
+  /* Pay from savings: live impact BEFORE saving, one step. Try loans until one whose member's savings cover it. */
   let settled = false, shortSeen = false;
   await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.click('[data-nav="loans"]'); await pg.waitForSelector("#loan-totals"); const total = await pg.locator("tbody tr").count();
   for (let i = 0; i < total && !settled; i++) { await pg.evaluate(() => document.querySelectorAll(".modal-bg").forEach((e) => e.remove())); await pg.locator("tbody tr").nth(i).click(); await pg.waitForSelector(".modal");
-    if (!(await pg.locator('.modal [data-act="Settle from savings"]').count())) continue; await pg.click('.modal [data-act="Settle from savings"]'); await pg.waitForSelector("#settle-preview"); const pv = await pg.locator("#settle-preview").innerText();
-    if (/Savings are short/.test(pv)) { if (!shortSeen) { shortSeen = true; ok(await pg.locator(".modal [data-submit]").last().isDisabled(), "when savings are short the preview says so and Save is off"); } continue; }
-    if (/Interest paid first/.test(pv)) { ok(/Loan after[\s\S]*Cleared[\s\S]*interest stops/.test(pv), "Settle shows the live result and says the loan is cleared and interest stops (no separate lock)"); await pg.click(".modal [data-submit]"); await clean("Settle from savings"); settled = true; } }
+    if (!(await pg.locator('.modal [data-act="Pay from savings"]').count())) continue; await pg.click('.modal [data-act="Pay from savings"]'); await pg.waitForSelector("#settle-preview"); const pv = await pg.locator("#settle-preview").innerText();
+    await pg.fill('.modal input[name="amount"]', "999999999"); await pg.waitForTimeout(80); const over = await pg.locator("#settle-preview").innerText();
+    ok(/more than is owed|Savings are short/.test(over) && await pg.locator(".modal [data-submit]").last().isDisabled(), "an amount above what is owed or saved is refused live and Save is off"); shortSeen = true;
+    await pg.fill('.modal input[name="amount"]', "1000"); await pg.waitForTimeout(80); const part = await pg.locator("#settle-preview").innerText();
+    if (/Savings are short/.test(part)) continue;
+    ok(/Interest paid first/.test(part) && /Still owed after[\s\S]*loan stays open/.test(part), "a part amount shows the live result and says the loan stays open"); await pg.click(".modal [data-submit]"); await clean("Pay from savings"); settled = true; }
   ok(settled || shortSeen, "the Settle form was exercised (" + (settled ? "settled" : "short only") + ")");
   /* Lock interest (the form that used to throw "M is not defined") */
   await openFirstActive(); const lockBtn = pg.locator('.modal [data-act="Lock interest"], .modal [data-act="Unlock interest"]');
