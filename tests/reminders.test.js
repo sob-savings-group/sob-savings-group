@@ -16,7 +16,7 @@ function loan(db, m, amount, rate, day) {
 const setDates = (db, day, so, dl) => { const r = CMD.run(db, ctx("Admin", day), "setReminderDates", { shareOutDate: so || "2026-12-19", deadline: dl || "2026-12-05", reason: "committee decision (test)" }); CMD.run(db, ctx("Chairperson", day), "approveRequest", { id: r.requestId }); return r; };
 const world = () => { const db = fresh(), a = mem(db, "Example Member A", "0772123456"); save(db, a, 300000, "2026-01-05"); const l = loan(db, a, 100000, 10000, "2026-02-03"); return { db, a, l }; };
 const run = (db, role, day, name, args) => CMD.run(db, ctx(role, day), name, args);
-const num = (s, label) => Number((new RegExp(label + ": UGX ([\\d,]+)").exec(s) || [])[1].replace(/,/g, ""));
+const num = (s, label) => Number((new RegExp(label + " is UGX ([\\d,]+)").exec(s) || [])[1].replace(/,/g, ""));   // the one figure the short message carries: "your loan balance is UGX n"
 
 t("nothing is prepared until the share-out date and approved deadline are configured (nothing is guessed)", () => {
   const { db, l } = world(); assert.throws(() => run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }), /NOT_CONFIGURED/);
@@ -40,20 +40,17 @@ t("date rules: share-out in December, not in the past; deadline a real day not a
 t("the message carries every required item and every figure equals the engine's own at that moment", () => {
   const { db, l } = world(); setDates(db, "2026-10-22");
   const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }), s = rec.body;
-  assert.match(s, /Dear Example Member A,/); assert.match(s, /Praise the Lord\./); assert.match(s, /SOB Savings Group Administration\./);
-  assert.equal(num(s, "Loan Principal"), 100000); assert.match(s, /Loan Disbursement Date: 3 February 2026/);
-  assert.equal(num(s, "Accrued Interest"), L.loanAccumulatedInterest(l, "2026-10-22")); assert.equal(num(s, "Accrued Interest"), 80000);
-  assert.equal(num(s, "Total Balance Due"), L.loanOutstanding(l, db, "2026-10-22")); assert.equal(num(s, "Total Balance Due"), 180000);
-  assert.match(s, /Payment Deadline: 5 December 2026/); assert.ok(!/Days Remaining|Monthly Interest|Interest Period/.test(s), "brief official layout");
+  assert.match(s, /Example Member A, your loan balance is/); assert.ok(s.length <= 160, "one short message (" + s.length + " characters): " + s); assert.ok(!/Praise the Lord|Corinthians|Loan Principal|Accrued Interest/.test(s), "no long wording");
+  assert.equal(num(s, "loan balance"), L.loanOutstanding(l, db, "2026-10-22")); assert.equal(num(s, "loan balance"), 180000);
+  assert.match(s, /by 5 December 2026/); assert.ok(!/Days Remaining|Monthly Interest|Interest Period/.test(s), "brief layout");
 });
 
 t("interest-first repayments are reflected exactly (20,000 then 60,000 -> principal 40,000 repaid, 60,000 outstanding)", () => {
   const { db, l } = world(); setDates(db, "2026-05-01", "2026-12-19", "2026-12-05");
   run(db, "Admin", "2026-05-10", "repayLoan", { loanId: l.id, amount: 20000, date: "2026-05-10" }); run(db, "Admin", "2026-06-02", "repayLoan", { loanId: l.id, amount: 60000, date: "2026-06-02" });
   const rec = run(db, "Admin", "2026-06-02", "prepareReminder", { loanId: l.id }), s = rec.body;
-  assert.equal(num(s, "Repayments Received"), 80000); assert.equal(num(s, "Total Balance Due"), 60000);
-  assert.equal(num(s, "Total Balance Due"), L.loanOutstanding(l, db, "2026-06-02"));
-  assert.equal(num(s, "Loan Principal") + num(s, "Accrued Interest") - num(s, "Repayments Received"), num(s, "Total Balance Due"), "the lines add up");
+  assert.equal(num(s, "loan balance"), 60000);
+  assert.equal(num(s, "loan balance"), L.loanOutstanding(l, db, "2026-06-02"));
 });
 
 t("LIVE: a repayment recorded after a reminder is reflected by the next one, and the old one is refused as stale", () => {
@@ -63,7 +60,7 @@ t("LIVE: a repayment recorded after a reminder is reflected by the next one, and
   run(db, "Admin", "2026-10-22", "repayLoan", { loanId: l.id, amount: 50000, date: "2026-10-22" });
   assert.throws(() => run(db, "Admin", "2026-10-22", "revalidateReminder", { id: r1.id }), /STALE_REMINDER/);
   const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "URGENT" });
-  assert.equal(num(r2.body, "Repayments Received"), 50000); assert.equal(num(r2.body, "Total Balance Due"), 130000);
+  assert.equal(num(r2.body, "loan balance"), 130000);
   assert.throws(() => run(db, "Admin", "2026-10-23", "revalidateReminder", { id: r2.id }), /STALE_REMINDER/, "tomorrow interest/days have moved on");
 });
 
@@ -79,15 +76,15 @@ t("urgency follows the configured dates and becomes progressively firmer (overdu
   const at = (day) => run(db, "Admin", day, "prepareReminder", { loanId: l.id });
   const early = at("2026-10-22"), mid = at("2026-11-20"), late = at("2026-12-01"), over = at("2026-12-08");
   assert.deepEqual([early, mid, late, over].map((r) => r.level), ["FRIENDLY", "URGENT", "FINAL", "FINAL"]);
-  assert.match(mid.body, /Payment Deadline: 5 December 2026/); assert.match(over.body, /Payment Deadline: 5 December 2026/);
+  assert.match(mid.body, /by 5 December 2026/); assert.match(over.body, /by 5 December 2026/);
   assert.match(late.body, /final notice/i); assert.match(mid.body, /urgent/i); assert.match(over.body, /Church Administration/);
-  assert.notEqual(early.body.split("\n")[4], late.body.split("\n")[4], "wording differs by level");
+  assert.notEqual(early.body, late.body, "wording differs by level");
 });
 
 t("a loan-specific approved deadline overrides the general one", () => {
   const { db, l } = world(); setDates(db, "2026-10-22");
   const r = run(db, "Admin", "2026-10-22", "setReminderDates", { shareOutDate: "2026-12-19", deadline: "2026-12-05", loanDeadlines: { [l.id]: "2026-11-15" }, reason: "agreed with member" }); run(db, "Chairperson", "2026-10-22", "approveRequest", { id: r.requestId });
-  const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }); assert.match(rec.body, /Payment Deadline: 15 November 2026/); assert.equal(rec.level, "URGENT");
+  const rec = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }); assert.match(rec.body, /by 15 November 2026/); assert.equal(rec.level, "URGENT");
 });
 
 t("duplicates are prevented; a firmer level or the next interval is allowed; cancelling frees the slot", () => {
@@ -125,7 +122,7 @@ t("bulk reminders are individually addressed private chats, never group links; e
     const m = ms.find((x) => x.id === r.memberId), link = RM.waLink(m.phone, r.body);
     assert.match(link, /^https:\/\/wa\.me\/256772123\d{3}\?text=/); assert.ok(!/chat\.whatsapp\.com|whatsapp\.com\/send\?|wa\.me\/\?/.test(link), "never a group or an open-recipient link");
     ms.filter((x) => x.id !== r.memberId).forEach((o) => { assert.ok(!r.body.includes(o.name) && !r.body.includes(o.id), "no other member's name or id"); });
-    assert.equal(num(r.body, "Loan Principal"), 100000 * (ms.indexOf(m) + 1));
+    assert.ok(r.body.length <= 160); assert.equal(num(r.body, "loan balance"), L.loanOutstanding(db.loans.find((x) => x.memberId === m.id), db, "2026-10-22"));
   });
   assert.equal(RM.waLink("not a number", "x"), null); assert.equal(db.reminders.filter((r) => r.delivery !== "PREPARED").length, 0, "bulk prepare sends nothing");
 });
@@ -179,7 +176,7 @@ t("the reminder history is Super-Admin-only: other staff and members never recei
   const { db, a, l } = world(); setDates(db, "2026-10-22"); run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id }); db.users = [];
   assert.equal(API.viewFor(db, { role: "Admin", id: "ADMIN" }, "2026-10-22").reminders.length, 1);
   ["Chairperson", "Treasurer", "Secretary", "Committee"].forEach((role) => assert.deepEqual(API.viewFor(db, { role, id: role }, "2026-10-22").reminders, [], role));
-  const mv = API.viewFor(db, { role: "Member", id: a.id, memberId: a.id }, "2026-10-22"); assert.ok(!mv.reminders || mv.reminders.length === 0); assert.ok(!JSON.stringify(mv).includes("Praise the Lord"), "member view contains no reminder text");
+  const mv = API.viewFor(db, { role: "Member", id: a.id, memberId: a.id }, "2026-10-22"); assert.ok(!mv.reminders || mv.reminders.length === 0); assert.ok(!JSON.stringify(mv).includes("your loan balance is"), "member view contains no reminder text");
 });
 
 const N = require("../src/core/notify.js");
@@ -207,17 +204,17 @@ t("SMS: a targeted send touches nothing else in the outbox; stale figures, opted
   const w4 = smsWorld(); ["Treasurer", "Secretary", "Committee"].forEach((r) => assert.throws(() => run(w4.db, r, "2026-10-22", "queueReminderSms", { id: w4.rec.id })));
   const before = JSON.stringify([w4.db.transactions, w4.db.loans]); N.dispatch(w4.db, ctx("Admin", "2026-10-22"), gw(true).g, { ids: [] }); assert.equal(JSON.stringify([w4.db.transactions, w4.db.loans]), before, "no financial record changes");
 });
-t("every reminder tells the member that unpaid loans after the deadline go to Church Administration", () => { const REM = require("../src/core/reminders.js"); ["FRIENDLY", "URGENT"].forEach((lv) => { const T = REM.DEFAULT_TEMPLATES ? REM.DEFAULT_TEMPLATES[lv] : null; if (T) assert.ok(/Church Administration/.test(T.request) && /Bishop/.test(T.request), lv); }); assert.ok(/Church Administration/.test(REM.DEFAULT_TEMPLATES.FINAL.request) && /Bishop has requested the list of members with outstanding loans after this date/.test(REM.DEFAULT_TEMPLATES.FINAL.request)); });
+t("every reminder tells the member, briefly, that unpaid loans after the deadline go to Church Administration and the Bishop", () => { const REM = require("../src/core/reminders.js"); ["FRIENDLY", "URGENT", "FINAL"].forEach((lv) => assert.ok(/Church Administration/.test(REM.DEFAULT_TEMPLATES[lv].request) && /Bishop/.test(REM.DEFAULT_TEMPLATES[lv].request), lv)); });
 t("the deadline is a setting: notices keep the deadline they were issued with, and a changed deadline makes an old unsent notice stale", () => {
   const { db, l } = world(); setDates(db, "2026-10-22", "2026-12-19", "2026-11-24");
   const r1 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" });
-  assert.match(r1.body, /Payment Deadline: 24 November 2026/); assert.equal(r1.deadline, "2026-11-24");
-  assert.match(r1.body, /your name and outstanding balance will be submitted to Church Administration/); assert.match(r1.body, /The Bishop has requested the list/);
+  assert.match(r1.body, /by 24 November 2026/); assert.equal(r1.deadline, "2026-11-24");
+  assert.match(r1.body, /your name goes to Church Administration and the Bishop/);
   const sms = RM.composeSms(db, r1, r1.figures); assert.equal(sms, "SOB FINAL: Pay UGX 180,000 now. Bishop next."); assert.ok(sms.length <= 50);
   setDates(db, "2026-10-22", "2026-12-19", "2026-12-05");                                       // next cycle / a new decision: no code change
   assert.equal(r1.deadline, "2026-11-24"); assert.match(r1.body, /24 November 2026/, "the issued notice keeps its deadline");
   assert.throws(() => run(db, "Admin", "2026-10-22", "revalidateReminder", { id: r1.id }), /STALE_REMINDER.*deadline changed/);
-  const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" }); assert.match(r2.body, /Payment Deadline: 5 December 2026/);
+  const r2 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" }); assert.match(r2.body, /by 5 December 2026/);
 });
 t("the deadline needs the Chairperson to approve it; no date is written into the program", () => { const { db } = world(); const r = run(db, "Admin", "2026-10-22", "setReminderDates", { shareOutDate: "2026-12-19", deadline: "2026-11-24", reason: "committee" }); assert.equal(r.pendingApproval, true); assert.equal(RM.getConfig(db).deadline, null); assert.ok(!/2026-11-24|24 November/.test(require("fs").readFileSync(require.resolve("../src/core/reminders.js"), "utf8")), "no hard-coded deadline in the code"); });
 /* ---- automatic reminders ---- */

@@ -29,13 +29,13 @@ t("the Member statement (data and printed PDF HTML) contains none of the officer
   assert.equal(m.audience, "member"); assert.deepEqual(leaks(JSON.stringify(m)), [], "data: " + leaks(JSON.stringify(m))); assert.deepEqual(leaks(html), [], "html: " + leaks(html));
   assert.ok(m.notes.length === 0 && m.pending.length === 0 && m.review.length === 0 && m.loans[0].guarantors.length === 0 && m.loans[0].disbursementRef === "");
   assert.ok(m.transactions.every((x) => x.ref === "" && x.source === "" && x.open === null), "no entry references");
-  assert.ok(/Member account statement/.test(html) && /CONFIDENTIAL — prepared for the named member only/.test(html) && !/ADMINISTRATIVE STATEMENT/.test(html));
+  assert.ok(/Member account statement/.test(html) && /Confidential — for the named member only/.test(html) && !/ADMINISTRATIVE — INTERNAL/.test(html));
   assert.ok(/Example Member A/.test(html) && /Savings summary/.test(html) && /Every transaction/.test(html) && /Loan still owed/.test(html) && /TOTAL OWED/.test(html) && /Monthly savings/.test(html), "the member's own information is all there");
 });
 t("the Administrative statement keeps references, corrections, audit notes, reserve and guarantors, and is clearly marked internal", () => {
   const { db, a } = world(); const m = ST.memberAccount(db, a.id, {}, { today: DAY, audience: "admin" }), html = ST.toPrintHTML(m);
-  assert.equal(m.audience, "admin"); assert.ok(/ADMINISTRATIVE STATEMENT — INTERNAL/.test(html) && /Administrative account statement/.test(html) && /^ADM-|ADM-/.test(m.ref));
-  ["Payout entry", "Interest working", "Corrections and audit notes", "General Reserve", "Guarantor Person", "77-INTERNAL"].forEach((s) => assert.ok(html.includes(s), "admin statement should contain " + s));
+  assert.equal(m.audience, "admin"); assert.ok(/ADMINISTRATIVE — INTERNAL/.test(html) && /Administrative account statement/.test(html) && /^ADM-|ADM-/.test(m.ref));
+  ["Payout entry", "Corrections and audit notes", "General Reserve", "Guarantor Person", "77-INTERNAL"].forEach((s) => assert.ok(html.includes(s), "admin statement should contain " + s));
   assert.ok(m.notes.some((x) => /Voided and not counted/.test(x.note)), "the voided entry and its reason are in the audit notes"); assert.ok(m.transactions.every((x) => x.ref) && m.transactions.some((x) => x.source === "SRC-BANK-9912"), "references and source records are kept for officers");
 });
 t("the figures are identical in both statements: only the presentation differs", () => {

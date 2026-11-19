@@ -842,7 +842,7 @@
      interest first then principal; savings beyond that stay with the member; below that point nothing is deducted and interest keeps running. The offset is a dated, audited
      entry on the loan (viaSavings): savings fall, the loan falls, and no cash is created. Nothing here edits an existing entry. */
   const readyDate = (loan) => (loan.components && loan.components.length ? loan.components.map((c) => c.date).sort().pop() : loan.date);
-  function settleFromSavings(db, ctx, loanId, date) {
+  function settleFromSavings(db, ctx, loanId, date, amount) {
     G.require(ctx, "loan.repay");
     const loan = getLoan(db, loanId); stateMust(loan, "Active");
     if (loan.dateUnknown || !dates.isISO(loan.date)) throw new Error("BAD_STATE: the loan's start date is not established, so it cannot be settled from savings");
@@ -851,12 +851,17 @@
     if (L.activeTransactions(db).some((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > date)) throw new Error("BAD_STATE: a repayment is recorded after " + date + "; a settlement from savings cannot come before it");
     const owed = L.loanOutstanding(loan, db, date), savings = L.memberVerifiedSavingsAsOf(db, loan.memberId, date);
     if (!(owed > 0)) throw new Error("BAD_STATE: nothing is owed on " + date);
-    if (savings < owed) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach the amount owed " + owed + " on " + date + "; interest keeps running and nothing is deducted");
-    const w = L.loanInterestPosition(loan, db, date), interest = w.unpaidInterest + (w.unpaidPenalties || 0);
-    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: owed, type: "Loan Repayment", purpose: "Loan settled from savings (offset): interest " + interest + ", loan " + (owed - interest), loanId: loan.id, viaSavings: true,
-      offset: { interest, principal: owed - interest, savingsBefore: savings, savingsAfter: savings - owed } });
+    /* The amount is freely adjustable: leave it out to settle everything owed, or give any amount up to what is owed (and up to the member's savings) to part-pay the loan. */
+    const part = amount !== undefined && amount !== null && amount !== "";
+    const take = part ? Number(amount) : owed;
+    if (!(take > 0)) throw new Error("INVALID: amount");
+    if (take > owed) throw new Error("OVERPAYMENT: the amount is more than is owed (" + owed + ") on " + date);
+    if (savings < take) throw new Error("INSUFFICIENT_SAVINGS: savings " + savings + " do not reach " + take + " on " + date + (part ? "" : "; interest keeps running and nothing is deducted"));
+    const w = L.loanInterestPosition(loan, db, date), due = w.unpaidInterest + (w.unpaidPenalties || 0), interest = Math.min(take, due), principal = take - interest, full = take === owed;
+    const entry = G.createEntry(db, ctx, { date, memberId: loan.memberId, amount: take, type: "Loan Repayment", purpose: (full ? "Loan settled from savings (offset)" : "Part of the loan paid from savings (offset)") + ": interest " + interest + ", loan " + principal, loanId: loan.id, viaSavings: true,
+      offset: { interest, principal, savingsBefore: savings, savingsAfter: savings - take, owedAfter: owed - take } });
     if (entry.approvalStatus === "Approved") onRepaymentCounted(db, ctx, entry);
-    G.audit(db, ctx, "Loan", loan.id, "Settled from savings", { owed, savings }, { offset: owed, interest, principal: owed - interest, savingsAfter: savings - owed, date, entry: entry.id }, "Savings covered the loan; interest cleared first, then the loan; no cash movement");
+    G.audit(db, ctx, "Loan", loan.id, full ? "Settled from savings" : "Part-paid from savings", { owed, savings }, { offset: take, interest, principal, savingsAfter: savings - take, owedAfter: owed - take, date, entry: entry.id }, full ? "Savings covered the loan; interest cleared first, then the loan; no cash movement" : "Savings part-paid the loan, interest first, then the loan; the loan stays open; no cash movement");
     return loan;
   }
   /* Read-only: for each running loan, the first date its member's savings covered the amount owed (checked on the day it was fully paid out, on every day the member had an entry, and today),
@@ -2262,16 +2267,9 @@
   const FIELDS = ["intro", "request", "stewardship", "scripture", "thanks", "signature"];
   /* Wording only. NO amounts, dates or rates appear here: those are filled from the ledger and the configuration. The scripture is configurable; the signature too. */
   const DEFAULT_TEMPLATES = {
-    FRIENDLY: { intro: "As we approach the annual SOB Savings Group share-out, we respectfully remind you of your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans affect the group's obligations. These funds belong to fellow members who have entrusted them to our collective stewardship.",
-      request: "Kindly settle your balance by {deadline}. Loans still unpaid after that date will be forwarded to Church Administration, and then to the Bishop, who has requested the list of members with outstanding loans.", thanks: "Thank you for your cooperation and commitment.", scripture: "1 Corinthians 4:2 — Faithfulness in stewardship.", signature: "SOB Savings Group Administration." },
-    URGENT: { intro: "This is an urgent reminder regarding your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group's obligations.",
-      request: "Your name and outstanding balance will be forwarded to Church Administration if this loan remains unpaid. Please settle by {deadline}; after that date the Bishop has requested the list of members with outstanding loans.", thanks: "Please treat this matter with the seriousness it deserves and give it your prompt attention.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", signature: "SOB Savings Group Administration." },
-    FINAL: { intro: "This is a final notice regarding your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group’s obligations and the reputation of the Church.",
-      request: "If payment is not received by {deadline}, your name and outstanding balance will be submitted to Church Administration. The Bishop has requested the list of members with outstanding loans after this date.",
-      thanks: "Please treat this matter with urgency and settle your balance immediately.", scripture: "", signature: "SOB Savings Group Administration." }
+    FRIENDLY: { intro: "SOB reminder:", stewardship: "", request: "Kindly pay by {deadline}; unpaid loans go to Church Administration, then the Bishop.", thanks: "", scripture: "", signature: "" },
+    URGENT: { intro: "SOB URGENT:", stewardship: "", request: "Pay by {deadline} or your name goes to Church Administration and the Bishop.", thanks: "", scripture: "", signature: "" },
+    FINAL: { intro: "SOB FINAL NOTICE:", stewardship: "", request: "Pay by {deadline} or your name goes to Church Administration and the Bishop.", thanks: "", scripture: "", signature: "" }
   };
   const DEFAULTS = { shareOutDate: null, deadline: null, loanDeadlines: {}, urgentDays: 30, finalDays: 7, minIntervalDays: 7 };
 
@@ -2400,13 +2398,11 @@
     const f = figures(db, loan, asOf); if (f.totalOutstanding <= 0) throw new Error("SETTLED: this loan has no balance outstanding; no reminder is needed");
     const sch = schedule(db, cfg, loan, asOf); if (sch.error) throw new Error(sch.error);
     const T = cfg.templates[level], vars = { name: member.name, id: member.id, deadline: fullDate(sch.deadline), daysToDeadline: String(Math.abs(sch.daysToDeadline)), shareOutDate: fullDate(sch.shareOutDate), daysToShareOut: String(sch.daysToShareOut) };
-    const L1 = ["Dear " + member.name + ",", "", "Praise the Lord.", "", fill(T.intro, vars), "", "Loan Disbursement Date: " + fullDate(f.disbursed), "Loan Principal: " + money(f.principal), "Accrued Interest: " + money(f.accruedInterest)];
-    if (f.unpaidPenalties > 0) L1.push("Unpaid Penalties: " + money(f.unpaidPenalties));
-    if (f.repaid > 0) L1.push("Repayments Received: " + money(f.repaid));
-    L1.push("*Total Balance Due: " + money(f.totalOutstanding) + "*", "Payment Deadline: " + fullDate(sch.deadline), "");
-    [T.stewardship, T.request, T.thanks].forEach((x) => { const t = fill(x || "", vars).trim(); if (t) L1.push(t, ""); });
-    if (String(T.scripture || "").trim()) L1.push("_" + fill(T.scripture, vars) + "_", "");
-    L1.push(fill(T.signature, vars));
+    /* ONE short message (the length of a single SMS, about 160 characters): who, what is owed, by when. Nothing else unless the committee adds wording in Settings. */
+    const part = (x) => fill(x || "", vars).trim(), tail = ["stewardship", "thanks", "scripture", "signature"].map((k) => part(T[k])).filter(Boolean).join(" ");
+    const build = (nm) => [part(T.intro), nm + ", your loan balance is " + money(f.totalOutstanding) + ".", part(T.request), tail].filter(Boolean).join(" ").replace(/\s+/g, " ");
+    let text = build(member.name); if (text.length > 160 && /\s/.test(member.name.trim())) text = build(member.name.trim().split(/\s+/)[0]);
+    const L1 = [text];
     return { text: L1.join("\n"), figures: f, schedule: sch, level, member: { id: member.id, name: member.name } };
   }
   /* Private chat only: wa.me/<number>?text=... Never a group, never a number the member did not register. */
@@ -2605,9 +2601,38 @@
   function receiptText(db, e, asOf) {
     const k = RECEIPT_KIND[e.type], amount = money(e.amount), day = D.isISO(e.date) ? Number(e.date.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(e.date.slice(5, 7)) - 1] : "";
     const sav = Math.round(L.memberPosition(db, e.memberId).savings), loans = L.activeLoans(db).filter((l) => !l.voided && l.memberId === e.memberId && /^Active$/i.test(String(l.status))), owed = Math.round(loans.reduce((x, l) => x + L.loanOutstanding(l, db, asOf), 0));
+    if (e.type === "Loan Repayment" && e.viaSavings) {          // paid from the member's own savings: say so plainly (no cash came in)
+      const all = owed <= 0, h2 = (d) => "SOB: " + (all ? "Your loan was fully paid from your savings (" + amount + ")" : amount + " of your loan was paid from your savings") + (d && day ? " on " + day : "") + ".", sb2 = " Savings bal " + money(sav) + ".", lb2 = all ? " Loan cleared." : " Loan bal " + money(owed) + ".";
+      for (const t of [h2(true) + sb2 + lb2, h2(false) + sb2 + lb2, h2(false) + lb2]) if (t.length <= RECEIPT_MAX) return t; return h2(false);
+    }
     const head = (d) => "SOB: " + k[0] + " " + amount + " " + k[1] + (d && day ? " " + day : "") + ".", sb = " Savings bal " + money(sav) + ".", lb = owed > 0 ? " Loan bal " + money(owed) + "." : (e.type === "Loan Repayment" ? " Loan cleared." : "");
     for (const t of [head(true) + sb + lb, head(false) + sb + lb, head(false) + sb, head(false)]) if (t.length <= RECEIPT_MAX) return t;
     return head(false);
+  }
+  /* ---------- INTEREST RELIEF NOTICE ----------
+     When the interest on a loan was reduced by stopping it (Lock interest), the member is told how many months of interest now apply instead of how many would have, and how much was taken off.
+     Facts come from the loan's own records; the officer chooses who is told and presses Send; each loan is told once per lock. Nothing here changes a loan, an entry or a balance. */
+  function interestRelief(db, asOf) {
+    asOf = asOf || D.todayISO();
+    return (db.loans || []).filter((l) => !l.voided && l.status === "Active" && (l.interestLocks || []).length && D.isISO(l.date)).map((l) => {
+      const open = Object.assign({}, l, { interestLocks: [] }), monthsNow = L.loanMonthsAfterGrace(l, asOf), monthsBefore = L.loanMonthsAfterGrace(open, asOf);
+      const cut = Math.max(0, Math.round(L.loanAccumulatedInterest(open, asOf, db) - L.loanAccumulatedInterest(l, asOf, db))), key = "relief:" + l.id + ":" + (l.interestLocks || []).map((x) => x.from + ">" + (x.to || "")).join(",");
+      const told = (db.outbox || []).some((m) => m.dedupeKey === key && m.status !== "CANCELLED" && m.status !== "FAILED");
+      const owed = Math.round(L.loanOutstanding(l, db, asOf)), member = (db.members || []).find((m) => m.id === l.memberId) || {};
+      const text = "SOB: Good news. Interest on your loan is now charged for " + monthsNow + " month" + (monthsNow === 1 ? "" : "s") + " instead of " + monthsBefore + ", to help you pay. Interest reduced by " + money(cut) + ". Loan bal " + money(owed) + ".";
+      return { loanId: l.id, memberId: l.memberId, name: member.name || l.memberName || l.memberId, monthsNow, monthsBefore, cut, owed, key, told, hasPhone: !!N.normalizePhone(member.phone), text, eligible: cut > 0 && monthsBefore > monthsNow };
+    });
+  }
+  function sendInterestRelief(db, ctx, a) {
+    G.require(ctx, "loan.editInterest"); const ids = (a && a.loanIds) || []; if (!ids.length) throw new Error("REQUIRED: choose at least one loan");
+    const by = {}; interestRelief(db, ctx.today).forEach((r) => { by[r.loanId] = r; }); const out = { queued: [], skipped: [] };
+    ids.forEach((id) => { const r = by[id];
+      if (!r || !r.eligible) return out.skipped.push({ loanId: id, why: "no interest reduction to report" });
+      if (r.told) return out.skipped.push({ loanId: id, why: "already told" });
+      const m = N.queue(db, ctx, { memberId: r.memberId, template: "transactionReceipt", vars: { text: r.text }, dedupeKey: r.key, channel: "SMS" });
+      G.audit(db, ctx, "ReceiptSms", m.id, "Interest relief notice", null, { loanId: id, memberId: r.memberId, monthsNow: r.monthsNow, monthsBefore: r.monthsBefore, cut: r.cut, status: m.status }, "Member told that interest was reduced");
+      out.queued.push({ loanId: id, msgId: m.id, status: m.status, reason: m.reason }); });
+    return out;
   }
   /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
   function receiptAfter(db, ctx, name, args, result) {
@@ -2688,7 +2713,7 @@
     G.audit(db, ctx, "AutoReminderRun", today, "Automatic reminders run", null, { sent: out.sent.length, skipped: out.skipped.length, failed: out.failed.length, stages: out.sent.map((x) => x.memberId + ":" + x.stage) }, "Scheduled daily run");
     return out;
   }
-  return { getReceipts, setReceipts, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
+  return { getReceipts, setReceipts, interestRelief, sendInterestRelief, receiptAfter, sendReceipts, receiptText, getAuto, setAuto, autoRun, AUTO_DEFAULTS, STAGE_LABEL, getEscalation, setEscalation, escalationPlan, queueEscalation, KEY, LEVELS, LEVEL_LABEL, DELIVERY, DELIVERY_LABEL, FOLLOW, FOLLOW_LABEL, PLACEHOLDERS, FIELDS, DEFAULT_TEMPLATES, SMS_TEMPLATES, composeSms, getConfig, setSettings, setDates, figures, candidates, schedule, recommendedLevel, compose, waLink, prepare, prepareMany, revalidate, markOpened, queueSms, syncSms, confirmSent, setFollowUp, cancel, daysBetween, eatTime, eatDate, money };
 });
 
 /* src/core/commands.js */
@@ -2797,7 +2822,7 @@
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
     disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }),
-    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date),
+    settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date, a.amount),
     addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
     recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
@@ -2884,6 +2909,7 @@
     prepareReminders: (db, ctx, a) => RM.prepareMany(db, ctx, { loanIds: a.loanIds, level: a.level }),
     revalidateReminder: (db, ctx, a) => RM.revalidate(db, ctx, { id: a.id }),
     markReminderOpened: (db, ctx, a) => RM.markOpened(db, ctx, { id: a.id }),
+    sendInterestRelief: (db, ctx, a) => RM.sendInterestRelief(db, ctx, { loanIds: a.loanIds }),
     queueReminderSms: (db, ctx, a) => RM.queueSms(db, ctx, { id: a.id }),
     setEscalation: (db, ctx, a) => RM.setEscalation(db, ctx, { steps: a.steps, reason: a.reason }),
     queueEscalation: (db, ctx, a) => RM.queueEscalation(db, ctx, { step: a.step }),
@@ -2914,7 +2940,7 @@
     correctEntryAmount: { perm: "reconcile.manage", label: "Correct a savings deposit's amount to the source record" },
     closeYearBalances: { perm: "reconcile.manage", label: "Close members' brought-forward balances at the share-out date" },
     postOutstandingWithdrawal: { perm: "ledger.create", label: "Post a confirmed withdrawal that was not yet entered" },
-    settleLoanFromSavings: { perm: "loan.repay", label: "Settle a loan from the member's savings" },
+    settleLoanFromSavings: { perm: "loan.repay", label: "Pay a loan from the member's savings (all or part)" },
     addDisbursement: { perm: "loan.disburse", label: "Add a further payout to a running loan" },
     splitRepayment: { perm: "reconcile.manage", label: "Split a consolidated repayment into its dated repayments" },
     correctEntryDate: { perm: "reconcile.manage", label: "Correct a transaction's date" },
@@ -3691,7 +3717,7 @@
   /* MEMBER STATEMENT: only the member's own savings, deposits, withdrawals, profit, loan obligations, balances and transaction history.
      Removed here, not merely hidden: internal references, correction/audit notes, reserve information, guarantor names, interest working, register evidence, officers' decisions. */
   const INTERNAL_TEXT = /correct|void|restor|reclass|adjust|audit|reconcil|reserve|write.?off|offset|error|mistake|duplicate|evidence|register|legacy|migrat|import|placeholder|not established|SOB-\d|\bLN-|\bTX-|\bAPR-|\bAUD-/i;
-  const safeDetail = (d) => { const t = String(d || "").trim(); return t && t.length <= 80 && !INTERNAL_TEXT.test(t) ? t : (/^Part \d+ of \d+ of one loan/.test(t) ? t : ""); };
+  const safeDetail = (d) => { const t = String(d || "").trim(); return t && t.length <= 80 && !INTERNAL_TEXT.test(t) && !/TXN-|dated part/i.test(t) ? t : (/^Part \d+ of \d+ of one loan/.test(t) ? t : ""); };
   function memberSafe(a) {
     const loans = a.loans.map((l) => ({ kind: l.kind, ref: l.ref, status: l.status, payouts: l.payouts.map((x) => ({ n: x.n, date: x.date, amount: x.amount, ref: "" })), principal: l.principal, dateText: l.dateKnown ? l.dateText : "To be confirmed", dateKnown: l.dateKnown, date: l.date, disbursementRef: "", disbursementDate: l.disbursementDate,
       monthlyInterest: l.monthlyInterest, graceMonths: l.graceMonths, working: "", accruedInterest: l.accruedInterest, interestPaid: l.interestPaid, interestDue: l.interestDue, penalties: l.penalties, penaltiesDue: l.penaltiesDue, principalPaid: l.principalPaid, principalLeft: l.principalLeft,
@@ -3709,7 +3735,7 @@
   const NEGTXT = /^\s*(UGX\s*)?[-\u2212]\s*(UGX\s*)?[\d,]+(\.\d+)?\s*$/;
   const acctText = (v) => { if (typeof v === "number") return v < 0 ? { t: "(" + Math.abs(v).toLocaleString("en-US") + ")", neg: true } : { t: v.toLocaleString("en-US"), neg: false };
     const x = v == null ? "" : String(v); if (NEGTXT.test(x)) return { t: "(" + x.replace(/[-\u2212]\s*/, "").trim() + ")", neg: true }; return { t: x, neg: false }; };
-  const tbl = (cols0, rows, cls) => { const cols = cols0.filter((c) => !c.adm || ADM); return '<table class="d' + (cls ? " " + cls : "") + '"><thead><tr>' + cols.map((c) => '<th class="' + (c.n ? "n" : "") + '">' + esc(c.h) + "</th>").join("") + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + cols.map((c) => (() => { const a = c.n ? acctText(c.f ? c.f(r) : r[c.k]) : { t: c.f ? c.f(r) : r[c.k], neg: false }; return '<td class="' + (c.n ? "n" : "") + (a.neg ? " neg" : "") + (c.k === "ref" ? " ref" : c.k === "type" ? " nw" : "") + '">' + esc(a.t) + "</td>"; })()).join("") + "</tr>").join("") + "</tbody></table>"; };
+  const tbl = (cols0, rows, cls) => { const cols = cols0.filter((c) => (!c.adm || ADM) && !c.hide); return '<table class="d' + (cls ? " " + cls : "") + '"><thead><tr>' + cols.map((c) => '<th class="' + (c.n ? "n" : "") + '">' + esc(c.h) + "</th>").join("") + "</tr></thead><tbody>" + rows.map((r) => "<tr>" + cols.map((c) => (() => { const a = c.n ? acctText(c.f ? c.f(r) : r[c.k]) : { t: c.f ? c.f(r) : r[c.k], neg: false }; return '<td class="' + (c.n ? "n" : "") + (a.neg ? " neg" : "") + (c.k === "ref" ? " ref" : c.k === "type" ? " nw" : "") + '">' + esc(a.t) + "</td>"; })()).join("") + "</tr>").join("") + "</tbody></table>"; };
   const kv = (rows0, cls) => { const rows = rows0.filter((r) => r[3] !== "adm" || ADM); return '<table class="sum ' + (cls || "") + '">' + rows.map((r) => "<tr" + (r[2] ? ' class="' + r[2] + '"' : "") + "><th>" + esc(r[0]) + '</th><td class="n' + (acctText(r[1]).neg ? " neg" : "") + '">' + esc(typeof r[1] === "number" ? (r[1] < 0 ? "UGX (" + Math.abs(r[1]).toLocaleString("en-US") + ")" : ugx(r[1])) : acctText(r[1]).t) + "</td></tr>").join("") + "</table>"; };
   const ST_CSS = '<style>.idb{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;border:1px solid #d5ddec;border-radius:6px;padding:8px 12px;background:#f9fbfe;margin:6px 0 10px}.idb div{display:flex;gap:8px}.idb b{min-width:92px;color:#41506b;font-weight:600}.sec{font-size:13px;color:#0f2a56;margin:14px 0 4px;border-bottom:2px solid #b8892b;padding-bottom:2px;break-after:avoid}table.sum td.neg,table.d td.neg{color:#b3261e}table.sum tr.tot th,table.sum tr.tot td{border-top:2px solid #0f2a56;font-size:13px;color:#0f2a56}table.sum tr.sub th{padding-left:26px;font-weight:500}.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;background:#e1f5ec;color:#0a6e4c}.pill.w{background:#fbefd6;color:#8f5a08}.cf{font-size:10.5px;color:#41506b;margin:4px 0}.lh{display:flex;justify-content:space-between;align-items:baseline;margin:12px 0 2px;break-after:avoid}.lh b{font-size:13px;color:#0f2a56}table.d td{font-size:11px}.conf{border:1px dashed #b8892b;background:#fdf8ea;color:#5d430a;font-size:10px;padding:5px 8px;border-radius:5px;margin:8px 0}.box{break-inside:avoid}td.ref{white-space:nowrap;font-size:9.5px;letter-spacing:-.15px}td.nw{white-space:nowrap}table.d{break-inside:auto}</style>';
 
@@ -3717,34 +3743,34 @@
     meta = Object.assign({}, meta || {}); ADM = a.audience === "admin";   // anything not explicitly an Administrative statement is printed as a Member statement
     const s = a.savings, p = a.period, M = a.member;
     let h = ST_CSS + '<div class="idb"><div><b>Member</b><span>' + esc(M.name) + "</span></div><div><b>Member ID</b><span>" + esc(M.id) + "</span></div><div><b>Phone</b><span>" + esc(M.phone || "—") + "</span></div><div><b>Status</b><span>" + esc(M.status || "—") + "</span></div><div><b>Member since</b><span>" + esc(M.regDate ? dates.toDisplay(M.regDate) : "—") + "</span></div><div><b>Statement no.</b><span>" + esc(a.ref) + "</span></div><div><b>Period</b><span>" + esc(p.text) + "</span></div><div><b>Issued</b><span>" + esc(a.generated) + "</span></div></div>";
-    h += ADM ? '<div class="conf">ADMINISTRATIVE STATEMENT — INTERNAL. For authorised officers only: it contains reconciliations, internal references and audit notes. Do not give or send this to the member (use the Member statement). Figures are in Uganda Shillings (UGX).</div>'
-      : '<div class="conf">CONFIDENTIAL — prepared for the named member only. Please do not forward. Figures are in Uganda Shillings (UGX).</div>';
+    h += ADM ? '<div class="conf">ADMINISTRATIVE — INTERNAL. Officers only; do not send to the member. Amounts in UGX.</div>'
+      : '<div class="conf">Confidential — for the named member only. Amounts in UGX.</div>';
     const full = a.mode !== "loan"; let k = 0; const sec = (t) => '<h3 class="sec">' + (++k) + ". " + t + "</h3>";
-    if (full) h += sec("Savings summary") + kv((s.fy ? [["Balance Brought Forward into " + s.fy.label + " (officer-recorded)", s.opening]].concat(s.fy.hasPrevious ? [["Previous year closing position (not carried over automatically)", s.fy.previousClosing], ["Held in the club consolidated position", s.fy.notBroughtForward]] : []) : [["Savings balance at the start of the period" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening]]).concat([ ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]]).concat(s.offsets ? [["Offset against a loan (approved)", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Savings position as at " + dates.longDate(p.to) + " (closing savings)", s.closing, "tot"]])) + '<div class="cf">Savings position = savings + profit − withdrawals − share-outs. Loans are NOT deducted from it.</div>' + (a.loans.length ? sec("Owed to SOB (shown separately — not deducted from savings)") + kv([["Loan still owed", a.loans.reduce((x, l) => x + l.principalLeft, 0)], ["Interest and penalties still due", a.loans.reduce((x, l) => x + l.interestDue + l.penaltiesDue, 0)], ["Total owed on current loans", a.loanTotals.owed, "tot"]]) : "");
+    if (full) h += sec("Savings summary") + kv((s.fy ? [["Balance brought forward into " + s.fy.label, s.opening]] : [["Savings balance at the start of the period" + (p.from ? " (" + dates.longDate(dates.addDays(p.from, -1)) + ")" : ""), s.opening]]).concat([ ["Savings deposited", s.deposits], ["Profit credited", s.profit], ["Withdrawals", -s.withdrawals], ["Annual share-outs paid", -s.shareOuts]]).concat(s.offsets ? [["Paid to loan from savings", -s.offsets]] : []).concat(s.other ? [["Other adjustments", s.other]] : []).concat([["Savings balance as at " + dates.longDate(p.to), s.closing, "tot"]])) + (a.loans.length ? sec("Owed to SOB") + kv([["Loan still owed", a.loans.reduce((x, l) => x + l.principalLeft, 0)], ["Interest and penalties still due", a.loans.reduce((x, l) => x + l.interestDue + l.penaltiesDue, 0)], ["Total owed on current loans", a.loanTotals.owed, "tot"]]) : "");
     if (full && (ADM || !s.checks.movementsAddUp)) h += '<div class="cf">Check: opening ' + num(s.opening) + " + movements " + num(s.net) + " = closing " + num(s.closing) + (s.checks.movementsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE — report to the Treasurer</span>') + "</div>";
-    if (full && a.years.length) h += sec("By financial year (share-out to share-out)") + tbl([{ h: "Year", f: (y) => y.label + " (" + dates.toDisplay(y.opened) + " – " + (y.closed ? dates.toDisplay(y.closed) : "open") + ")" }, { h: "Brought forward", n: 1, f: (y) => num(y.opening) }, { h: "Deposits", n: 1, f: (y) => num(y.deposits) }, { h: "Profit", n: 1, f: (y) => num(y.profit) }, { h: "Withdrawn", n: 1, f: (y) => num(y.withdrawals) }, { h: "Share-out", n: 1, f: (y) => num(y.shareOuts) }, { h: "Closing", n: 1, f: (y) => num(y.closing) + (y.open ? "*" : "") }], a.years) + '<div class="cf">*Open year, to date. Each year stands alone: nothing is carried into the next year unless an officer records a Balance Brought Forward.</div>';
+    const yrs = a.years.filter((y) => !p.from || !y.closed || y.closed > p.from);   // a year that closed on the day this period starts belongs to the previous period: not shown
+    if (full && yrs.length > 1) h += sec("By financial year") + tbl([{ h: "Year", f: (y) => y.label + " (" + dates.toDisplay(y.opened) + " – " + (y.closed ? dates.toDisplay(y.closed) : "open") + ")" }, { h: "Brought forward", n: 1, f: (y) => num(y.opening) }, { h: "Deposits", n: 1, f: (y) => num(y.deposits) }, { h: "Profit", n: 1, f: (y) => num(y.profit) }, { h: "Withdrawn", n: 1, f: (y) => num(y.withdrawals) }, { h: "Share-out", n: 1, f: (y) => num(y.shareOuts) }, { h: "Closing", n: 1, f: (y) => num(y.closing) }], yrs);
     if (full && ADM) h += '<div class="box">' + sec("Year-end savings and the General Reserve Fund") + '<div class="cf">' + esc(a.reserve.text) + "</div></div>";
     h += sec(full ? "Loans" : "Loan details");
     if (!a.loans.length && !a.earlier.length) h += '<div class="cf">No loans on record for this member in the period.</div>';
     a.loans.forEach((l) => {
       h += '<div class="box"><div class="lh"><b>Loan ' + esc(l.ref) + '</b><span class="pill ' + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Loan paid out", l.principal], ["Date paid out", l.dateText], ["Payout entry", l.disbursementRef || "—", "", "adm"], ["Agreed interest per month", l.monthlyInterest], ["Grace period", l.graceMonths ? l.graceMonths + " month" + (l.graceMonths === 1 ? "" : "s") + (ADM ? " (authorised by the Chairperson)" : "") : "None — interest runs from the first payout"]]) +
-        (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts as ONE loan; interest counts from the first payout (" + dates.toDisplay(l.payouts[0].date) + "):</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref", adm: 1 }], l.payouts) : "") +
-        (ADM ? '<div class="cf">Interest working: ' + esc(l.working) + "</div>" : '<div class="cf">Interest is UGX ' + num(l.monthlyInterest) + " per month until the 2027 financial year opens; from then it reduces as the loan is repaid. Each repayment clears unpaid interest first, then the loan itself.</div>") +
+        (l.payouts.length > 1 ? '<div class="cf">Paid out in ' + l.payouts.length + " parts:</div>" + tbl([{ h: "Part", f: (r) => String(r.n) }, { h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "Source", k: "ref", adm: 1 }], l.payouts) : "") +
         kv([["Loan paid out", l.principal], ["Interest charged to date", l.accruedInterest, "sub"], ["Interest paid", l.interestPaid, "sub"], ["Interest still due", l.interestDue, "sub"], ["Loan repaid so far", l.principalPaid], ["Loan still owed", l.principalLeft]].concat(l.penalties ? [["Penalties still due", l.penaltiesDue]] : []).concat([["TOTAL OWED as at " + dates.longDate(p.to), l.totalOwed, "tot"]])) +
-        (ADM ? '<div class="cf">Working: loan still owed ' + num(l.principalLeft) + " + interest still due " + num(l.interestDue) + (l.penaltiesDue ? " + penalties " + num(l.penaltiesDue) : "") + " = " + num(l.totalOwed) + (l.checks.partsAddUp ? ' <span class="pill">agrees with the ledger</span>' : ' <span class="pill w">DOES NOT AGREE</span>') + "</div>" : (l.checks.partsAddUp ? "" : '<div class="cf"><span class="pill w">Please ask the Treasurer to check this loan</span></div>')) +
-        (l.repayments.length ? tbl([{ h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Reference", k: "ref", adm: 1 }, { h: "Paid", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => num(r.interest) }, { h: "To loan", n: 1, f: (r) => num(r.principal) }, { h: "Loan left", n: 1, f: (r) => num(r.principalLeft) }], l.repayments) : '<div class="cf">No repayments recorded yet. ' + esc(l.rule) + "</div>") +
+        (l.checks.partsAddUp ? "" : '<div class="cf"><span class="pill w">' + (ADM ? "DOES NOT AGREE with the ledger" : "Please ask the Treasurer to check this loan") + "</span></div>") +
+        (l.repayments.length ? tbl([{ h: "Date", f: (r) => dates.toDisplay(r.date) }, { h: "Reference", k: "ref", adm: 1 }, { h: "Paid", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => num(r.interest) }, { h: "To loan", n: 1, f: (r) => num(r.principal) }, { h: "Loan left", n: 1, f: (r) => num(r.principalLeft) }], l.repayments) : '<div class="cf">No repayments yet.</div>') +
         (ADM && l.guarantors.length ? '<div class="cf">Guarantors: ' + l.guarantors.map((g) => esc(g.name) + " (" + esc(g.id) + ") " + num(g.amount)).join("; ") + "</div>" : "") + "</div>";
     });
     if (a.loans.length > 1) h += kv([["Total owed on current loans", a.loanTotals.owed, "tot"]]);
-    a.earlier.forEach((l) => {
+    a.earlier.filter((l) => !(p.from && dates.isISO(l.date) && l.date < p.from && !l.totalOwed)).forEach((l) => {      // an earlier loan already settled before this period is not part of it
       h += '<div class="box"><div class="lh"><b>' + (ADM ? "Earlier loan " + esc(l.ref) + " (before the current register)" : "Earlier loan" + (l.dateText ? " (" + esc(l.dateText) + ")" : "")) + "</b><span class=\"pill " + (l.totalOwed ? "w" : "") + '">' + esc(l.status) + "</span></div>" + kv([["Paid out", l.disbursed], ["Interest charged", l.interestCharged], ["Interest received", -l.interestReceived], ["Loan repaid", -l.principalRepaid]].concat(l.writtenOff ? [[ADM ? "Written off (approved)" : "Approved adjustment", -l.writtenOff]] : []).concat([["Still owed", l.totalOwed, "tot"]])) +
-        tbl([{ h: "Date", k: "date" }, { h: "Event", k: "event" }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => (r.interest === "" ? "" : num(r.interest)) }, { h: "To loan", n: 1, f: (r) => (r.principal === "" ? "" : num(r.principal)) }, { h: "Owed after", n: 1, f: (r) => num(r.owedAfter) }], l.rows) + "</div>";
+        tbl([{ h: "Date", k: "date" }, { h: "Event", f: (r) => ADM ? r.event : String(r.event || "").replace(/\s*\(decision #\d+\)/i, "") }, { h: "Amount", n: 1, f: (r) => num(r.amount) }, { h: "To interest", n: 1, f: (r) => (r.interest === "" ? "" : num(r.interest)) }, { h: "To loan", n: 1, f: (r) => (r.principal === "" ? "" : num(r.principal)) }, { h: "Owed after", n: 1, f: (r) => num(r.owedAfter) }], l.rows) + "</div>";
     });
-    if (full) h += sec("Every transaction") + tbl([{ h: "Date", f: (t) => dates.toDisplay(t.date) }, { h: "Ref", k: "ref", adm: 1 }, { h: "Transaction", k: "type" }, { h: "Details", k: "details" }, { h: "Amount", n: 1, f: (t) => num(t.amount) }, { h: "Effect on savings", n: 1, f: (t) => num(t.effect) }, { h: "Savings balance", n: 1, f: (t) => num(t.balance) }], a.transactions);
+    if (full) h += sec("Every transaction") + tbl([{ h: "Date", f: (t) => dates.toDisplay(t.date) }, { h: "Ref", k: "ref", adm: 1 }, { h: "Transaction", k: "type" }, { h: "Details", k: "details", hide: ADM ? false : !a.transactions.some((t) => t.details) }, { h: "Amount", n: 1, f: (t) => num(t.amount) }, { h: "Effect on savings", n: 1, f: (t) => num(t.effect) }, { h: "Savings balance", n: 1, f: (t) => num(t.balance) }], a.transactions);
     if (full && !a.transactions.length) h += '<div class="cf">No transactions in this period.</div>';
-    if (ADM && a.notes.length) h += sec("Corrections and audit notes") + '<div class="cf">Nothing is overwritten: each correction sits beside the original and is recorded in the audit trail.</div>' + tbl([{ h: "Date", f: (n) => dates.toDisplay(n.date) }, { h: "Reference", k: "ref" }, { h: "Note", k: "note" }], a.notes.slice(0, 60)) + (a.notes.length > 60 ? '<div class="cf">…and ' + (a.notes.length - 60) + " more in the audit trail.</div>" : "");
+    if (ADM && a.notes.length) h += sec("Corrections and audit notes") + tbl([{ h: "Date", f: (n) => dates.toDisplay(n.date) }, { h: "Reference", k: "ref" }, { h: "Note", f: (n) => String(n.note || "").replace(/\s*\|\s*evidence:.*$/i, "") }], a.notes.slice(0, 60)) + (a.notes.length > 60 ? '<div class="cf">…and ' + (a.notes.length - 60) + " more in the audit trail.</div>" : "");
     if (ADM && a.internal && (a.pending.length || a.review.length)) h += sec("For the officers: awaiting decision") + (a.pending.length ? tbl([{ h: "Request", k: "ref" }, { h: "Action", k: "label" }, { h: "Detail", k: "summary" }], a.pending) : "") + (a.review.length ? tbl([{ h: "Register item", k: "ref" }, { h: "Kind", k: "kind" }, { h: "Detail", k: "summary" }], a.review) : "");
-    h += '<p class="fine">Issued from the SOB platform; the ledger is the record of truth. ' + (a.checks.all ? "All totals on this statement were checked against the ledger." : "A total on this statement does not agree with the ledger: please report it to the Treasurer.") + "</p>";
+    if (!a.checks.all) h += '<p class="fine">A total on this statement does not agree with the ledger: please report it to the Treasurer.</p>';
     return RP.brandedPage((full ? (ADM ? "Administrative account statement — " : "Member account statement — ") : (ADM ? "Administrative loan statement " : "Loan statement ") + a.loanId + " — ") + M.name + " (" + M.id + ")", h, Object.assign({ period: p.text, generated: a.generated }, meta));
   }
 

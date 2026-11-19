@@ -21,16 +21,9 @@
   const FIELDS = ["intro", "request", "stewardship", "scripture", "thanks", "signature"];
   /* Wording only. NO amounts, dates or rates appear here: those are filled from the ledger and the configuration. The scripture is configurable; the signature too. */
   const DEFAULT_TEMPLATES = {
-    FRIENDLY: { intro: "As we approach the annual SOB Savings Group share-out, we respectfully remind you of your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans affect the group's obligations. These funds belong to fellow members who have entrusted them to our collective stewardship.",
-      request: "Kindly settle your balance by {deadline}. Loans still unpaid after that date will be forwarded to Church Administration, and then to the Bishop, who has requested the list of members with outstanding loans.", thanks: "Thank you for your cooperation and commitment.", scripture: "1 Corinthians 4:2 — Faithfulness in stewardship.", signature: "SOB Savings Group Administration." },
-    URGENT: { intro: "This is an urgent reminder regarding your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group's obligations.",
-      request: "Your name and outstanding balance will be forwarded to Church Administration if this loan remains unpaid. Please settle by {deadline}; after that date the Bishop has requested the list of members with outstanding loans.", thanks: "Please treat this matter with the seriousness it deserves and give it your prompt attention.", scripture: "“Moreover it is required in stewards, that a man be found faithful.” — 1 Corinthians 4:2 (KJV)", signature: "SOB Savings Group Administration." },
-    FINAL: { intro: "This is a final notice regarding your outstanding SOB loan.",
-      stewardship: "Members are waiting for their savings ahead of the share-out, and unpaid loans are affecting the group’s obligations and the reputation of the Church.",
-      request: "If payment is not received by {deadline}, your name and outstanding balance will be submitted to Church Administration. The Bishop has requested the list of members with outstanding loans after this date.",
-      thanks: "Please treat this matter with urgency and settle your balance immediately.", scripture: "", signature: "SOB Savings Group Administration." }
+    FRIENDLY: { intro: "SOB reminder:", stewardship: "", request: "Kindly pay by {deadline}; unpaid loans go to Church Administration, then the Bishop.", thanks: "", scripture: "", signature: "" },
+    URGENT: { intro: "SOB URGENT:", stewardship: "", request: "Pay by {deadline} or your name goes to Church Administration and the Bishop.", thanks: "", scripture: "", signature: "" },
+    FINAL: { intro: "SOB FINAL NOTICE:", stewardship: "", request: "Pay by {deadline} or your name goes to Church Administration and the Bishop.", thanks: "", scripture: "", signature: "" }
   };
   const DEFAULTS = { shareOutDate: null, deadline: null, loanDeadlines: {}, urgentDays: 30, finalDays: 7, minIntervalDays: 7 };
 
@@ -159,13 +152,11 @@
     const f = figures(db, loan, asOf); if (f.totalOutstanding <= 0) throw new Error("SETTLED: this loan has no balance outstanding; no reminder is needed");
     const sch = schedule(db, cfg, loan, asOf); if (sch.error) throw new Error(sch.error);
     const T = cfg.templates[level], vars = { name: member.name, id: member.id, deadline: fullDate(sch.deadline), daysToDeadline: String(Math.abs(sch.daysToDeadline)), shareOutDate: fullDate(sch.shareOutDate), daysToShareOut: String(sch.daysToShareOut) };
-    const L1 = ["Dear " + member.name + ",", "", "Praise the Lord.", "", fill(T.intro, vars), "", "Loan Disbursement Date: " + fullDate(f.disbursed), "Loan Principal: " + money(f.principal), "Accrued Interest: " + money(f.accruedInterest)];
-    if (f.unpaidPenalties > 0) L1.push("Unpaid Penalties: " + money(f.unpaidPenalties));
-    if (f.repaid > 0) L1.push("Repayments Received: " + money(f.repaid));
-    L1.push("*Total Balance Due: " + money(f.totalOutstanding) + "*", "Payment Deadline: " + fullDate(sch.deadline), "");
-    [T.stewardship, T.request, T.thanks].forEach((x) => { const t = fill(x || "", vars).trim(); if (t) L1.push(t, ""); });
-    if (String(T.scripture || "").trim()) L1.push("_" + fill(T.scripture, vars) + "_", "");
-    L1.push(fill(T.signature, vars));
+    /* ONE short message (the length of a single SMS, about 160 characters): who, what is owed, by when. Nothing else unless the committee adds wording in Settings. */
+    const part = (x) => fill(x || "", vars).trim(), tail = ["stewardship", "thanks", "scripture", "signature"].map((k) => part(T[k])).filter(Boolean).join(" ");
+    const build = (nm) => [part(T.intro), nm + ", your loan balance is " + money(f.totalOutstanding) + ".", part(T.request), tail].filter(Boolean).join(" ").replace(/\s+/g, " ");
+    let text = build(member.name); if (text.length > 160 && /\s/.test(member.name.trim())) text = build(member.name.trim().split(/\s+/)[0]);
+    const L1 = [text];
     return { text: L1.join("\n"), figures: f, schedule: sch, level, member: { id: member.id, name: member.name } };
   }
   /* Private chat only: wa.me/<number>?text=... Never a group, never a number the member did not register. */

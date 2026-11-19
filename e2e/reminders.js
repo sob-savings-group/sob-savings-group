@@ -60,7 +60,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* preview = live figures, saves nothing */
   const eng = () => { const db = server(), l = db.loans.find((x) => x.id === l1.id); return L.loanOutstanding(l, db, D.todayISO()); };
   await pg.locator('[data-preview="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-text"); const pv = await pg.innerText("#rem-text");
-  ok(pv.includes("Dear Grace Alpha,") && pv.includes("Total Balance Due: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
+  ok(pv.includes("Grace Alpha, your loan balance is UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
   ok(/Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
   await pg.click(".modal [data-close]");
   /* individual: prepare -> opened (NOT delivered) -> officer confirms */
@@ -84,7 +84,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   const before = eng(); const rp = cmd(adminTok, "repayLoan", { loanId: l2.id, amount: 15000, date: D.todayISO() }); ok(rp.ok, "a repayment is recorded in the ledger (outside this screen)");
   await pg.click("#rem-recalc"); await pg.waitForSelector("#rem-asof"); await pg.locator('[data-preview="' + l2.id + '"]').click(); await pg.waitForSelector("#rem-text");
   const db2 = server(), exp2 = L.loanOutstanding(db2.loans.find((x) => x.id === l2.id), db2, D.todayISO()), t2 = await pg.innerText("#rem-text");
-  ok(t2.includes("Total Balance Due: UGX " + exp2.toLocaleString("en-US")) && t2.includes("Repayments Received: UGX 15,000"), "after the repayment the next reminder shows the new balance (UGX " + exp2.toLocaleString("en-US") + ") and the repayment received"); void before;
+  ok(t2.includes("your loan balance is UGX " + exp2.toLocaleString("en-US")), "after the repayment the next reminder shows the new balance (UGX " + exp2.toLocaleString("en-US") + ")"); void before;
   await pg.click(".modal [data-close]");
   ok(await pg.locator('[data-hist-open]').first().isVisible(), "history offers Open WhatsApp again only through server re-validation");
   const stale = rems().find((r) => r.loanId === l2.id); await pg.locator('[data-hist-open="' + stale.id + '"]').click(); await pg.waitForSelector(".toast.bad"); ok(/changed|STALE|balance/i.test(await pg.innerText(".toast")) && !(await pg.locator("#rem-open-wa").count()), "a reminder made before the repayment is refused as stale — the old balance is never sent");
@@ -103,7 +103,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* confidentiality */
   const treas = tok("TREAS", "treas-pin-1"), memT = tok(M1.id, "1234"), g = (t) => API.handle(env, { action: "getLedger", token: t });
   ok(g(chair).db.reminders.length === 0 && g(treas).db.reminders.length === 0, "Chairperson and Treasurer never receive reminder history or message texts");
-  const mv = g(memT).db; ok(!(mv.reminders && mv.reminders.length) && !JSON.stringify(mv).includes("Praise the Lord"), "a member's view contains no reminder text");
+  const mv = g(memT).db; ok(!(mv.reminders && mv.reminders.length) && !JSON.stringify(mv).includes("your loan balance is"), "a member's view contains no reminder text");
   ok(cmd(treas, "prepareReminder", { loanId: l1.id }).error && /FORBIDDEN/.test(cmd(treas, "prepareReminder", { loanId: l1.id }).error), "the server refuses reminders from the Treasurer even if the browser is tampered with");
   /* Edit contact details in the real UI: a member without a number becomes reminder-ready; only contact fields change; audited; refused for everyone but the Super Admin */
   { const mem3 = () => g(adminTok).db.members.find((m) => m.id === M3.id), moneyNow = () => JSON.stringify(g(adminTok).db.transactions) + JSON.stringify(g(adminTok).db.loans), beforeMoney = moneyNow(), nAud = () => g(adminTok).db.auditLog.filter((x) => x.action === "ContactUpdated").length;

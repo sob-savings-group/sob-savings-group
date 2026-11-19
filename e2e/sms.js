@@ -54,7 +54,7 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   /* preview = live figures, saves nothing */
   const eng = () => { const db = server(), l = db.loans.find((x) => x.id === l1.id); return L.loanOutstanding(l, db, D.todayISO()); };
   await pg.locator('[data-preview="' + l1.id + '"]').click(); await pg.waitForSelector("#rem-text"); const pv = await pg.innerText("#rem-text");
-  ok(pv.includes("Dear Grace Alpha,") && pv.includes("Total Balance Due: UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
+  ok(pv.includes("Grace Alpha, your loan balance is UGX " + eng().toLocaleString("en-US")), "preview shows the member, SOB ID and the engine's total outstanding (UGX " + eng().toLocaleString("en-US") + ")");
   ok(/Calculated from the live ledger/.test(await pg.innerText("#rem-calc")) && rems().length === 0, "calculation timestamp is shown and a preview saves nothing");
   await pg.click(".modal [data-close]");
   const sentSms = []; const live = { live: true, send: (m) => { sentSms.push(m); return { ok: true, providerRef: "" }; } };
