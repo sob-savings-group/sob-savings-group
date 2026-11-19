@@ -714,3 +714,7 @@ header.top .brand img{width:auto}
 #pin-toggle{display:block;width:100%;margin:14px 0 0;padding:13px 14px;border:1.5px solid #c9d6f7;border-radius:12px;background:#f4f7ff;color:#1b4fd8;font-weight:600;font-size:15px;text-decoration:none;text-align:center}
 .login .lg-body label{font-weight:600;margin-top:10px}
 .login .help{margin-top:16px}
+#pin-toggle[hidden],#pw-step[hidden],#id-step[hidden]{display:none!important}
+.who-row{display:flex;align-items:baseline;gap:10px;margin-top:4px}.who-row b{font-size:16px}
+#pw-forgot,#pw-back{background:none;border:0;padding:12px 0;color:#1b4fd8;font-weight:600;text-decoration:none}
+#pw-back{padding:0;font-size:14px;text-decoration:underline}
