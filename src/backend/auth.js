@@ -85,8 +85,14 @@
     const us = (db.users || []).filter((x) => x.status !== "Disabled" && (lc(x.email) === e || ms.some((m) => m.id === x.memberId)));
     return us.length === 1 ? { user: us[0], member: (db.members || []).find((m) => m.id === us[0].memberId) || null } : null;
   }
+  /* A phone number can stand in for the ID when the member has no email: it must match exactly ONE member on record (last 9 digits), otherwise nothing is revealed or sent. */
+  function resolveByPhone(db, ph) {
+    const ms = (db.members || []).filter((m) => [m.phone, m.contact].some((p) => samePhone(p, ph))), us = (db.users || []).filter((x) => x.status !== "Disabled" && ms.some((m) => m.id === x.memberId));
+    return ms.length === 1 && us.length === 1 ? { user: us[0], member: ms[0] } : null;
+  }
+  const looksPhone = (x) => !/[a-z@]/i.test(String(x || "")) && digits(x).length >= 9;
   function resolve(db, ident) {
-    const r = String(ident || "").indexOf("@") > 0 ? resolveByEmail(db, ident) : (() => { const u = findUser(db, ident); return u ? { user: u, member: (db.members || []).find((m) => m.id === u.memberId) || null } : null; })();
+    const r = String(ident || "").indexOf("@") > 0 ? resolveByEmail(db, ident) : looksPhone(ident) ? resolveByPhone(db, ident) : (() => { const u = findUser(db, ident); return u ? { user: u, member: (db.members || []).find((m) => m.id === u.memberId) || null } : null; })();
     return r && r.user.role === "Member" && r.member && !statusKind(r.member.status) ? r : null;
   }
   const newCode = (env) => String(parseInt(env.hash(env.randomToken() + env.randomToken()).slice(0, 8), 16) % 1000000).padStart(6, "0");
