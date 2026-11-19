@@ -22,7 +22,7 @@ const R = require("../src/core/reports.js"), M = require("../src/core/migrate.js
         const t = execSync(`pdftotext -layout -f ${p} -l ${p} ${f} -`).toString();
         ["Sons of Bethel (SOB) Savings Group", "Chairperson", "Treasurer", "Secretary", "Coordinator", "Patron", "Page " + p + " of " + pages].concat(p === 1 ? must : []).forEach((s) => { if (!t.includes(s)) throw new Error(`${k} page ${p} missing: ${s}`); });
         if (/undefined|NaN|\[object|savingsEffect|&amp;|&#/.test(t)) throw new Error(k + " page " + p + " has broken text");
-        if (execSync(`pdfimages -list -f ${p} -l ${p} ${f}`).toString().trim().split("\n").length < 3) throw new Error(`${k} page ${p}: no logo`);
+        if (execSync(`pdfimages -list -f ${p} -l ${p} ${f}`).toString().trim().split("\n").length < 4) throw new Error(`${k} page ${p}: eagle logo and shield must both be present`);
       }
       if (execSync(`pdftoppm -r 40 -png ${f} ${f}.img 2>&1; ls ${f}.img* | wc -l`).toString().trim() < "1") throw new Error(k + ": does not render");
       if (vp.width === 1280) fs.copyFileSync(f, "/tmp/sob-dl-" + k + ".pdf");

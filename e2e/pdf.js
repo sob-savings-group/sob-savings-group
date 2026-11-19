@@ -14,7 +14,7 @@ const R = require("../src/core/reports.js");
   for (let p = 1; p <= pages; p++) {
     const txt = execSync(`pdftotext -f ${p} -l ${p} ${f} -`).toString();
     ["Sons of Bethel (SOB) Savings Group", "Long test report", "Kironde John", "0706 496 404", "Kagimu Francis", "0755 924 822", "Nabawanuka Amina", "0703 154 463", "Ssebadduka Joshua", "0774 020 205", "Kuteesa Waddimba", "+256 772 834 290"].forEach((s) => { if (!txt.includes(s)) throw new Error("page " + p + " missing: " + s); });
-    if (execSync(`pdfimages -list -f ${p} -l ${p} ${f}`).toString().trim().split("\n").length < 3) throw new Error("page " + p + " has no logo");
+    if (execSync(`pdfimages -list -f ${p} -l ${p} ${f}`).toString().trim().split("\n").length < 4) throw new Error("page " + p + " is missing the eagle logo or the shield");
   }
   /* a real member statement + loan statement from synthetic data: plain wording, formatted numbers, positions on top */
   const M = require("../src/core/migrate.js"), L = require("../src/core/ledger.js"), seed = require("../tests/helpers/synth.js").legacyRaw(), db = M.migrateLegacy(seed, "2026-03-31");

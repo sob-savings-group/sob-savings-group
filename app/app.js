@@ -20,9 +20,13 @@
   }
   const act = (fn, okMsg) => async (...a) => { try { st.sentForApproval = false; await fn(...a); if (st.sentForApproval) toast("Sent to the Chairperson — nothing changes until a different person approves it (see Approvals)"); else if (okMsg) toast(okMsg); } catch (e) { toast(friendly(e), true); throw e; } };
 
+  /* ---------- brand: the official eagle/globe logo and the shield-and-tree ALWAYS appear as a pair (one helper, so every screen, and any future module, stays identical) ---------- */
+  const brandMark = (cls) => h("span", { class: "marks " + (cls || "") }, h("img", { class: "logo-eagle", src: R.LOGO, alt: "BWOMI logo" }), h("img", { class: "logo-shield", src: (window.SOB_BRAND || {}).shield || "", alt: "SOB Savings Group shield" }));
+  const splash = (msg) => h("div", { class: "splash", role: "status" }, brandMark("lg"), h("div", { class: "sp-t" }, "Sons of Bethel Savings Group"), h("div", { class: "sp-s" }, msg || "Loading your records…"), h("div", { class: "sp-bar" }, h("i")));
+
   /* ---------- login ---------- */
   function loginScreen() {
-    const box = h("div", { class: "card login" }, st.live ? null : h("div", { class: "lg-head" }, h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "DEV preview — demo data, nothing is saved or sent anywhere.")));
+    const box = h("div", { class: "card login" }, st.live ? null : h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "DEV preview — demo data, nothing is saved or sent anywhere.")));
     if (!st.live) {
       const role = h("select", { id: "demo-role" }, ["Admin", "Chairperson", "Treasurer", "Secretary", "Committee", "Member"].map((r) => h("option", { value: r }, roleLabel(r))));
       const mem = h("select", { id: "demo-member" }, st.db.members.map((m) => h("option", { value: m.id }, m.id + " — " + m.name)));
@@ -78,7 +82,7 @@
       const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time, or forgot your password?"; if (c) rid.value = mid.value; } }, "First time, or forgot your password?");
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "lg-head" }, h("img", { class: "logo", src: R.LOGO, alt: "BWOMI logo" }), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in to your account")),
+      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in to your account")),
         h("div", { class: "lg-body" }, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
           h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
     }
@@ -89,7 +93,7 @@
   /* A PIN printed on a slip (or set by an Admin) is known to someone else: its owner must replace it before anything else is possible (enforced by the server too). */
   function forcePinScreen() {
     const o = h("input", { type: "password", id: "fp-old", autocomplete: "current-password" }), n = h("input", { type: "password", id: "fp-new", autocomplete: "new-password" }), c = h("input", { type: "password", id: "fp-new2", autocomplete: "new-password" });
-    return h("div", { class: "card login", id: "force-pin" }, h("img", { class: "logo", src: R.LOGO, alt: "" }), h("h1", { class: "hero", style: "font-size:28px" }, "Choose your own password"),
+    return h("div", { class: "card login", id: "force-pin" }, brandMark("lg dark"), h("h1", { class: "hero", style: "font-size:28px" }, "Choose your own password"),
       h("p", { class: "tag" }, "Choose a private password: at least 4 characters (members) or 6 (staff)."),
       h("label", null, "Current password (from your slip)"), o, h("label", null, "New password"), n, h("label", null, "Repeat new password"), c,
       h("div", { class: "row" }, h("button", { class: "primary", id: "fp-go", onclick: async () => {
@@ -136,7 +140,7 @@
     const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
     const active = (k) => st.view === k || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
     const shell = h("div", { class: "shell" });
-    shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, h("img", { src: R.LOGO, alt: "BWOMI" }), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
+    shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, brandMark("sm"), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
       h("button", { class: "searchbtn", id: "open-search", "aria-label": "Search", onclick: openSearch }, Icon("search", 18), h("span", null, staff ? "Search screens, members, loans" : "Search"), h("kbd", null, "/")),
       h("div", { class: "hdr-actions" },
       staff && !st.live ? h("span", { class: "pill" }, "DEMO · DEV") : null,
@@ -1091,7 +1095,7 @@ add("Settle from savings", G.can(c, "loan.repay") && loan.status === "Active" &&
   const connBanner = (host, err) => { host.replaceChildren(Banner("bad", "SOB could not reach its records. This is not a problem with your ID or password."), h("div", { class: "hint", id: "login-problem-detail" }, friendly(err)), h("div", { class: "hint" }, "Please tell " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " (" + o[2] + ")").join(" or ") + ".")); };
   async function boot() {
     if (CFG.notConfigured || (!CFG.ledgerUrl && !CFG.demo)) { app.append(State("error", "SOB is not switched on yet. Please contact " + R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1])).map((o) => o[0] + " on " + o[2]).join(" or ") + ".")); return; }
-    app.append(State("loading"));
+    app.append(splash());
     try {
       if (st.live) {
         st.store = S.client.create({ url: CFG.ledgerUrl, fetch: window.fetch.bind(window), session: window.sessionStorage });

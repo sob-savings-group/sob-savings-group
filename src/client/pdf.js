@@ -71,9 +71,9 @@
     const title = textOf(doc.querySelector(".hd .r") || doc.querySelector("title") || doc.body) || "SOB document";
     const groupName = textOf(doc.querySelector(".hd .g") || { childNodes: [] }) || "Sons of Bethel (SOB) Savings Group";
     const subtitle = doc.querySelector(".hd .p") ? textOf(doc.querySelector(".hd .p")) : "";
-    const logoSrc = doc.querySelector(".hd img") ? doc.querySelector(".hd img").getAttribute("src") : "";
+    const hdImgs = Array.from(doc.querySelectorAll(".hd img")), logoSrc = hdImgs[0] ? hdImgs[0].getAttribute("src") : "", shieldSrc = hdImgs[1] ? hdImgs[1].getAttribute("src") : "";
     const officers = Array.from(doc.querySelectorAll(".ft .o > div")).map((d) => { const b = d.querySelector("b"), n = b ? textOf(b) : "", rest = textOf(d).slice(n.length).trim(); return [n, rest]; });
-    const logo = parseJpeg(logoSrc);
+    const logo = parseJpeg(logoSrc), shield = parseJpeg(shieldSrc);
     const pages = []; let page = null, y = 0;
     const newPage = () => { page = { ops: [] }; pages.push(page); y = pages.length === 1 ? HDR1 : HDR2; };
     const bottom = () => FOOT_TOP - 6;
@@ -188,8 +188,10 @@
     pages.forEach((pg, i) => {
       page = pg; const first = i === 0, ops = pg.ops; pg.ops = [];
       const logoH = first ? 52 : 26, lx = ML, ly = first ? 20 : 14;
-      if (logo) { const w = (logo.w / logo.h) * logoH; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(lx) + " " + num(PH - ly - logoH) + " cm /Im1 Do Q"); }
-      const tx = ML + (logo ? (logo.w / logo.h) * logoH + 12 : 0), tw = PW - MR - tx;
+      let mx = ML;   /* the official eagle/globe logo and the shield-and-tree sit side by side at one height */
+      if (logo) { const w = (logo.w / logo.h) * logoH; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx) + " " + num(PH - ly - logoH) + " cm /Im1 Do Q"); mx += w; }
+      if (shield) { const w = (shield.w / shield.h) * logoH, gap = logo ? 4 : 0; pg.ops.push("q " + num(w) + " 0 0 " + num(logoH) + " " + num(mx + gap) + " " + num(PH - ly - logoH) + " cm /Im2 Do Q"); mx += gap + w; }
+      const tx = mx + (logo || shield ? 12 : 0), tw = PW - MR - tx;
       if (first) {
         text(tx, ly + 15, groupName, true, 15, "#0b1f3a");
         const tl = wrap([{ t: title, b: true }], tw, 12); tl.slice(0, 2).forEach((ln, k) => drawLine(ln, tx, ly + 31 + k * 14, 12, tw, "left", NAVY));
@@ -206,7 +208,7 @@
       text(ML, PH - 14, groupName, false, 7.4, "#666666");
       const pn = "Page " + (i + 1) + " of " + total; text(ML + CW - widthOf(pn, false, 8), PH - 14, pn, false, 8, "#666666");
     });
-    return assemble(pages, logo, title);
+    return assemble(pages, logo, title, shield);
   }
 
   /* ---------- JPEG logo (embedded as-is, no re-encoding) ---------- */
@@ -217,11 +219,11 @@
     return null;
   }
   /* ---------- the PDF file ---------- */
-  function assemble(pages, logo, title) {
+  function assemble(pages, logo, title, shield) {
     const parts = [], offs = []; let len = 0;
     const put = (x) => { const u = typeof x === "string" ? Uint8Array.from(x, (c) => c.charCodeAt(0) & 255) : x; parts.push(u); len += u.length; };
     const obj = (id, body) => { offs[id] = len; put(id + " 0 obj\n"); put(body); put("\nendobj\n"); };
-    const nPages = pages.length, firstPageObj = 7, kids = []; for (let i = 0; i < nPages; i++) kids.push(firstPageObj + 2 * i + 1 + " 0 R");
+    const nPages = pages.length, firstPageObj = 7, shieldId = firstPageObj + 2 * nPages, kids = []; for (let i = 0; i < nPages; i++) kids.push(firstPageObj + 2 * i + 1 + " 0 R");
     put("%PDF-1.4\n%âãÏÓ\n");
     obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
     obj(2, "<< /Type /Pages /Count " + nPages + " /Kids [" + kids.join(" ") + "] >>");
@@ -233,9 +235,11 @@
     pages.forEach((pg, i) => {
       const cid = firstPageObj + 2 * i, pid = cid + 1, stream = pg.ops.join("\n");
       offs[cid] = len; put(cid + " 0 obj\n<< /Length " + stream.length + " >>\nstream\n"); put(stream); put("\nendstream\nendobj\n");
-      obj(pid, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + PW + " " + PH + "] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>" + (logo ? " /XObject << /Im1 5 0 R >>" : "") + " >> /Contents " + cid + " 0 R >>");
+      obj(pid, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + PW + " " + PH + "] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>" + ((logo || shield) ? " /XObject << " + (logo ? "/Im1 5 0 R " : "") + (shield ? "/Im2 " + shieldId + " 0 R " : "") + ">>" : "") + " >> /Contents " + cid + " 0 R >>");
     });
-    const count = firstPageObj + 2 * nPages, xref = len; put("xref\n0 " + count + "\n0000000000 65535 f \n");
+    const count = shieldId + (shield ? 1 : 0);
+    if (shield) { offs[shieldId] = len; put(shieldId + " 0 obj\n<< /Type /XObject /Subtype /Image /Width " + shield.w + " /Height " + shield.h + " /ColorSpace " + (shield.n === 1 ? "/DeviceGray" : "/DeviceRGB") + " /BitsPerComponent 8 /Filter /DCTDecode /Length " + shield.bytes.length + " >>\nstream\n"); put(shield.bytes); put("\nendstream\nendobj\n"); }
+    const xref = len; put("xref\n0 " + count + "\n0000000000 65535 f \n");
     for (let i = 1; i < count; i++) put(String(offs[i]).padStart(10, "0") + " 00000 n \n");
     put("trailer\n<< /Size " + count + " /Root 1 0 R /Info 6 0 R >>\nstartxref\n" + xref + "\n%%EOF\n");
     const out = new Uint8Array(len); let p = 0; parts.forEach((u) => { out.set(u, p); p += u.length; }); return out;
