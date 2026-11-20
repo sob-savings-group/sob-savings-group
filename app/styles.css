@@ -728,3 +728,8 @@ header.top .brand img{width:auto}
 #offline{top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;margin:0 auto;max-width:520px;background:#fff3d6;color:#6b4200;border:1px solid #f0cf8a;border-radius:14px;box-shadow:0 10px 26px rgba(15,45,82,.18);padding:10px 14px;font-size:14.5px;line-height:1.35}
 
 .chips.wrap{flex-wrap:wrap;overflow:visible}.chips.wrap .chip{border:1px solid var(--line,#d5ddec)}
+
+.bigchoice{display:block;width:100%;text-align:left;padding:15px 16px;margin:0 0 12px;border-radius:16px;border:1.5px solid #cfd8ee;background:#fff;color:#14213d;font:inherit;cursor:pointer}
+.bigchoice b{display:block;font-size:16.5px}.bigchoice small{display:block;margin-top:3px;font-size:13.5px;color:#5b6577;font-weight:400}
+.bigchoice.primary{background:#1d4ed8;border-color:#1d4ed8;color:#fff}.bigchoice.primary small{color:#dbe5ff}
+.stepnote{font-size:13px;font-weight:700;color:#1d4ed8;margin:2px 0 10px}#reg-help div{margin:2px 0}

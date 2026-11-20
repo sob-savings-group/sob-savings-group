@@ -45,7 +45,7 @@
       const attempt = async (produce) => {
         if (working) return; working = true; problem.replaceChildren();
         try {
-          const u = await produce(); st.user = u; st.view = null;
+          const u = await produce(); st.user = u; st.view = null; try { localStorage.setItem("sobReturning", "1"); } catch (e) { /* storage not available */ }
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
         } catch (e) {
@@ -80,21 +80,36 @@
         }) }, "Create password and sign in"));
       const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value);
         if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID, email or phone"));
-        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; rcode.focus(); }
+        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; stepNote.textContent = "Step 2 of 3: type the code, then choose your password"; rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
-      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "Get a code"), h("p", { class: "lg-help" }, "Type your SOB ID, email or phone. We send a 6-digit code to your email, or by SMS if you have none."), h("label", { for: "reg-id" }, "SOB ID, email or phone"), rid,
-        h("button", { class: "secondary big", id: "reg-send", onclick: sendCode }, "Send verification code"), rmsg, step2);
-      const signBox = h("div", { id: "sign-box" },
+      const regTitle = h("h2", { class: "sec-sm", id: "reg-title" }, ""), regHelp = h("div", { class: "lg-help", id: "reg-help" }), stepNote = h("div", { class: "stepnote", id: "reg-steps", role: "status" }, "");
+      const regBox = h("div", { id: "reg-box", hidden: true }, regTitle, regHelp, stepNote, h("label", { for: "reg-id" }, "Your SOB number, email or phone"), rid,
+        h("button", { class: "primary big", id: "reg-send", onclick: sendCode }, "Send me the code"), rmsg, step2);
+      const signBox = h("div", { id: "sign-box", hidden: true },
         (idStep = h("div", { id: "id-step" }, h("label", { for: "mid" }, "SOB ID, email or phone"), mid, h("button", { class: "primary big", id: "login-go", onclick: next }, "Continue"))),
         (pwStep = h("div", { id: "pw-step", hidden: true }, h("div", { class: "who-row" }, (who = h("b", { id: "pw-who" }, "")), h("button", { type: "button", class: "linkbtn", id: "pw-back", onclick: back }, "Change")), h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show),
-          h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; regBox.hidden = false; signBox.hidden = true; toggleRef.hidden = false; toggleRef.textContent = "Back to sign in"; sendCode(); } }, "Forgot password? Send me a code"))));
-      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time? Get a code"; if (!c) back(); if (c) rid.value = mid.value; } }, "First time? Get a code");
+          h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; setMode("forgot"); sendCode(); } }, "Forgot password? Send me a code"))));
+      /* three big taps first, so a new member is never left guessing; a phone that has signed in before opens straight at the password */
+      const choose = (id, title, sub, cls, mode) => h("button", { type: "button", id, class: "bigchoice " + (cls || ""), onclick: () => setMode(mode) }, h("b", null, title), h("small", null, sub));
+      const welcomeBox = h("div", { id: "welcome-box" }, h("h2", { class: "sec-sm" }, "Who are you?"), h("p", { class: "lg-help" }, "Tap one."),
+        choose("choose-have", "I have a password", "Sign in to my savings", "", "have"), choose("choose-first", "This is my first time", "Set up in 3 easy steps", "primary", "first"), choose("choose-forgot", "I forgot my password", "We send a code to make a new one", "", "forgot"));
+      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { setMode("welcome"); } }, "‹ Back"); toggle.hidden = true;
+      function setMode(m) {
+        problem.replaceChildren(); rmsg.textContent = ""; step2.hidden = true;
+        welcomeBox.hidden = m !== "welcome"; signBox.hidden = m !== "have"; regBox.hidden = !(m === "first" || m === "forgot"); toggle.hidden = m === "welcome";
+        if (m === "first") { regTitle.textContent = "Let us set you up"; regHelp.replaceChildren(h("div", null, "1. Type your SOB number or phone."), h("div", null, "2. We send you a 6-number code."), h("div", null, "3. You choose your own password.")); stepNote.textContent = "Step 1 of 3: who are you?"; }
+        if (m === "forgot") { regTitle.textContent = "Make a new password"; regHelp.replaceChildren(h("div", null, "Type your SOB number or phone. We send you a code, then you choose a new password.")); stepNote.textContent = "Step 1 of 3: who are you?"; }
+        if (m === "have") { back(); mid.focus(); }
+        if ((m === "first" || m === "forgot") && mid.value) rid.value = mid.value;
+      }
       toggleRef = toggle;
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
       box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in")),
-        h("div", { class: "lg-body" }, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
+        h("div", { class: "lg-body" }, welcomeBox, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
           h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
+      let seen = false; try { seen = localStorage.getItem("sobReturning") === "1"; } catch (e) { /* storage not available */ }
+      setMode(seen ? "have" : "welcome");
     }
     if (st.conn) setTimeout(() => paintConn(st.conn), 0);
     return box;

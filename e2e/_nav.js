@@ -4,6 +4,9 @@ let pw; try { pw = require("playwright"); } catch (e) { pw = require(process.env
 const launch = pw.chromium.launch.bind(pw.chromium);
 pw.chromium.launch = async function (...a) {
   const b = await launch(...a);
+  /* a phone that has signed in before opens straight at the password (as a returning member's does); the first-time choice screen has its own test */
+  const mkCtx = b.newContext.bind(b); b.newContext = async (...x) => { const c = await mkCtx(...x); await c.addInitScript(() => { try { localStorage.setItem("sobReturning", "1"); } catch (e) { /* none */ } }); return c; };
+  b.newPage = async (o) => { const c = await b.newContext(o); return c.newPage(); };
   const probe = await b.newPage(), P = Object.getPrototypeOf(probe); await probe.close();
   if (!P.__sobNav) {
     P.__sobNav = true; const orig = P.click, origFill = P.fill;
