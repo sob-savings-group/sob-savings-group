@@ -97,9 +97,9 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await signin(pg, airMem.id, "2468"); await pg.click("#login-go"); await pg.waitForSelector('[data-card="My Savings"]');
   const before = L.memberSavings(S.readAll(env.ss), airMem.id);
   await pg.click('[data-nav="airtime"]'); await pg.waitForSelector("#request-airtime"); ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("20,000"), "member sees the UGX 20,000 monthly allowance");
-  await pg.click("#request-airtime"); await pg.fill('.modal input[name="amount"]', "25000"); await pg.fill('.modal input[name="phone"]', "0772123456"); await pg.click("[data-submit]");
+  await pg.click("#request-airtime"); await pg.click('.modal [data-choice="__other__"]'); await pg.fill('.modal input[name="amount__other"]', "25000"); await pg.fill('.modal input[name="phone"], .modal input[name="phone__other"]', "0772123456").catch(async () => { await pg.click('.modal [data-choice="__other__"] >> nth=1'); await pg.fill('.modal input[name="phone__other"]', "0772123456"); }); await pg.click("[data-submit]");
   await pg.waitForFunction(() => /monthly limit|MONTHLY|limit/i.test((document.querySelector(".modal .err") || {}).textContent || "")); ok(true, "request above the monthly cap is refused by the server with a clear message");
-  await pg.fill('.modal input[name="amount"]', "5000"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForSelector("[data-cancel]");
+  await pg.fill('.modal input[name="amount__other"]', "5000"); await pg.click("[data-submit]"); await pg.waitForSelector(".toast:not(.bad)"); await pg.waitForSelector("[data-cancel]");
   ok(L.memberSavings(S.readAll(env.ss), airMem.id) === before, "no money moves when a request is submitted");
   ok((await pg.locator('[data-card="Remaining"] .val').innerText()).includes("15,000"), "remaining allowance updates to UGX 15,000");
   ok((await pg.locator('[data-nav="messages"]').count()) === 0 && (await pg.locator('[data-nav="system"]').count()) === 0, "member has no Messages/System screens");

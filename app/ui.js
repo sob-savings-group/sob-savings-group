@@ -71,6 +71,13 @@
         if (f.optional) { const blank = h("option", { value: "" }, "Not stated"); sel.insertBefore(blank, sel.firstChild); if (f.value == null || f.value === "") sel.value = ""; }
         inputs[f.name] = el0; return h("div", null, h("label", null, f.label), sel, txt);
       }
+      if (f.type === "chips") {   // tap to choose; "other" reveals a box only when the member needs something not on the list
+        const OTHER = "__other__", box = h("div", { class: "chips wrap", role: "group", "aria-label": f.label }), txt = h("input", { type: f.otherType || "text", name: f.name + "__other", placeholder: f.otherPlaceholder || "Type here", "aria-label": f.label + " (other)" }); if (f.inputmode) txt.setAttribute("inputmode", f.inputmode); txt.hidden = true;
+        let val = f.value != null ? f.value : ""; const all = f.choices.concat(f.other ? [{ value: OTHER, label: f.other }] : []);
+        const paint = () => { box.replaceChildren(...all.map((c) => h("button", { type: "button", class: "chip" + (String(c.value) === String(val) ? " on" : ""), "data-choice": c.value, "aria-pressed": String(String(c.value) === String(val)), onclick: () => { val = c.value; txt.hidden = val !== OTHER; paint(); if (!txt.hidden) txt.focus(); } }, c.label))); };
+        paint(); inputs[f.name] = { get value() { return val === OTHER ? txt.value.trim() : val; }, set value(v) { val = v; paint(); }, setAttribute() {} };
+        return h("div", null, h("label", null, f.label), box, txt);
+      }
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
       if (f.max) el.setAttribute("max", f.max); if (f.min != null) el.setAttribute("min", f.min); if (f.inputmode) el.setAttribute("inputmode", f.inputmode); if (f.type === "number" && !f.inputmode) el.setAttribute("inputmode", "decimal"); if (f.type === "date") el.required = true;
       if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);

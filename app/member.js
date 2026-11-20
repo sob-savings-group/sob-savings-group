@@ -109,9 +109,11 @@ window.SOBMember = function (E) {
   }
 
   /* ---------- LOANS ---------- */
+  /* four tap-to-choose amounts (a quarter, half, three quarters and all of the most the member can normally borrow), rounded to the nearest 50,000 (10,000 for small amounts) */
+  const amountChoices = (max) => { const seen = {}, out = []; [0.25, 0.5, 0.75, 1].forEach((x) => { const step = max >= 200000 ? 50000 : 10000, v = Math.max(step, Math.round(max * x / step) * step); if (max >= 10000 && v <= max && !seen[v]) { seen[v] = 1; out.push({ value: v, label: num(v) }); } }); return out; };
   function applyForm() {
     const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
-    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
+    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX) — tap one", type: "chips", choices: amountChoices(el.maxLoan), other: "Another amount", otherType: "number", inputmode: "numeric", otherPlaceholder: "Amount in UGX" }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
       act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt), purpose: f.purpose }); }, "Application sent. We will update you here."), "Send application");
   }
   /* the only place a member with no loan can find loans: a quiet row in More, with the rules before the form */

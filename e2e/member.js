@@ -44,8 +44,8 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.click("#refresh"); await pg.waitForSelector("#login-go"); ok(/session (has )?ended/.test(await pg.locator(".toast").innerText()), "an expired session returns to sign-in with a friendly message");
   /* 4. borrower: loan status, apply with guidance, statement */
   await signin("SOB-001", "1234"); await pg.click('[data-nav="myloans"]'); ok(/Under review/.test(await text()), "borrower sees the loan as Under review in plain words");
-  await pg.click("#apply"); await pg.waitForSelector('input[name="amt"]'); ok(/3 × your savings/.test(await pg.locator(".modal").innerText()), "apply form explains the 3× guideline");
-  await pg.fill('input[name="amt"]', "5000"); await pg.click("[data-submit]"); await pg.waitForSelector(".modal .err:not(:empty)"); const em = await pg.locator(".modal .err").innerText();
+  await pg.click("#apply"); await pg.waitForSelector('[data-choice]'); ok(/3 × your savings/.test(await pg.locator(".modal").innerText()), "apply form explains the 3× guideline");
+  await pg.click('[data-choice="__other__"]'); await pg.fill('input[name="amt__other"]', "5000"); await pg.click("[data-submit]"); await pg.waitForSelector(".modal .err:not(:empty)"); const em = await pg.locator(".modal .err").innerText();
   ok(/already have a loan application/.test(em) && !/ALREADY_APPLIED/.test(em), "a second application gets a plain-words message, not a system code (" + em + ")"); await pg.click("[data-close]");
   await pg.click('[data-nav="savings"]'); ok((await pg.locator("#stmt-list .li").count()) >= 1, "statement lists transactions with running balances");
   await pg.click("[data-chip=wd]"); ok(/Nothing here yet/.test(await text()), "a filter with no matches shows a friendly empty state");

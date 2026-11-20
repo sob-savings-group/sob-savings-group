@@ -906,7 +906,9 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   function airtimeForm(memberId) {
     const e = elig(memberId); if (!e) return toast("Airtime information is not available", true);
     if (e.blockedByLoan) return toast("Airtime is not available while you have an unpaid loan.", true);
-    const fields = [{ name: "amount", label: "Airtime amount (UGX) — up to " + num(e.remaining) + " left in " + D.monthYear(today()), type: "number" }, { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "" }];
+    const fields = [{ name: "amount", label: "Airtime amount (UGX) — tap one. Up to " + num(e.remaining) + " left in " + D.monthYear(today()), type: "chips", choices: [1000, 2000, 5000, 10000].filter((x) => x <= e.remaining).map((x) => ({ value: x, label: num(x) })), other: "Another amount", otherType: "number", inputmode: "numeric", otherPlaceholder: "Amount in UGX" }];
+    const myPhone = ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "";
+    fields.push(myPhone ? { name: "phone", label: "Send the airtime to", type: "chips", choices: [{ value: myPhone, label: "My number " + myPhone }], value: myPhone, other: "Another number", otherType: "tel", inputmode: "tel", otherPlaceholder: "e.g. 0772123456" } : { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: "" });
     if (isStaff()) fields.unshift({ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) });
     Form("Request airtime", fields, act(async (f) => commit("requestAirtime", { memberId: f.m || memberId, amount: Number(f.amount), phone: f.phone }), "Request sent (total with UGX " + AT.SMS_FEE + " SMS fee will be deducted from savings when fulfilled)"), "Submit request");
   }

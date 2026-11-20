@@ -726,3 +726,5 @@ header.top .brand img{width:auto}
 
 /* NO-INTERNET NOTICE: a soft amber, rounded notice (a connection loss is a warning, not an error). Red stays for real errors. */
 #offline{top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;margin:0 auto;max-width:520px;background:#fff3d6;color:#6b4200;border:1px solid #f0cf8a;border-radius:14px;box-shadow:0 10px 26px rgba(15,45,82,.18);padding:10px 14px;font-size:14.5px;line-height:1.35}
+
+.chips.wrap{flex-wrap:wrap;overflow:visible}.chips.wrap .chip{border:1px solid var(--line,#d5ddec)}
