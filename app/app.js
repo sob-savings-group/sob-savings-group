@@ -151,7 +151,7 @@
     app.replaceChildren();
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
-    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
+    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && (staff || !MV.hiddenTab(n[0]))); st.view = st.view || nav[0][0];
     const active = (k) => st.view === k || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
     const shell = h("div", { class: "shell" });
     shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, brandMark("sm"), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
@@ -1239,5 +1239,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "No internet. Changes will not save until it returns.")); };
   window.addEventListener("offline", offline); window.addEventListener("online", () => { const o = document.getElementById("offline"); if (o) o.remove(); toast("Back online"); });
   if (navigator.onLine === false) offline();
+  /* lets the app open from the phone even with no internet (the shell only; balances still need a connection) */
+  try { if ("serviceWorker" in navigator && /^https:/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) { /* not available */ }
   boot();
 })();

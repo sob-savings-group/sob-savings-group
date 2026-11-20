@@ -14,6 +14,10 @@ window.SOBMember = function (E) {
   const MP_KEYS = ["all", "year", "lastYear", "lastMonth", "custom"], MP = () => D.presetOptions(today(), S.fy.table(st.db)).filter((x) => MP_KEYS.includes(x[0]));
   const stmtPeriod = () => { const p = st.stmtPeriod; if (!p || p.key === "all") return D.presetPeriod("all", today()); return p.key === "custom" ? p : D.presetPeriod(p.key, today(), S.fy.table(st.db)); };
   const history = () => { const p = stmtPeriod(); return L.memberLifetimeHistory(st.db, me(), { from: p.from, to: p.to }).slice().reverse(); };
+  /* a member with no loan and no guarantee never sees anything about loans */
+  const hasLoanLife = () => myLoans().length > 0 || (st.db.guarantees || []).some((g) => g.guarantorId === me() && ["Requested", "Active"].includes(g.status));
+  const showHeld = (pos) => pos.committed > 0 || hasLoanLife();
+  const hiddenTab = (k) => (k === "myloans" || k === "myguar") && !hasLoanLife();
   const first = () => String(myName() || "").split(/\s+/)[0];
   const viewOnly = () => !!st.user.readOnly;
 
@@ -42,6 +46,14 @@ window.SOBMember = function (E) {
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
   const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name: you can view balances and statements. Sign in with your password to request a loan or change your password.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
+  /* a warm word, once each time the app is opened */
+  function cheer(pos, paidSub) {
+    if (st.cheered) return; st.cheered = true;
+    const n = first(), hr = new Date().getHours(), hello = hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening";
+    const msgs = pos.savings >= 1000000 ? [hello + ", " + n + ". Over a million saved: well done, keep going!"] : pos.savings > 0 ? [hello + ", " + n + ". Every shilling you save builds your future.", "Welcome, " + n + ". Your savings are growing, keep it up!", hello + ", " + n + ". Small steps, steady savings. You are doing well."] : [hello + ", " + n + ". Today is a good day to start saving."];
+    if (paidSub) msgs.push("Thank you, " + n + ", for paying your subscription this year.");
+    setTimeout(() => toast(msgs[Math.floor(Math.random() * msgs.length)]), 700);
+  }
   /* ---------- HOME ---------- */
   function home() {
     const id = me(), pos = L.memberPosition(st.db, id), loans = myLoans(), active = loans.find((l) => l.status === "Active"), pend = loans.find((l) => ["Pending", "AwaitingApproval", "Approved"].includes(l.status));
@@ -50,8 +62,9 @@ window.SOBMember = function (E) {
     const el = h("div", null, signInfo());
     if (reqs.length) el.append(Banner("warn", reqs.length === 1 ? "Someone has asked you to guarantee a loan." : reqs.length + " people have asked you to guarantee a loan.", { label: "Review", onclick: () => go("myguar") }));
     if (!paidSub) el.append(Banner("info", "Your " + year + " annual subscription is not recorded yet. Please see the Treasurer.", { label: "Details", onclick: () => go("mysubs") }));
-    el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }, { label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }]),
-      h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))))) }));
+    cheer(pos, paidSub);
+    el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }] : [])),
+      h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }));
     /* My loan */
     if (active) {
       const { v, w, paid } = loanSummary(active);
@@ -61,9 +74,6 @@ window.SOBMember = function (E) {
     } else if (pend) {
       const [lbl, kind] = LOAN_STATUS[pend.status];
       el.append(Section("My loan"), h("div", { class: "card click", "data-card": "My Loan Balance", role: "button", tabindex: 0, onclick: () => go("myloans") }, h("div", { class: "lbl" }, "Loan application · " + ugx(pend.loanAmount)), h("div", { style: "margin-top:8px" }, badge(lbl, kind)), h("div", { class: "sub" }, "Tap to follow its progress")));
-    } else {
-      const max = L.loanEligibility(st.db, id).maxLoan;
-      el.append(Section("My loan"), h("div", { class: "card click", "data-card": "My Loan Balance", role: "button", tabindex: 0, onclick: () => go("myloans") }, h("div", { class: "lbl" }, "No loan right now"), h("div", { class: "sub" }, max > 0 ? "You can normally borrow up to " + ugx(max) + " (3 × your savings)." : "Save regularly to qualify for a loan."), viewOnly() ? null : h("div", { class: "row" }, h("button", { class: "primary", id: "home-apply", onclick: (e) => { e.stopPropagation(); go("myloans"); applyForm(); } }, "Apply for a loan"))));
     }
     /* Guarantees summary */
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
@@ -94,8 +104,8 @@ window.SOBMember = function (E) {
     const rows = all.filter(sets[f] || sets.all), box = h("div", { id: "stmt-list" });
     const paint = () => { box.replaceChildren(rows.length ? List(grouped(rows)) : Empty({ icon: "book", title: "Nothing here yet", text: f === "all" ? "Your transactions will appear as they are recorded." : "No transactions of this kind." })); };
     paint();
-    return h("div", null, signInfo(), Hero({ hook: "My Savings", label: "Total savings", value: ugx(pos.savings), sub: "Lifetime balance — never reset at share-out", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }, { label: "Held for guarantees", value: pos.committed, cls: "c-commit" }]) }), statementButtons(),
-      Section("Statement"), periodControl(), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"], ["loan", "Loan"], ["sub", "Subscription"], ["profit", "Profit"]], f, (k) => { st.savFilter = k; render(); }), box);
+    return h("div", null, signInfo(), Hero({ hook: "My Savings", label: "Total savings", value: ugx(pos.savings), sub: "Lifetime balance — never reset at share-out", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for guarantees", value: pos.committed, cls: "c-commit" }] : [])) }), statementButtons(),
+      Section("Statement"), periodControl(), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"]].concat(hasLoanLife() ? [["loan", "Loan"]] : []).concat([["sub", "Subscription"], ["profit", "Profit"]]), f, (k) => { st.savFilter = k; render(); }), box);
   }
 
   /* ---------- LOANS ---------- */
@@ -175,10 +185,10 @@ window.SOBMember = function (E) {
   }
   function share() {
     const pos = L.memberPosition(st.db, me()), profits = history().filter((t) => t.type === "Profit"), outs = history().filter((t) => t.type === "Share-Out");
-    return h("div", null, Hero({ label: "If the share-out were today", value: ugx(pos.available), sub: "This is what you would receive", children: h("div", null, StackBar([{ label: "You receive", value: pos.available, cls: "c-avail" }, { label: "Stays held for guarantees", value: pos.committed, cls: "c-commit" }]), h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "Total savings"), h("div", { class: "mv" }, ugx(pos.savings))), h("div", { class: "mini" }, h("div", { class: "ml" }, "Held"), h("div", { class: "mv t-commit" }, ugx(pos.committed))))) }),
-      Banner("info", "Only your available savings are paid in December. Money held for guarantees stays until released."),
+    return h("div", null, Hero({ label: "If the share-out were today", value: ugx(pos.available), sub: "This is what you would receive", children: h("div", null, StackBar([{ label: "You receive", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Stays held for guarantees", value: pos.committed, cls: "c-commit" }] : [])), h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "Total savings"), h("div", { class: "mv" }, ugx(pos.savings))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }),
+      Banner("info", showHeld(pos) ? "Only your available savings are paid in December. Money held for guarantees stays until released." : "Your savings are paid out in December."),
       Section("Profit I received"), profits.length ? List(profits.map((t) => txnRow(t, txnDetail))) : Empty({ icon: "gift", title: "No profit shared yet", text: "Profit is shared according to each member's eligible savings, once approved by the Chairperson." }),
       outs.length ? [Section("Past share-outs"), List(outs.map((t) => txnRow(t, txnDetail)))] : null);
   }
-  return { home, savings, loans, guarantees, more, subs, share, applyForm };
+  return { hiddenTab, home, savings, loans, guarantees, more, subs, share, applyForm };
 };
