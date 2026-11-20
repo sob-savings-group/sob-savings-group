@@ -2426,7 +2426,7 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
       const cut = Math.max(0, Math.round(L.loanAccumulatedInterest(open, asOf, db) - L.loanAccumulatedInterest(l, asOf, db))), key = "relief:" + l.id + ":" + (l.interestLocks || []).map((x) => x.from + ">" + (x.to || "")).join(",");
       const told = (db.outbox || []).some((m) => m.dedupeKey === key && m.status !== "CANCELLED" && m.status !== "FAILED");
       const owed = Math.round(L.loanOutstanding(l, db, asOf)), member = (db.members || []).find((m) => m.id === l.memberId) || {};
-      const text = "SOB: Good news. Interest on your loan is now charged for " + monthsNow + " month" + (monthsNow === 1 ? "" : "s") + " instead of " + monthsBefore + ", to help you pay. Interest reduced by " + money(cut) + ". Loan bal " + money(owed) + ".";
+      const text = (l.memberId || "SOB") + ": Good news. Interest on your loan is now charged for " + monthsNow + " month" + (monthsNow === 1 ? "" : "s") + " instead of " + monthsBefore + ", to help you pay. Interest reduced by " + money(cut) + ". Loan bal " + money(owed) + ".";
       return { loanId: l.id, memberId: l.memberId, name: member.name || l.memberName || l.memberId, monthsNow, monthsBefore, cut, owed, key, told, hasPhone: !!N.normalizePhone(member.phone), text, eligible: cut > 0 && monthsBefore > monthsNow };
     });
   }
@@ -4492,7 +4492,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "d1d0c24404";
+var SOB_BUILD = "181eb8b6a4";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
