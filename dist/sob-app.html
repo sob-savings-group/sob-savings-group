@@ -726,6 +726,25 @@ header.top .brand img{width:auto}
 
 /* NO-INTERNET NOTICE: a soft amber, rounded notice (a connection loss is a warning, not an error). Red stays for real errors. */
 #offline{top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;margin:0 auto;max-width:520px;background:#fff3d6;color:#6b4200;border:1px solid #f0cf8a;border-radius:14px;box-shadow:0 10px 26px rgba(15,45,82,.18);padding:10px 14px;font-size:14.5px;line-height:1.35}
+
+.chips.wrap{flex-wrap:wrap;overflow:visible}.chips.wrap .chip{border:1px solid var(--line,#d5ddec)}
+
+.bigchoice{display:block;width:100%;text-align:left;padding:15px 16px;margin:0 0 12px;border-radius:16px;border:1.5px solid #cfd8ee;background:#fff;color:#14213d;font:inherit;cursor:pointer}
+.bigchoice b{display:block;font-size:16.5px}.bigchoice small{display:block;margin-top:3px;font-size:13.5px;color:#5b6577;font-weight:400}
+.bigchoice.primary{background:#1d4ed8;border-color:#1d4ed8;color:#fff}.bigchoice.primary small{color:#dbe5ff}
+.stepnote{font-size:13px;font-weight:700;color:#1d4ed8;margin:2px 0 10px}#reg-help div{margin:2px 0}
+
+/* sign-in: blue page, one clean white card, one help line */
+body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);background-attachment:fixed}body:has(.login)::before{display:none}
+.card.login{background:none;border:0;box-shadow:none;overflow:visible;max-width:400px;margin:5vh auto 20px}
+.lg-head{background:none;padding:6px 0 0}.lg-head .hero{font-size:25px;color:#fff;margin:12px 0 2px}.lg-head .tag{color:#dbe5ff;font-size:14.5px}
+.lg-body{background:#fff;border-radius:26px;padding:22px 20px 20px;margin-top:26px;box-shadow:0 18px 44px rgba(10,29,102,.35)}
+#welcome-box .sec-sm{font-size:21px;margin:0 0 4px}#welcome-box .lg-help{margin:0 0 16px}#welcome-box .big{margin-top:0;margin-bottom:12px}
+#welcome-box .linkbtn{display:block;margin:2px auto 0;text-align:center}
+.login .help{border:0;margin-top:18px;padding:0;flex-direction:row;flex-wrap:wrap;justify-content:center;font-size:13px;color:#dbe5ff;display:flex;gap:0}.login .help a{color:#fff;font-weight:600;padding:2px}
+.toast{bottom:auto;top:calc(env(safe-area-inset-top,0px) + 72px);font-size:14.5px;padding:11px 15px}@media(min-width:1000px){.toast{bottom:auto;top:84px}}
+.login .help{flex-direction:column;align-items:center;gap:2px}
+.toast{width:calc(100% - 32px);max-width:380px}
 </style></head><body><div id="app"></div><script>(function(){var u="https://script.google.com/macros/s/AKfycbxrFoc4MIEJW_z5zOfb2RnKnxoDixcJB9zVSIbW9EuHnw_AWXe_mmQJ7sCniiDIwkWI/exec";try{var d=new URLSearchParams(location.search).get("dev");if(d&&/^https:\/\/script\.google\.com\/(a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]+\/exec$|^http:\/\/localhost(:\d+)?\//.test(d))u=d;}catch(e){}
 try{localStorage.removeItem("sobUrl");}catch(e){}
 window.SOB_DEMO_NAMES=["Demo Member 001","Demo Member 002","Demo Member 003","Demo Member 004","Demo Member 005","Demo Member 006","Demo Member 007","Demo Member 008","Demo Member 009","Demo Member 010","Demo Member 011","Demo Member 012","Demo Member 013","Demo Member 014","Demo Member 015","Demo Member 016","Demo Member 017","Demo Member 018","Demo Member 019","Demo Member 020","Demo Member 021","Demo Member 022","Demo Member 023","Demo Member 024","Demo Member 025","Demo Member 026","Demo Member 027","Demo Member 028","Demo Member 029","Demo Member 030","Demo Member 031","Demo Member 032","Demo Member 033","Demo Member 034","Demo Member 035","Demo Member 036","Demo Member 037","Demo Member 038","Demo Member 039","Demo Member 040","Demo Member 041","Demo Member 042","Demo Member 043","Demo Member 044","Demo Member 045","Demo Member 046","Demo Member 047","Demo Member 048","Demo Member 049","Demo Member 050","Demo Member 051","Demo Member 052","Demo Member 053","Demo Member 054","Demo Member 055"];
@@ -5211,6 +5230,13 @@ window.SOB_CONFIG={ledgerUrl:u,notConfigured:!u,build:"d1d0c24404"};})();</scrip
         if (f.optional) { const blank = h("option", { value: "" }, "Not stated"); sel.insertBefore(blank, sel.firstChild); if (f.value == null || f.value === "") sel.value = ""; }
         inputs[f.name] = el0; return h("div", null, h("label", null, f.label), sel, txt);
       }
+      if (f.type === "chips") {   // tap to choose; "other" reveals a box only when the member needs something not on the list
+        const OTHER = "__other__", box = h("div", { class: "chips wrap", role: "group", "aria-label": f.label }), txt = h("input", { type: f.otherType || "text", name: f.name + "__other", placeholder: f.otherPlaceholder || "Type here", "aria-label": f.label + " (other)" }); if (f.inputmode) txt.setAttribute("inputmode", f.inputmode); txt.hidden = true;
+        let val = f.value != null ? f.value : ""; const all = f.choices.concat(f.other ? [{ value: OTHER, label: f.other }] : []);
+        const paint = () => { box.replaceChildren(...all.map((c) => h("button", { type: "button", class: "chip" + (String(c.value) === String(val) ? " on" : ""), "data-choice": c.value, "aria-pressed": String(String(c.value) === String(val)), onclick: () => { val = c.value; txt.hidden = val !== OTHER; paint(); if (!txt.hidden) txt.focus(); } }, c.label))); };
+        paint(); inputs[f.name] = { get value() { return val === OTHER ? txt.value.trim() : val; }, set value(v) { val = v; paint(); }, setAttribute() {} };
+        return h("div", null, h("label", null, f.label), box, txt);
+      }
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
       if (f.max) el.setAttribute("max", f.max); if (f.min != null) el.setAttribute("min", f.min); if (f.inputmode) el.setAttribute("inputmode", f.inputmode); if (f.type === "number" && !f.inputmode) el.setAttribute("inputmode", "decimal"); if (f.type === "date") el.required = true;
       if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);
@@ -5289,6 +5315,10 @@ window.SOBMember = function (E) {
   const MP_KEYS = ["all", "year", "lastYear", "lastMonth", "custom"], MP = () => D.presetOptions(today(), S.fy.table(st.db)).filter((x) => MP_KEYS.includes(x[0]));
   const stmtPeriod = () => { const p = st.stmtPeriod; if (!p || p.key === "all") return D.presetPeriod("all", today()); return p.key === "custom" ? p : D.presetPeriod(p.key, today(), S.fy.table(st.db)); };
   const history = () => { const p = stmtPeriod(); return L.memberLifetimeHistory(st.db, me(), { from: p.from, to: p.to }).slice().reverse(); };
+  /* a member with no loan and no guarantee never sees anything about loans */
+  const hasLoanLife = () => myLoans().length > 0 || (st.db.guarantees || []).some((g) => g.guarantorId === me() && ["Requested", "Active"].includes(g.status));
+  const showHeld = (pos) => pos.committed > 0 || hasLoanLife();
+  const hiddenTab = (k) => (k === "myloans" || k === "myguar") && !hasLoanLife();
   const first = () => String(myName() || "").split(/\s+/)[0];
   const viewOnly = () => !!st.user.readOnly;
 
@@ -5317,6 +5347,14 @@ window.SOBMember = function (E) {
   const loanSummary = (loan) => { const v = LN.loanView(st.db, loan, today()), w = L.loanInterestPosition(loan, st.db, today()); return { v, w, paid: pct(w.principalPaid, v.principal) }; };
   const signInfo = () => (viewOnly() ? Banner("info", "You signed in with your name: you can view balances and statements. Sign in with your password to request a loan or change your password.", { label: "Sign in with PIN", onclick: async () => { await st.store.logout(); st.user = null; st.view = null; render(); } }) : null);
 
+  /* a warm word, once each time the app is opened */
+  function cheer(pos, paidSub) {
+    if (st.cheered) return; st.cheered = true;
+    const n = first(), hr = new Date().getHours(), hello = hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening";
+    const msgs = pos.savings >= 1000000 ? [hello + ", " + n + ". Over a million saved: well done, keep going!"] : pos.savings > 0 ? [hello + ", " + n + ". Every shilling you save builds your future.", "Welcome, " + n + ". Your savings are growing, keep it up!", hello + ", " + n + ". Small steps, steady savings. You are doing well."] : [hello + ", " + n + ". Today is a good day to start saving."];
+    if (paidSub) msgs.push("Thank you, " + n + ", for paying your subscription this year.");
+    setTimeout(() => toast(msgs[Math.floor(Math.random() * msgs.length)]), 700);
+  }
   /* ---------- HOME ---------- */
   function home() {
     const id = me(), pos = L.memberPosition(st.db, id), loans = myLoans(), active = loans.find((l) => l.status === "Active"), pend = loans.find((l) => ["Pending", "AwaitingApproval", "Approved"].includes(l.status));
@@ -5325,8 +5363,9 @@ window.SOBMember = function (E) {
     const el = h("div", null, signInfo());
     if (reqs.length) el.append(Banner("warn", reqs.length === 1 ? "Someone has asked you to guarantee a loan." : reqs.length + " people have asked you to guarantee a loan.", { label: "Review", onclick: () => go("myguar") }));
     if (!paidSub) el.append(Banner("info", "Your " + year + " annual subscription is not recorded yet. Please see the Treasurer.", { label: "Details", onclick: () => go("mysubs") }));
-    el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }, { label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }]),
-      h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))))) }));
+    cheer(pos, paidSub);
+    el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }] : [])),
+      h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }));
     /* My loan */
     if (active) {
       const { v, w, paid } = loanSummary(active);
@@ -5336,9 +5375,6 @@ window.SOBMember = function (E) {
     } else if (pend) {
       const [lbl, kind] = LOAN_STATUS[pend.status];
       el.append(Section("My loan"), h("div", { class: "card click", "data-card": "My Loan Balance", role: "button", tabindex: 0, onclick: () => go("myloans") }, h("div", { class: "lbl" }, "Loan application · " + ugx(pend.loanAmount)), h("div", { style: "margin-top:8px" }, badge(lbl, kind)), h("div", { class: "sub" }, "Tap to follow its progress")));
-    } else {
-      const max = L.loanEligibility(st.db, id).maxLoan;
-      el.append(Section("My loan"), h("div", { class: "card click", "data-card": "My Loan Balance", role: "button", tabindex: 0, onclick: () => go("myloans") }, h("div", { class: "lbl" }, "No loan right now"), h("div", { class: "sub" }, max > 0 ? "You can normally borrow up to " + ugx(max) + " (3 × your savings)." : "Save regularly to qualify for a loan."), viewOnly() ? null : h("div", { class: "row" }, h("button", { class: "primary", id: "home-apply", onclick: (e) => { e.stopPropagation(); go("myloans"); applyForm(); } }, "Apply for a loan"))));
     }
     /* Guarantees summary */
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
@@ -5369,15 +5405,24 @@ window.SOBMember = function (E) {
     const rows = all.filter(sets[f] || sets.all), box = h("div", { id: "stmt-list" });
     const paint = () => { box.replaceChildren(rows.length ? List(grouped(rows)) : Empty({ icon: "book", title: "Nothing here yet", text: f === "all" ? "Your transactions will appear as they are recorded." : "No transactions of this kind." })); };
     paint();
-    return h("div", null, signInfo(), Hero({ hook: "My Savings", label: "Total savings", value: ugx(pos.savings), sub: "Lifetime balance — never reset at share-out", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }, { label: "Held for guarantees", value: pos.committed, cls: "c-commit" }]) }), statementButtons(),
-      Section("Statement"), periodControl(), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"], ["loan", "Loan"], ["sub", "Subscription"], ["profit", "Profit"]], f, (k) => { st.savFilter = k; render(); }), box);
+    return h("div", null, signInfo(), Hero({ hook: "My Savings", label: "Total savings", value: ugx(pos.savings), sub: "Lifetime balance — never reset at share-out", children: StackBar([{ label: "Available", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for guarantees", value: pos.committed, cls: "c-commit" }] : [])) }), statementButtons(),
+      Section("Statement"), periodControl(), Chips([["all", "All"], ["dep", "Savings"], ["wd", "Withdrawals"]].concat(hasLoanLife() ? [["loan", "Loan"]] : []).concat([["sub", "Subscription"], ["profit", "Profit"]]), f, (k) => { st.savFilter = k; render(); }), box);
   }
 
   /* ---------- LOANS ---------- */
+  /* four tap-to-choose amounts (a quarter, half, three quarters and all of the most the member can normally borrow), rounded to the nearest 50,000 (10,000 for small amounts) */
+  const amountChoices = (max) => { const seen = {}, out = []; [0.25, 0.5, 0.75, 1].forEach((x) => { const step = max >= 200000 ? 50000 : 10000, v = Math.max(step, Math.round(max * x / step) * step); if (max >= 10000 && v <= max && !seen[v]) { seen[v] = 1; out.push({ value: v, label: num(v) }); } }); return out; };
   function applyForm() {
     const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
-    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
+    Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX) — tap one", type: "chips", choices: amountChoices(el.maxLoan), other: "Another amount", otherType: "number", inputmode: "numeric", otherPlaceholder: "Amount in UGX" }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
       act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt), purpose: f.purpose }); }, "Application sent. We will update you here."), "Send application");
+  }
+  /* the only place a member with no loan can find loans: a quiet row in More, with the rules before the form */
+  function loanInfo() {
+    const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
+    const m = Modal("Need a loan?", h("div", null, h("p", null, "Your savings: " + ugx(p.savings)), h("p", null, "You can normally borrow up to " + ugx(el.maxLoan) + " (" + el.multiple + " × your savings)."),
+      h("p", { class: "mute" }, "For more than that, other members can guarantee the difference. Every application is checked by the Admin and approved by the Chairperson. You will see each step here once you apply."),
+      viewOnly() ? h("p", { class: "mute" }, "Sign in with your password to apply.") : h("div", { class: "row" }, h("button", { class: "primary", id: "start-apply", onclick: () => { m.close(); applyForm(); } }, "Apply for a loan"))));
   }
   function loans() {
     const list = myLoans(), el = h("div", null, signInfo());
@@ -5436,6 +5481,7 @@ window.SOBMember = function (E) {
     const m = st.db.members.find((x) => x.id === me()) || {}, off = !!m.notifyOptOut;
     return h("div", null, signInfo(), List([
       Row({ icon: "receipt", title: "Annual subscription", sub: ugx(S.cycle.SUBSCRIPTION_AMOUNT) + " a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
+      hasLoanLife() ? null : Row({ icon: "loan", title: "Need a loan?", sub: "See if you qualify", onOpen: loanInfo }),
       viewOnly() ? null : Row({ icon: "bell", title: "SMS / WhatsApp notices", sub: off ? "Off — tap to switch on" : "On — tap to switch off", onOpen: act(async () => commit("setNotifyOptOut", { memberId: me(), optOut: !off }), off ? "Notices switched on" : "Notices switched off") }),
       viewOnly() || !st.live ? null : Row({ icon: "mail", title: "Email on record", sub: m.email ? m.email + " · tap to change" : "None yet · tap to add (used to recover your password)", onOpen: changeEmail }),
       viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my password", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
@@ -5450,12 +5496,12 @@ window.SOBMember = function (E) {
   }
   function share() {
     const pos = L.memberPosition(st.db, me()), profits = history().filter((t) => t.type === "Profit"), outs = history().filter((t) => t.type === "Share-Out");
-    return h("div", null, Hero({ label: "If the share-out were today", value: ugx(pos.available), sub: "This is what you would receive", children: h("div", null, StackBar([{ label: "You receive", value: pos.available, cls: "c-avail" }, { label: "Stays held for guarantees", value: pos.committed, cls: "c-commit" }]), h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "Total savings"), h("div", { class: "mv" }, ugx(pos.savings))), h("div", { class: "mini" }, h("div", { class: "ml" }, "Held"), h("div", { class: "mv t-commit" }, ugx(pos.committed))))) }),
-      Banner("info", "Only your available savings are paid in December. Money held for guarantees stays until released."),
+    return h("div", null, Hero({ label: "If the share-out were today", value: ugx(pos.available), sub: "This is what you would receive", children: h("div", null, StackBar([{ label: "You receive", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Stays held for guarantees", value: pos.committed, cls: "c-commit" }] : [])), h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "Total savings"), h("div", { class: "mv" }, ugx(pos.savings))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }),
+      Banner("info", showHeld(pos) ? "Only your available savings are paid in December. Money held for guarantees stays until released." : "Your savings are paid out in December."),
       Section("Profit I received"), profits.length ? List(profits.map((t) => txnRow(t, txnDetail))) : Empty({ icon: "gift", title: "No profit shared yet", text: "Profit is shared according to each member's eligible savings, once approved by the Chairperson." }),
       outs.length ? [Section("Past share-outs"), List(outs.map((t) => txnRow(t, txnDetail)))] : null);
   }
-  return { home, savings, loans, guarantees, more, subs, share, applyForm };
+  return { hiddenTab, home, savings, loans, guarantees, more, subs, share, applyForm };
 };
 
 
@@ -5507,7 +5553,7 @@ window.SOBMember = function (E) {
       const attempt = async (produce) => {
         if (working) return; working = true; problem.replaceChildren();
         try {
-          const u = await produce(); st.user = u; st.view = null;
+          const u = await produce(); st.user = u; st.view = null; try { localStorage.setItem("sobReturning", "1"); } catch (e) { /* storage not available */ }
           if (!u.mustChangePin) { await st.store.load(); st.db = st.store.db; }
           render();
         } catch (e) {
@@ -5542,21 +5588,36 @@ window.SOBMember = function (E) {
         }) }, "Create password and sign in"));
       const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value);
         if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID, email or phone"));
-        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; rcode.focus(); }
+        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; stepNote.textContent = "Step 2 of 3: type the code, then choose your password"; rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
-      const regBox = h("div", { id: "reg-box", hidden: true }, h("h2", { class: "sec-sm" }, "Get a code"), h("p", { class: "lg-help" }, "Type your SOB ID, email or phone. We send a 6-digit code to your email, or by SMS if you have none."), h("label", { for: "reg-id" }, "SOB ID, email or phone"), rid,
-        h("button", { class: "secondary big", id: "reg-send", onclick: sendCode }, "Send verification code"), rmsg, step2);
-      const signBox = h("div", { id: "sign-box" },
+      const regTitle = h("h2", { class: "sec-sm", id: "reg-title" }, ""), regHelp = h("div", { class: "lg-help", id: "reg-help" }), stepNote = h("div", { class: "stepnote", id: "reg-steps", role: "status" }, "");
+      const regBox = h("div", { id: "reg-box", hidden: true }, regTitle, regHelp, stepNote, h("label", { for: "reg-id" }, "Your SOB number, email or phone"), rid,
+        h("button", { class: "primary big", id: "reg-send", onclick: sendCode }, "Send me the code"), rmsg, step2);
+      const signBox = h("div", { id: "sign-box", hidden: true },
         (idStep = h("div", { id: "id-step" }, h("label", { for: "mid" }, "SOB ID, email or phone"), mid, h("button", { class: "primary big", id: "login-go", onclick: next }, "Continue"))),
         (pwStep = h("div", { id: "pw-step", hidden: true }, h("div", { class: "who-row" }, (who = h("b", { id: "pw-who" }, "")), h("button", { type: "button", class: "linkbtn", id: "pw-back", onclick: back }, "Change")), h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show),
-          h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; regBox.hidden = false; signBox.hidden = true; toggleRef.hidden = false; toggleRef.textContent = "Back to sign in"; sendCode(); } }, "Forgot password? Send me a code"))));
-      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { const c = regBox.hidden; regBox.hidden = !c; signBox.hidden = c; problem.replaceChildren(); toggle.textContent = c ? "Back to sign in" : "First time? Get a code"; if (!c) back(); if (c) rid.value = mid.value; } }, "First time? Get a code");
+          h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; setMode("forgot"); sendCode(); } }, "Forgot password? Send me a code"))));
+      /* three big taps first, so a new member is never left guessing; a phone that has signed in before opens straight at the password */
+      const welcomeBox = h("div", { id: "welcome-box" }, h("h2", { class: "sec-sm" }, "Welcome"), h("p", { class: "lg-help" }, "Your savings, always with you."),
+        h("button", { type: "button", id: "choose-have", class: "primary big", onclick: () => setMode("have") }, "Sign in"), h("button", { type: "button", id: "choose-first", class: "secondary big", onclick: () => setMode("first") }, "New here? Set up"),
+        h("button", { type: "button", id: "choose-forgot", class: "linkbtn", onclick: () => setMode("forgot") }, "Forgot password?"));
+      const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { setMode("welcome"); } }, "‹ Back"); toggle.hidden = true;
+      function setMode(m) {
+        problem.replaceChildren(); rmsg.textContent = ""; step2.hidden = true;
+        welcomeBox.hidden = m !== "welcome"; signBox.hidden = m !== "have"; regBox.hidden = !(m === "first" || m === "forgot"); toggle.hidden = m === "welcome";
+        if (m === "first") { regTitle.textContent = "Let us set you up"; regHelp.replaceChildren(h("div", null, "1. Type your SOB number or phone."), h("div", null, "2. We send you a 6-number code."), h("div", null, "3. You choose your own password.")); stepNote.textContent = "Step 1 of 3: who are you?"; }
+        if (m === "forgot") { regTitle.textContent = "Make a new password"; regHelp.replaceChildren(h("div", null, "Type your SOB number or phone. We send you a code, then you choose a new password.")); stepNote.textContent = "Step 1 of 3: who are you?"; }
+        if (m === "have") { back(); mid.focus(); }
+        if ((m === "first" || m === "forgot") && mid.value) rid.value = mid.value;
+      }
       toggleRef = toggle;
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in")),
-        h("div", { class: "lg-body" }, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
-          h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
+      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel"), h("div", { class: "tag" }, "Savings Group")),
+        h("div", { class: "lg-body" }, welcomeBox, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, "")),
+        h("div", { class: "help" }, h("span", null, "Need help? Call:"), help.map((o, k) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[1] + " " + o[2]))));
+      let seen = false; try { seen = localStorage.getItem("sobReturning") === "1"; } catch (e) { /* storage not available */ }
+      setMode(seen ? "have" : "welcome");
     }
     if (st.conn) setTimeout(() => paintConn(st.conn), 0);
     return box;
@@ -5613,7 +5674,7 @@ window.SOBMember = function (E) {
     app.replaceChildren();
     if (!st.user) { app.append(loginScreen()); return; }
     if (st.live && st.user.mustChangePin) { app.append(forcePinScreen()); return; }
-    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => !n[2] || n[2] === st.user.role); st.view = st.view || nav[0][0];
+    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && (staff || !MV.hiddenTab(n[0]))); st.view = st.view || nav[0][0];
     const active = (k) => st.view === k || (staff && k === "menu" && st.view === "menu") || (!staff && k === "more" && MORE_VIEWS.includes(st.view));
     const shell = h("div", { class: "shell" });
     shell.append(h("header", { class: "top" }, h("div", { class: "brand" }, brandMark("sm"), h("div", { style: "min-width:0" }, h("div", { class: "bt1" }, staff ? "SOB " + roleLabel(st.user.role) : "Sons of Bethel"), h("div", { class: "bt2" }, st.user.name + (st.live ? "" : " · DEMO")))),
@@ -6368,7 +6429,9 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   function airtimeForm(memberId) {
     const e = elig(memberId); if (!e) return toast("Airtime information is not available", true);
     if (e.blockedByLoan) return toast("Airtime is not available while you have an unpaid loan.", true);
-    const fields = [{ name: "amount", label: "Airtime amount (UGX) — up to " + num(e.remaining) + " left in " + D.monthYear(today()), type: "number" }, { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "" }];
+    const fields = [{ name: "amount", label: "Airtime amount (UGX) — tap one. Up to " + num(e.remaining) + " left in " + D.monthYear(today()), type: "chips", choices: [1000, 2000, 5000, 10000].filter((x) => x <= e.remaining).map((x) => ({ value: x, label: num(x) })), other: "Another amount", otherType: "number", inputmode: "numeric", otherPlaceholder: "Amount in UGX" }];
+    const myPhone = ((st.db.members.find((m) => m.id === memberId) || {}).phone) || "";
+    fields.push(myPhone ? { name: "phone", label: "Send the airtime to", type: "chips", choices: [{ value: myPhone, label: "My number " + myPhone }], value: myPhone, other: "Another number", otherType: "tel", inputmode: "tel", otherPlaceholder: "e.g. 0772123456" } : { name: "phone", label: "Phone to receive airtime (e.g. 0772123456)", value: "" });
     if (isStaff()) fields.unshift({ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) });
     Form("Request airtime", fields, act(async (f) => commit("requestAirtime", { memberId: f.m || memberId, amount: Number(f.amount), phone: f.phone }), "Request sent (total with UGX " + AT.SMS_FEE + " SMS fee will be deducted from savings when fulfilled)"), "Submit request");
   }
@@ -6701,6 +6764,8 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const offline = () => { if (!document.getElementById("offline")) document.body.append(h("div", { id: "offline", role: "alert" }, "No internet. Changes will not save until it returns.")); };
   window.addEventListener("offline", offline); window.addEventListener("online", () => { const o = document.getElementById("offline"); if (o) o.remove(); toast("Back online"); });
   if (navigator.onLine === false) offline();
+  /* lets the app open from the phone even with no internet (the shell only; balances still need a connection) */
+  try { if ("serviceWorker" in navigator && /^https:/.test(location.protocol)) navigator.serviceWorker.register("sw.js").catch(() => {}); } catch (e) { /* not available */ }
   boot();
 })();
 
