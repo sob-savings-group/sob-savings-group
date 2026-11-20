@@ -90,9 +90,9 @@
         (pwStep = h("div", { id: "pw-step", hidden: true }, h("div", { class: "who-row" }, (who = h("b", { id: "pw-who" }, "")), h("button", { type: "button", class: "linkbtn", id: "pw-back", onclick: back }, "Change")), h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show),
           h("button", { class: "primary big", id: "login-submit", onclick: submit }, "Sign in"), h("button", { type: "button", class: "linkbtn", id: "pw-forgot", onclick: () => { rid.value = mid.value; setMode("forgot"); sendCode(); } }, "Forgot password? Send me a code"))));
       /* three big taps first, so a new member is never left guessing; a phone that has signed in before opens straight at the password */
-      const choose = (id, title, sub, cls, mode) => h("button", { type: "button", id, class: "bigchoice " + (cls || ""), onclick: () => setMode(mode) }, h("b", null, title), h("small", null, sub));
-      const welcomeBox = h("div", { id: "welcome-box" }, h("h2", { class: "sec-sm" }, "Who are you?"), h("p", { class: "lg-help" }, "Tap one."),
-        choose("choose-have", "I have a password", "Sign in to my savings", "", "have"), choose("choose-first", "This is my first time", "Set up in 3 easy steps", "primary", "first"), choose("choose-forgot", "I forgot my password", "We send a code to make a new one", "", "forgot"));
+      const welcomeBox = h("div", { id: "welcome-box" }, h("h2", { class: "sec-sm" }, "Welcome"), h("p", { class: "lg-help" }, "Your savings, always with you."),
+        h("button", { type: "button", id: "choose-have", class: "primary big", onclick: () => setMode("have") }, "Sign in"), h("button", { type: "button", id: "choose-first", class: "secondary big", onclick: () => setMode("first") }, "New here? Set up"),
+        h("button", { type: "button", id: "choose-forgot", class: "linkbtn", onclick: () => setMode("forgot") }, "Forgot password?"));
       const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { setMode("welcome"); } }, "‹ Back"); toggle.hidden = true;
       function setMode(m) {
         problem.replaceChildren(); rmsg.textContent = ""; step2.hidden = true;
@@ -105,9 +105,9 @@
       toggleRef = toggle;
       const help = R.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
       box.className = "card login"; box.removeAttribute("style");
-      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel Savings Group"), h("div", { class: "tag" }, "Sign in")),
-        h("div", { class: "lg-body" }, welcomeBox, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, ""),
-          h("div", { class: "help" }, h("div", { class: "help-t" }, "Need help?"), help.map((o) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[0] + " — " + o[2])))));
+      box.replaceChildren(h("div", { class: "lg-head" }, brandMark("lg"), h("h1", { class: "hero" }, "Sons of Bethel"), h("div", { class: "tag" }, "Savings Group")),
+        h("div", { class: "lg-body" }, welcomeBox, signBox, regBox, toggle, problem, h("div", { id: "conn-status", class: "hint", role: "status" }, "")),
+        h("div", { class: "help" }, h("span", null, "Need help? Call:"), help.map((o, k) => h("a", { href: "tel:" + o[2].replace(/\s/g, "") }, o[1] + " " + o[2]))));
       let seen = false; try { seen = localStorage.getItem("sobReturning") === "1"; } catch (e) { /* storage not available */ }
       setMode(seen ? "have" : "welcome");
     }
