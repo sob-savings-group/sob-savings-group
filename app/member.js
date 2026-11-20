@@ -114,6 +114,13 @@ window.SOBMember = function (E) {
     Form("Apply for a loan", [{ type: "note", text: "Your savings are " + ugx(p.savings) + ". You can normally borrow up to " + ugx(el.maxLoan) + " (3 × your savings). For more, guarantors can back the difference; the Admin will arrange it." }, { name: "amt", label: "How much do you need? (UGX)", type: "number", inputmode: "numeric", min: 1 }, { name: "purpose", label: "What is the loan for?", options: st.db.loanPurposes || S.gov.listOptions(st.db, "loan.Purpose"), other: true }],
       act(async (f) => { if (!(Number(f.amt) > 0)) throw new Error("Enter the amount you need"); await commit("applyForLoan", { memberId: me(), amount: Number(f.amt), purpose: f.purpose }); }, "Application sent. We will update you here."), "Send application");
   }
+  /* the only place a member with no loan can find loans: a quiet row in More, with the rules before the form */
+  function loanInfo() {
+    const p = L.memberPosition(st.db, me()), el = L.loanEligibility(st.db, me());
+    const m = Modal("Need a loan?", h("div", null, h("p", null, "Your savings: " + ugx(p.savings)), h("p", null, "You can normally borrow up to " + ugx(el.maxLoan) + " (" + el.multiple + " × your savings)."),
+      h("p", { class: "mute" }, "For more than that, other members can guarantee the difference. Every application is checked by the Admin and approved by the Chairperson. You will see each step here once you apply."),
+      viewOnly() ? h("p", { class: "mute" }, "Sign in with your password to apply.") : h("div", { class: "row" }, h("button", { class: "primary", id: "start-apply", onclick: () => { m.close(); applyForm(); } }, "Apply for a loan"))));
+  }
   function loans() {
     const list = myLoans(), el = h("div", null, signInfo());
     el.append(viewOnly() ? null : h("div", { class: "row" }, h("button", { class: "primary", id: "apply", onclick: applyForm }, Icon("plus", 18), " Apply for a loan")));
@@ -171,6 +178,7 @@ window.SOBMember = function (E) {
     const m = st.db.members.find((x) => x.id === me()) || {}, off = !!m.notifyOptOut;
     return h("div", null, signInfo(), List([
       Row({ icon: "receipt", title: "Annual subscription", sub: ugx(S.cycle.SUBSCRIPTION_AMOUNT) + " a year", onOpen: () => go("mysubs") }), Row({ icon: "gift", tone: "profit", title: "Share-out & profit", sub: "What December pays you", onOpen: () => go("myshare") }), Row({ icon: "phone", title: "Airtime", sub: "Request airtime from your savings", onOpen: () => go("airtime") }),
+      hasLoanLife() ? null : Row({ icon: "loan", title: "Need a loan?", sub: "See if you qualify", onOpen: loanInfo }),
       viewOnly() ? null : Row({ icon: "bell", title: "SMS / WhatsApp notices", sub: off ? "Off — tap to switch on" : "On — tap to switch off", onOpen: act(async () => commit("setNotifyOptOut", { memberId: me(), optOut: !off }), off ? "Notices switched on" : "Notices switched off") }),
       viewOnly() || !st.live ? null : Row({ icon: "mail", title: "Email on record", sub: m.email ? m.email + " · tap to change" : "None yet · tap to add (used to recover your password)", onOpen: changeEmail }),
       viewOnly() || !st.live ? null : Row({ icon: "key", title: "Change my password", sub: "Keep it private", onOpen: () => document.getElementById("my-pin").click() })].filter(Boolean)),
