@@ -40,6 +40,16 @@
     if (!Object.prototype.hasOwnProperty.call(TEMPLATES, template)) throw new Error("UNKNOWN_TEMPLATE: " + template);
     return TEMPLATES[template](vars || {});
   }
+  /* Every SMS says who it is for: the member's SOB ID replaces a bare "SOB:" at the start, so a wrong recipient can see it is not theirs. Safe to apply twice. */
+  function identify(body, id) {
+    body = String(body == null ? "" : body); id = String(id || ""); if (!id || body.indexOf(id) === 0) return body;
+    const m = /^SOB( FINAL)?:\s*/.exec(body); return m ? id + ": " + (m[1] ? "FINAL: " : "") + body.slice(m[0].length) : id + ": " + body;
+  }
+  /* A number is "confirmed" when the member proved it (typed the code sent to it) or an officer confirmed it by speaking to the member. A new or changed number is not confirmed. */
+  const phoneConfirmed = (m) => !!(m && m.phoneConfirmed && m.phoneConfirmedNo && m.phoneConfirmedNo === normalizePhone(m.phone));
+  const RULE_ID = "SMS_RULE", NOT_CONFIRMED_TEXT = "SOB: You have a notice about your account. Please open the app or call the Treasurer.";
+  const getSmsRule = (db) => { const r = ((db && db.policy) || []).find((p) => p.id === RULE_ID) || {}; return { requireConfirmed: r.requireConfirmed === true, updatedBy: r.updatedBy || "", updatedDate: r.updatedDate || "" }; };
+  const NO_RULE_TEMPLATES = ["signIn", "custom"];   // no money details in these
   /* Internal: create an outbox record. Never throws for "cannot deliver" cases — those become SKIPPED with a visible reason. */
   function queue(db, ctx, o) {
     const channel = (o.channel || "SMS").toUpperCase();
@@ -52,7 +62,9 @@
     if (member && member.notifyOptOut) { status = "SKIPPED"; reason = "OPTED_OUT"; }
     else if (!to) { status = "SKIPPED"; reason = "NO_VALID_PHONE"; }
     const rec = { id: G.uid("MSG"), createdAt: ctx.now, createdBy: ctx.by, memberId: o.memberId || "", to: to || "", channel, template: o.template,
-      body: render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+      body: channel === "SMS" && member ? identify(render(o.template, o.vars), member.id) : render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+    /* when the committee switched the rule on, amounts and warnings go only to a confirmed number; any other number gets a plain notice */
+    if (channel === "SMS" && member && status === "QUEUED" && !NO_RULE_TEMPLATES.includes(o.template) && getSmsRule(db).requireConfirmed && !phoneConfirmed(member)) { rec.body = identify(NOT_CONFIRMED_TEXT, member.id); rec.downgraded = true; rec.reason = "Number not confirmed: sent a plain notice without amounts"; }
     outbox.push(rec);
     return rec;
   }
@@ -62,8 +74,8 @@
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
-    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS))).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox; only a targeted (deliberate) run may retry a failed SMS
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < (m.channel === "SMS" && !only ? 1 : MAX_ATTEMPTS)))).slice(0, limit);
     todo.forEach((m) => {
       /* A receipt is only worth sending while it is fresh: an old queued one (made while no gateway was live) is cancelled, never sent late, so members are not flooded with old news. */
       if (RECEIPT_TEMPLATES.includes(m.template) && Date.parse(ctx.now) - Date.parse(m.createdAt) > 3 * 86400000) { m.status = "CANCELLED"; m.reason = "STALE_RECEIPT: older than 3 days, not sent"; out.skipped++; return; }
@@ -109,6 +121,30 @@
     G.audit(db, ctx, "Member", memberId, optOut ? "Notifications opted out" : "Notifications opted in", prev, m.notifyOptOut, reason);
     return m;
   }
+  function confirmPhones(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; G.need(a.note, "note (how you confirmed, e.g. 'phoned the member')"); const ids = [].concat(a.memberIds || []).filter(Boolean); if (!ids.length) throw new Error("INVALID: choose at least one member");
+    const done = [];
+    ids.forEach((id) => { const m = (db.members || []).find((x) => x.id === id); if (!m) throw new Error("UNKNOWN_MEMBER: " + id); const no = normalizePhone(m.phone); if (!no) throw new Error("NO_VALID_PHONE: " + id + " has no valid phone number to confirm");
+      const before = { confirmed: phoneConfirmed(m) }; m.phoneConfirmed = ctx.today; m.phoneConfirmedNo = no; m.phoneConfirmedBy = ctx.by; G.audit(db, ctx, "Member", id, "Phone number confirmed", before, { confirmed: true, number: no }, a.note); done.push(id); });
+    return { confirmed: done };
+  }
+  function setSmsRule(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === RULE_ID); if (!rec) { rec = { id: RULE_ID }; db.policy.push(rec); }
+    const before = getSmsRule(db); rec.requireConfirmed = a.requireConfirmed === true || a.requireConfirmed === "true" || a.requireConfirmed === "yes"; rec.updatedBy = ctx.by; rec.updatedDate = ctx.today;
+    G.audit(db, ctx, "SmsRule", RULE_ID, "Changed", before, getSmsRule(db), a.reason); return getSmsRule(db);
+  }
+  /* The Admin's own message to chosen members (for example an apology). One SMS each: the member's SOB ID is put in front, and the whole text may not pass 160 characters. */
+  const GSM_OK = /^[\x20-\x7E\n]*$/;
+  function sendNotice(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; const ids = [].concat(a.memberIds || []).filter(Boolean); if (!ids.length) throw new Error("INVALID: choose at least one member");
+    const text = String(a.text || "").replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014]/g, "-").trim(); if (!text) throw new Error("INVALID: write the message");
+    if (!GSM_OK.test(text)) throw new Error("INVALID: use plain letters and numbers only (no special characters) so it stays one SMS");
+    const day = ctx.today, tag = text.length + ":" + text.split("").reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7), out = { queued: [], tooLong: [] };
+    ids.forEach((id) => { const m = (db.members || []).find((x) => x.id === id); if (!m) throw new Error("UNKNOWN_MEMBER: " + id); const full = identify(text, id); if (full.length > 160) { out.tooLong.push(id); return; }
+      const r = queue(db, ctx, { memberId: id, template: "custom", vars: { text: full }, channel: "SMS", dedupeKey: "MSG:" + id + ":" + day + ":" + tag }); out.queued.push({ memberId: id, outboxId: r.id, status: r.status, reason: r.reason, body: r.body }); });
+    if (out.tooLong.length) throw new Error("TOO_LONG: the message is over 160 characters with the SOB ID in front, so nothing was queued. Shorten it by " + (Math.max.apply(null, out.tooLong.map((id) => identify(text, id).length)) - 160) + " characters.");
+    G.audit(db, ctx, "Message", "custom", "Message queued", null, { to: ids, text }, a.reason || "Admin message to members"); return out;
+  }
   /* Automatic, best-effort notices after a successful command. Never allowed to break the command itself. */
   function onCommand(db, ctx, name, args, result) {
     try {
@@ -135,5 +171,5 @@
     (db.outbox || []).forEach((m) => { s[m.status] = (s[m.status] || 0) + 1; });
     return s;
   }
-  return { CHANNELS, MAX_ATTEMPTS, TEMPLATES, normalizePhone, render, queue, dispatch, cancel, send, setOptOut, onCommand, summary };
+  return { CHANNELS, MAX_ATTEMPTS, TEMPLATES, identify, phoneConfirmed, getSmsRule, confirmPhones, setSmsRule, sendNotice, NOT_CONFIRMED_TEXT, normalizePhone, render, queue, dispatch, cancel, send, setOptOut, onCommand, summary };
 });

@@ -678,12 +678,43 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         Card("Backing needed", ugx(a.required), a.guarantorsApply ? "Only the part beyond the guideline" : "Guarantor policy starts " + D.longDate(a.guarantorPolicyStart) + "; none required yet"), Card("Backing accepted", ugx(a.backing), "Guarantees " + num(a.guaranteeCover) + " · security " + num(a.securityCover))),
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
+  /* ---------- who will get a text: masked number, confirmed or not, shared numbers ---------- */
+  const maskPhone = (p) => { const d = String(p || "").replace(/\D/g, ""); return d.length >= 7 ? d.slice(0, 4) + " ••• " + d.slice(-3) : "no number"; };
+  const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
+  const recipientLine = (m, shared) => { const k = N.normalizePhone(m.phone), twin = k && shared[k] && shared[k].length > 1 ? shared[k].filter((x) => x !== m.id) : [];
+    return h("span", { class: "mute", style: "font-size:13px" }, " · " + m.id + " · " + maskPhone(m.phone) + " · ", N.phoneConfirmed(m) ? h("span", { class: "ok" }, "number confirmed") : h("span", { class: "warn" }, "not confirmed"), twin.length ? h("b", { class: "warn" }, " · same number as " + twin.join(", ")) : null); };
+  const APOLOGY = "Yesu yebazibwe. Tusonyiwe olw'obubaka bw'okujjukiza bwe mwafuna. Byali byakulabirako. Tukuuma obwesige bwammwe.";
+  function numbersForm() {
+    const shared = sharedNumbers(), picked = new Set(), rule = N.getSmsRule(st.db).requireConfirmed, go = h("button", { class: "primary", id: "confirm-go", disabled: true }, "Confirm 0"), note = h("input", { id: "confirm-note", placeholder: "How you checked, e.g. phoned the member" }), err = h("div", { class: "err", role: "alert" });
+    const sync = () => { go.textContent = "Confirm " + picked.size; go.disabled = !picked.size; };
+    const list = (st.db.members || []).filter((m) => m.status !== "Exited");
+    const m = Modal("Phone numbers", h("div", null,
+      h("p", { class: "mute" }, "A number is confirmed when the member enters the code we SMS to it, or when you have phoned the member and checked it is theirs. Tick the numbers you have checked."),
+      h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, N.phoneConfirmed(x) ? h("input", { type: "checkbox", disabled: true, checked: true }) : h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
+      note, err, h("div", { class: "row" }, go, h("button", { id: "rule-toggle", onclick: () => { m.close(); Form("Send amounts and warnings only to confirmed numbers", [{ type: "note", text: "Now: " + (rule ? "ON" : "OFF") + ". When ON, a member whose number is not confirmed gets only a plain notice with no amounts. Needs the Chairperson's approval." }, { name: "reason", label: "Reason (required)" }], act(async (f) => commit("setSmsRule", { requireConfirmed: !rule, reason: f.reason }), "Sent for approval")); } }, rule ? "Switch rule OFF" : "Switch rule ON"), h("button", { onclick: () => m.close() }, "Close"))));
+    go.onclick = async () => { go.disabled = true; err.textContent = "";
+      try { await commit("confirmPhones", { memberIds: [...picked], note: note.value }); m.close(); toast(st.sentForApproval ? "Sent to the Chairperson for approval" : "Numbers confirmed"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+  }
+  function noticeForm() {
+    const shared = sharedNumbers(), picked = new Set(), list = (st.db.members || []).filter((m) => m.status !== "Exited");
+    const ta = h("textarea", { id: "notice-text", maxlength: "160", rows: "4" }), cnt = h("div", { class: "mute", id: "notice-count" }), go = h("button", { class: "primary", id: "notice-go", disabled: true }, "Send to 0"), err = h("div", { class: "err", role: "alert" });
+    ta.value = ""; const sync = () => { const len = (picked.size ? "SOB-000: " : "").length + ta.value.length; cnt.textContent = ta.value.length + " characters. Each text starts with the member's SOB ID and must stay in one SMS (160)."; go.textContent = "Send to " + picked.size; go.disabled = !picked.size || !ta.value.trim() || len > 160; };
+    ta.oninput = sync;
+    const m = Modal("Send a message", h("div", null, h("p", { class: "mute" }, "Tap who should get it. Plain letters only. The Chairperson approves before anything is queued."),
+      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the Luganda apology")),
+      ta, cnt,
+      h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
+      err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
+    go.onclick = async () => { go.disabled = true; err.textContent = "";
+      try { await commit("sendNotice", { memberIds: [...picked], text: ta.value.trim(), reason: "Message from Admin" }); m.close(); toast(st.sentForApproval ? "Sent to the Chairperson for approval" : "Queued in the outbox"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+    sync();
+  }
   /* Tell borrowers their interest was reduced (interest stopped after fewer months). The officer picks who; each text is shown first; it is sent once per loan. */
   function reliefForm(list) {
     const picked = new Set(list.map((r) => r.loanId)), go = h("button", { class: "primary", id: "relief-go" }, "Send"), err = h("div", { class: "err", id: "relief-err", role: "alert" });
     const sync = () => { go.textContent = "Send to " + picked.size; go.disabled = !picked.size; };
     const m = Modal("Tell borrowers their interest was reduced", h("div", null, h("p", { class: "mute" }, "Each member gets this text from the figures in their loan. Untick anyone who should not get it. Nothing is sent until you press Send."),
-      h("div", { class: "preview" }, list.map((r) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", checked: true, "data-loan": r.loanId, onchange: (e) => { e.target.checked ? picked.add(r.loanId) : picked.delete(r.loanId); sync(); } }), " ", h("b", null, r.name), " · ", r.monthsNow + " instead of " + r.monthsBefore + " months · " + ugx(r.cut) + " off", h("div", { class: "mute", style: "font-size:13px;margin-left:24px" }, r.text)))),
+      h("div", { class: "preview" }, list.map((r) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", checked: true, "data-loan": r.loanId, onchange: (e) => { e.target.checked ? picked.add(r.loanId) : picked.delete(r.loanId); sync(); } }), " ", h("b", null, r.name), " · ", r.monthsNow + " instead of " + r.monthsBefore + " months · " + ugx(r.cut) + " off", (() => { const mm = st.db.members.find((x) => x.id === r.memberId); return mm ? recipientLine(mm, sharedNumbers()) : null; })(), h("div", { class: "mute", style: "font-size:13px;margin-left:24px" }, r.text)))),
       err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
     go.onclick = async () => { go.disabled = true; err.textContent = "";
       try { const r = await commit("sendInterestRelief", { loanIds: [...picked] }), q = r.queued || [], ok = q.filter((x) => x.status !== "SKIPPED").length, no = q.filter((x) => x.status === "SKIPPED").length, sk = (r.skipped || []).length;
@@ -1105,6 +1136,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         : h("div", { class: "blocked", id: "dryrun-banner" }, "Dry run: nothing is sent to any phone."),
       h("div", { class: "grid" }, ["QUEUED", "DRY_RUN", "SENT", "FAILED", "SKIPPED"].map((k) => Card(k.replace("_", "-"), String(sum[k] || 0)))),
       h("div", { class: "row" }, h("button", { class: "primary", id: "process-outbox", onclick: act(proc) }, "Process outbox"),
+        h("button", { id: "notice-open", onclick: noticeForm }, "Send a message"), h("button", { id: "numbers-open", onclick: numbersForm }, "Phone numbers"),
         h("button", { id: "send-message", onclick: () => Form("Message a member", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "channel", label: "Channel", options: ["SMS", "WHATSAPP"] }, { name: "text", label: "Message (max 320 characters)", type: "textarea" }], act(async (f) => commit("sendMessage", { memberId: f.m, channel: f.channel, text: f.text }), "Queued in the outbox")) }, "New message")),
       Table([{ label: "Created", render: (m) => D.toDisplay(String(m.createdAt).slice(0, 10)) }, { label: "To", render: (m) => m.to === "ADMIN" ? "Admin phone" : (m.memberId ? nameOf(m.memberId) + " " : "") + m.to }, { label: "Channel", key: "channel" }, { label: "Message", key: "body" },
         { label: "Status", render: (m) => badge(m.status, m.status === "SENT" ? "ok" : m.status === "FAILED" ? "bad" : m.status === "QUEUED" || m.status === "DRY_RUN" ? "warn" : "mute") }, { label: "Note", key: "reason" },

@@ -63,6 +63,8 @@
           const users = S.readCollection(env.ss, "users"), r = A.otpVerify(env, { users, members: S.readCollection(env.ss, "members") }, body.id, body.code, body.password);
           if (!r.ok) return r;
           S.writeCollection(env.ss, "users", users);
+          /* typing the code that was sent to the member's phone proves that phone: remember it, for the number as it is now */
+          if (r.proved === "phone") { try { const mem = S.readCollection(env.ss, "members"), m = mem.find((x) => x.id === r.memberId), no = m && N.normalizePhone(m.phone); if (m && no) { m.phoneConfirmed = D.todayISO(); m.phoneConfirmedNo = no; m.phoneConfirmedBy = "member (code)"; S.writeCollection(env.ss, "members", mem); } } catch (e) { /* the sign-in still succeeds */ } }
           return { ok: true, token: r.token, user: r.user };
         } finally { env.lock.releaseLock(); }
       }

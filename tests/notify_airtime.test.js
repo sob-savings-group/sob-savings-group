@@ -45,10 +45,10 @@ t("a live adapter marks SENT only on confirmed success; DRY_RUN messages go out 
   assert.equal(r.sent, 1); assert.equal(db.outbox[0].status, "SENT"); assert.equal(log[0].to, "+256772123456"); assert.equal(db.outbox[0].providerRef, "P1");
   assert.equal(N.dispatch(db, c, { SMS: live(true, log) }, {}).sent, 0, "SENT is never resent");
 });
-t("failures and thrown errors are logged to smsFailures, retried up to the limit, never marked SENT", () => {
+t("failures and thrown errors are logged to smsFailures, an SMS is tried once only (never re-sent automatically), never marked SENT", () => {
   const db = fresh(); const c = ctxAt("2026-01-05"); CMD.run(db, c, "createEntry", { date: "2026-01-05", memberId: "SOB-001", amount: 5, type: "Savings" });
   for (let i = 0; i < 5; i++) N.dispatch(db, c, { SMS: live(false) }, {});
-  assert.equal(db.outbox[0].status, "FAILED"); assert.equal(db.outbox[0].attempts, N.MAX_ATTEMPTS); assert.equal(db.smsFailures.length, N.MAX_ATTEMPTS);
+  assert.equal(db.outbox[0].status, "FAILED"); assert.equal(db.outbox[0].attempts, 1); assert.equal(db.smsFailures.length, 1);
   const db2 = fresh(); CMD.run(db2, c, "createEntry", { date: "2026-01-05", memberId: "SOB-001", amount: 5, type: "Savings" });
   N.dispatch(db2, c, { SMS: { live: true, send() { throw new Error("boom"); } } }, {}); assert.equal(db2.outbox[0].status, "FAILED"); assert.match(db2.outbox[0].reason, /boom/);
 });

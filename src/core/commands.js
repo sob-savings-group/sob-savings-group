@@ -184,6 +184,9 @@
     openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     utilizeReserve: (db, ctx, a) => RSV.utilizeReserve(db, ctx, { date: a.date, amount: a.amount, purpose: a.purpose, evidence: a.evidence, reason: a.reason }),
+    confirmPhones: (db, ctx, a) => N.confirmPhones(db, ctx, { memberIds: a.memberIds, note: a.note }),
+    setSmsRule: (db, ctx, a) => N.setSmsRule(db, ctx, { requireConfirmed: a.requireConfirmed, reason: a.reason }),
+    sendNotice: (db, ctx, a) => N.sendNotice(db, ctx, { memberIds: a.memberIds, text: a.text, reason: a.reason }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason),
     /* Loan reminders (WhatsApp, officer-sent). They never touch loans, repayments, interest or balances: see core/reminders.js. */
     prepareReminder: (db, ctx, a) => RM.prepare(db, ctx, { loanId: a.loanId, level: a.level }),
@@ -232,6 +235,9 @@
     setEscalation: { perm: "policy.manage", label: "Set who is told about overdue loans (church administrator and bishop) and when" },
     setReceiptSms: { perm: "policy.manage", label: "Switch automatic SMS receipts on or off" },
     setAutoReminders: { perm: "policy.manage", label: "Change the automatic reminder schedule" },
+    confirmPhones: { perm: "notify.manage", label: "Confirm members' phone numbers" },
+    setSmsRule: { perm: "policy.manage", label: "Send amounts and warnings only to confirmed numbers" },
+    sendNotice: { perm: "notify.manage", label: "Send a message to chosen members" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
@@ -255,6 +261,9 @@
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "confirmPhones") return "Confirm the phone numbers of " + (a.memberIds || []).length + " member(s): " + (a.memberIds || []).join(", ");
+    if (name === "setSmsRule") return "Amounts and warnings by SMS only to confirmed numbers: " + (a.requireConfirmed === true || a.requireConfirmed === "true" || a.requireConfirmed === "yes" ? "ON" : "OFF");
+    if (name === "sendNotice") return "Message to " + (a.memberIds || []).length + " member(s): " + String(a.text || "").slice(0, 120);
     if (name === "setReceiptSms") return "Automatic SMS receipts to members: " + (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF");
     if (name === "setAutoReminders") return "Automatic reminders " + (a.enabled === undefined ? "settings" : (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF")) + ": regular every " + a.regularEveryDays + " days; Church Administration notice after " + a.adminAfterDays + " days unpaid; Bishop notice " + a.bishopDaysBefore + " days before the deadline";
     if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");

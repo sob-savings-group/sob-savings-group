@@ -101,13 +101,14 @@
   function otpStart(env, db, ident, contact) {
     const out = { ok: true, send: null }, r = resolve(db, ident); if (!r) return out;
     /* the member types BOTH the SOB number and an email or phone; they must belong to the same member on record, or nothing is sent and the reply looks the same */
-    if (String(contact || "").trim()) { const c = String(contact).trim(), mine = [r.member.email, r.user.email, r.member.phone, r.user.phone, r.member.contact]; if (!mine.some((x) => x && (isEmail(c) ? lc(x) === lc(c) : samePhone(x, c)))) return out; }
+    let hit = null; if (String(contact || "").trim()) { const c = String(contact).trim(), mine = [r.member.email, r.user.email, r.member.phone, r.user.phone, r.member.contact]; hit = mine.find((x) => x && (isEmail(c) ? lc(x) === lc(c) : samePhone(x, c))); if (!hit) return out; }
     const id = r.user.id, gap = "otpgap:" + id, cnt = "otpcnt:" + id;
     if (env.cache.get(gap) || Number(env.cache.get(cnt) || 0) >= OTP_HOURLY) return out;
     const email = [r.member.email, r.user.email].find(isEmail), phone = [r.member.phone, r.user.phone, r.member.contact].find((p) => digits(p).length >= 9);
     if (!email && !phone) return out;
-    const code = newCode(env), channel = email ? "email" : "sms", to = email ? String(email).trim() : phone;
-    env.cache.put("otp:" + id, JSON.stringify({ h: env.hash(code + ":" + id), n: 0 }), OTP_TTL); env.cache.put(gap, "1", OTP_GAP); env.cache.put(cnt, Number(env.cache.get(cnt) || 0) + 1, 3600);
+    /* when the member typed an email or a phone, the code goes to THAT one (it matched the record), so entering it proves it */
+    const viaTyped = hit ? (isEmail(hit) ? "email" : "sms") : null, code = newCode(env), channel = viaTyped || (email ? "email" : "sms"), to = viaTyped ? String(hit).trim() : email ? String(email).trim() : phone;
+    env.cache.put("otp:" + id, JSON.stringify({ h: env.hash(code + ":" + id), n: 0, ch: channel === "sms" ? "phone" : "email" }), OTP_TTL); env.cache.put(gap, "1", OTP_GAP); env.cache.put(cnt, Number(env.cache.get(cnt) || 0) + 1, 3600);
     const text = "Your Sons of Bethel Savings Group code is " + code + ". It works for 10 minutes. Never share it with anyone.";
     out.send = { channel, to, subject: "Your Sons of Bethel verification code", body: channel === "email" ? text + "\n\nIf you did not ask for this code, ignore this message; your account is unchanged." : text };
     return out;
@@ -124,7 +125,7 @@
     const u = r.user; u.salt = env.randomToken(); u.pinHash = stretch(env, u.salt, String(newPassword)); delete u.mustChange;
     env.cache.remove("otp:" + id); env.cache.remove(k);
     const token = env.randomToken() + env.randomToken(); env.cache.put("sess:" + env.hash(token), u.id, SESSION_SECONDS);
-    return { ok: true, token, user: publicUser(u), updated: u };
+    return { ok: true, token, user: publicUser(u), updated: u, proved: e.ch || "", memberId: r.member.id };
   }
   /* Adding or changing the email on record (signed in): a code goes to the NEW address and nothing is saved until it is entered. */
   function emailStart(env, db, user, email) {

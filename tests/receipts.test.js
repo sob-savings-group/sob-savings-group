@@ -27,11 +27,11 @@ t("receipts are OFF by default: a transaction queues and sends nothing", () => {
 t("switching ON needs the Chairperson, and is audited", () => { assert.equal(RM.getReceipts(db()).enabled, false); on(); assert.equal(RM.getReceipts(db()).enabled, true); assert.ok(audit("ReceiptSms").some((a) => a.action === "Changed")); });
 t("a savings deposit sends one short SMS with the new savings balance and the loan balance, automatically", () => {
   sent.length = 0; assert.ok(cmd(treas, "createEntry", { date: today, memberId: M1.id, amount: 50000, type: "Savings" }).ok); assert.equal(sent.length, 1); const b = sent[0].body;
-  assert.equal(sent[0].to, "+256772111001"); assert.match(b, /^SOB: Savings UGX 50,000 received/); assert.match(b, /Savings bal UGX 670,000\./); assert.match(b, /Loan bal UGX/); assert.ok(b.length <= 160, b);
+  assert.equal(sent[0].to, "+256772111001"); assert.match(b, /^SOB-\d+: Savings UGX 50,000 received/); assert.match(b, /Savings bal UGX 670,000\./); assert.match(b, /Loan bal UGX/); assert.ok(b.length <= 160, b);
   const a = audit("ReceiptSms").filter((x) => x.action === "Sent"); assert.ok(a.length >= 1 && a[a.length - 1].newValue.text === b, "the SMS text is in the audit trail");
 });
 t("a loan repayment sends the new loan balance; a member with no loan gets savings only", () => {
-  sent.length = 0; const owed = L.loanOutstanding(db().loans.find((l) => l.id === l1.id), db(), today); assert.ok(cmd(adminTok, "repayLoan", { loanId: l1.id, amount: 10000, date: today }).ok); assert.equal(sent.length, 1); assert.match(sent[0].body, /^SOB: Loan repayment UGX 10,000 received/); assert.match(sent[0].body, new RegExp("Loan bal UGX " + (owed - 10000).toLocaleString("en-US")));
+  sent.length = 0; const owed = L.loanOutstanding(db().loans.find((l) => l.id === l1.id), db(), today); assert.ok(cmd(adminTok, "repayLoan", { loanId: l1.id, amount: 10000, date: today }).ok); assert.equal(sent.length, 1); assert.match(sent[0].body, /^SOB-\d+: Loan repayment UGX 10,000 received/); assert.match(sent[0].body, new RegExp("Loan bal UGX " + (owed - 10000).toLocaleString("en-US")));
   sent.length = 0; cmd(treas, "createEntry", { date: today, memberId: M4.id, amount: 5000, type: "Savings" }); assert.equal(sent.length, 1); assert.ok(!/Loan bal/.test(sent[0].body), "the settled member has no active loan"); assert.match(sent[0].body, /Savings bal/);
 });
 t("a withdrawal: with no one else's approval it sends nothing (and the audit says why); when the policy sends it to the Chairperson, the SMS goes only after approval", () => {
@@ -39,7 +39,7 @@ t("a withdrawal: with no one else's approval it sends nothing (and the audit say
   assert.equal(sent.length, 0, "entered and approved by the same person: no SMS"); assert.ok(audit("ReceiptSms").some((a) => a.action === "Not sent" && /approval/.test(a.reason)));
   const p = cmd(adminTok, "setPolicy", { key: "approval", values: { requiredTypes: ["Withdraw"] }, reason: "withdrawals need the Chairperson" }); assert.ok(p.ok, JSON.stringify(p)); if (p.result && p.result.pendingApproval) assert.ok(cmd(chair, "approveRequest", { id: p.result.requestId }).ok);
   const w2 = cmd(adminTok, "createEntry", { date: today, memberId: M2.id, amount: 20000, type: "Withdraw" }); assert.ok(w2.ok, JSON.stringify(w2)); const e = db().transactions.find((x) => x.id === w2.result.id); assert.equal(e.approvalStatus, "PendingApproval"); assert.equal(sent.length, 0, "nothing before the Chairperson approves");
-  assert.ok(cmd(chair, "approveEntry", { id: e.id, decision: "approve" }).ok); assert.equal(sent.length, 1); assert.match(sent[0].body, /^SOB: Withdrawal UGX 20,000 paid/); assert.match(sent[0].body, /Savings bal/);
+  assert.ok(cmd(chair, "approveEntry", { id: e.id, decision: "approve" }).ok); assert.equal(sent.length, 1); assert.match(sent[0].body, /^SOB-\d+: Withdrawal UGX 20,000 paid/); assert.match(sent[0].body, /Savings bal/);
   const rej = cmd(adminTok, "createEntry", { date: today, memberId: M2.id, amount: 5000, type: "Withdraw" }); sent.length = 0; assert.ok(cmd(chair, "approveEntry", { id: rej.result.id, decision: "reject", reason: "test" }).ok); assert.equal(sent.length, 0, "a rejected withdrawal sends nothing");
   assert.ok(cmd(adminTok, "setPolicy", { key: "approval", values: { requiredTypes: [] }, reason: "restore" }).ok || true);
 });

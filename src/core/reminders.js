@@ -256,7 +256,7 @@
     /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
     const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
     const v = { total: money(n), amt: n.toLocaleString("en-US"), dl, n: String(left === null ? "" : left) };
-    for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return t; }
+    for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return N.identify(t, rec.memberId); }
     throw new Error("SMS_TOO_LONG: the message would be longer than " + SMS_MAX + " characters, so it was not sent. Use WhatsApp for this member.");
   }
   function queueSms(db, ctx, a) {

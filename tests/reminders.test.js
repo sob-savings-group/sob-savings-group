@@ -210,7 +210,7 @@ t("the deadline is a setting: notices keep the deadline they were issued with, a
   const r1 = run(db, "Admin", "2026-10-22", "prepareReminder", { loanId: l.id, level: "FINAL" });
   assert.match(r1.body, /by 24 November 2026/); assert.equal(r1.deadline, "2026-11-24");
   assert.match(r1.body, /your name goes to Church Administration and the Bishop/);
-  const sms = RM.composeSms(db, r1, r1.figures); assert.equal(sms, "SOB FINAL: Pay UGX 180,000 now. Bishop next."); assert.ok(sms.length <= 50);
+  const sms = RM.composeSms(db, r1, r1.figures); assert.equal(sms, "SOB-001: FINAL: Pay UGX 180,000 now. Bishop next."); assert.ok(sms.length <= 50);
   setDates(db, "2026-10-22", "2026-12-19", "2026-12-05");                                       // next cycle / a new decision: no code change
   assert.equal(r1.deadline, "2026-11-24"); assert.match(r1.body, /24 November 2026/, "the issued notice keeps its deadline");
   assert.throws(() => run(db, "Admin", "2026-10-22", "revalidateReminder", { id: r1.id }), /STALE_REMINDER.*deadline changed/);
@@ -235,7 +235,7 @@ t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then 
   assert.equal(auto(db, "2026-11-13", g).sent[0].stage, "ADMIN"); assert.equal(auto(db, "2026-11-14", g).sent.length, 0, "the Church Administration notice goes once");
   assert.equal(auto(db, "2026-11-21", g).sent.length, 0, "3 days before the deadline: not yet the Bishop stage");
   assert.equal(auto(db, "2026-11-22", g).sent.length, 0, "Sunday: nothing goes out"); assert.equal(auto(db, "2026-11-23", g).sent[0].stage, "BISHOP", "Monday: the Bishop notice still goes (1 day before the deadline)"); assert.equal(auto(db, "2026-11-24", g).sent.length, 0, "the Bishop notice goes once"); assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up");
-  assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
+  assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 54 && /^SOB-001: /.test(m.body), m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
   const recs = db.reminders.filter((r) => r.auto); assert.deepEqual(recs.map((r) => r.stage), ["REGULAR", "ADMIN", "BISHOP"]); assert.ok(recs.every((r) => r.deadline === "2026-11-24" && r.delivery === "SMS_ACCEPTED" && /Church Administration/.test(r.body)));
   assert.ok(db.auditLog.filter((a) => a.entityType === "AutoReminderRun").length >= 3 && db.auditLog.some((a) => a.entityType === "Reminder" && a.action === "Prepared"));
 });
@@ -244,7 +244,7 @@ t("AUTO daily: every day brings a different SMS that counts down to the deadline
   setAuto(db, "2026-11-18", { enabled: true, regularEveryDays: 1, adminAfterDays: 2, bishopDaysBefore: 2 });
   const days = ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-23", "2026-11-24"], stages = days.map((d) => { const r = auto(db, d, g); assert.equal(r.sent.length, 1, d + " " + JSON.stringify(r)); return r.sent[0].stage; });
   assert.deepEqual(stages, ["REGULAR", "REGULAR", "ADMIN", "BISHOP", "REGULAR"]); const sun = auto(db, "2026-11-22", g); assert.equal(sun.sent.length, 0, "Sunday 22 Nov: nothing is sent"); assert.match(sun.note, /Sunday/);
-  assert.equal(new Set(sent.map((m) => m.body)).size, 5, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body));
+  assert.equal(new Set(sent.map((m) => m.body)).size, 5, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 54 && /^SOB-001: /.test(m.body), m.body));
   assert.match(sent[0].body, /5 days left/); assert.match(sent[1].body, /4 days left/); assert.match(sent[3].body, /Bishop/); assert.match(sent[4].body, /today/i);
   assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up"); });
 t("AUTO: someone who has paid since the first reminder skips the Church Administration notice; a loan paid in full is not messaged again", () => {
