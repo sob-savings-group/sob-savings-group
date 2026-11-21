@@ -98,8 +98,10 @@
   const newCode = (env) => String(parseInt(env.hash(env.randomToken() + env.randomToken()).slice(0, 8), 16) % 1000000).padStart(6, "0");
   const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
   /* Returns { ok:true, send:{channel,to,subject,body} | null }. send is null when nothing should go out (unknown member, no contact, too soon): the caller replies identically. */
-  function otpStart(env, db, ident) {
+  function otpStart(env, db, ident, contact) {
     const out = { ok: true, send: null }, r = resolve(db, ident); if (!r) return out;
+    /* the member types BOTH the SOB number and an email or phone; they must belong to the same member on record, or nothing is sent and the reply looks the same */
+    if (String(contact || "").trim()) { const c = String(contact).trim(), mine = [r.member.email, r.user.email, r.member.phone, r.user.phone, r.member.contact]; if (!mine.some((x) => x && (isEmail(c) ? lc(x) === lc(c) : samePhone(x, c)))) return out; }
     const id = r.user.id, gap = "otpgap:" + id, cnt = "otpcnt:" + id;
     if (env.cache.get(gap) || Number(env.cache.get(cnt) || 0) >= OTP_HOURLY) return out;
     const email = [r.member.email, r.user.email].find(isEmail), phone = [r.member.phone, r.user.phone, r.member.contact].find((p) => digits(p).length >= 9);

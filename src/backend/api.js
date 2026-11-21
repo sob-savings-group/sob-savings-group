@@ -50,7 +50,7 @@
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
       /* Verification codes (public, no session): sent to the email on record, or by SMS when there is no email. The reply is the same whether or not the details matched. */
       if (body.action === "otpStart") {
-        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id);
+        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.contact);
         const generic = { ok: true, message: "If those details match a member, a code has been sent to the email on record (or by SMS if there is no email). It works for 10 minutes." };
         if (!r.send) return generic;
         if (r.send.channel === "email") { try { if (!env.mail) throw new Error("no mail"); env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); } }

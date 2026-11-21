@@ -68,7 +68,8 @@
       const back = () => { problem.replaceChildren(); pwStep.hidden = true; idStep.hidden = false; pin.value = ""; if (toggleRef) toggleRef.hidden = false; mid.focus(); };
       mid.addEventListener("keydown", (ev) => { if (ev.key === "Enter") next(); }); pin.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
       /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
-      const rid = h("input", { id: "reg-id", placeholder: "SOB-014, email or phone", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rid = h("input", { id: "reg-id", placeholder: "SOB-014", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rcontact = h("input", { id: "reg-contact", placeholder: "Email or phone", autocapitalize: "none", autocomplete: "email", autocorrect: "off", spellcheck: "false" });
       const rcode = h("input", { id: "reg-code", placeholder: "6-digit code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
       const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "New password (6+ characters)", autocomplete: "new-password" });
       const rmsg = h("div", { id: "reg-msg", class: "ok-note", role: "status" });
@@ -78,12 +79,12 @@
           if (rpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "WEAK_PIN" });
           return st.store.login(normId(rid.value), null, { action: "otpVerify", code: rcode.value.trim(), password: rpw.value });
         }) }, "Create password and sign in"));
-      const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value);
-        if (!id) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, "Enter your SOB ID, email or phone"));
-        working = true; try { const j = await st.store.call({ action: "otpStart", id }); rmsg.textContent = j.message; step2.hidden = false; stepNote.textContent = "Step 3 of 4: type the code. Step 4: choose your password"; rcode.focus(); }
+      const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value), contact = rcontact.value.trim();
+        if (!id || !contact) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, !id ? "Type your SOB number" : "Type your email or phone"));
+        working = true; try { const j = await st.store.call({ action: "otpStart", id, contact }); rmsg.textContent = j.message; step2.hidden = false; stepNote.textContent = "Step 3 of 4: type the code. Step 4: choose your password"; rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
       const regTitle = h("h2", { class: "sec-sm", id: "reg-title" }, ""), regHelp = h("div", { class: "lg-help", id: "reg-help" }), stepNote = h("div", { class: "stepnote", id: "reg-steps", role: "status" }, "");
-      const regBox = h("div", { id: "reg-box", hidden: true }, regTitle, regHelp, stepNote, h("label", { for: "reg-id" }, "Your SOB number (or email or phone)"), rid,
+      const regBox = h("div", { id: "reg-box", hidden: true }, regTitle, regHelp, stepNote, h("label", { for: "reg-id" }, "1. Your SOB number"), rid, h("label", { for: "reg-contact" }, "2. Your email or phone"), rcontact,
         h("button", { class: "primary big", id: "reg-send", onclick: sendCode }, "Send me the code"), rmsg, step2);
       const signBox = h("div", { id: "sign-box", hidden: true },
         (idStep = h("div", { id: "id-step" }, h("label", { for: "mid" }, "SOB ID, email or phone"), mid, h("button", { class: "primary big", id: "login-go", onclick: next }, "Continue"))),
@@ -94,7 +95,7 @@
         h("button", { type: "button", id: "choose-have", class: "primary big", onclick: () => setMode("have") }, "Sign in"), h("button", { type: "button", id: "choose-first", class: "secondary big", onclick: () => setMode("first") }, "New here? Set up"),
         h("button", { type: "button", id: "choose-forgot", class: "linkbtn", onclick: () => setMode("forgot") }, "Forgot password?"));
       const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { setMode("welcome"); } }, "‹ Back"); toggle.hidden = true;
-      const STEPS = ["1. Type your SOB number.", "2. Or type your email or phone.", "3. We send you a 6-number code.", "4. You choose your own password."].map((t) => h("div", null, t));
+      const STEPS = ["1. Type your SOB number.", "2. Type your email or phone.", "3. We send you a 6-number code.", "4. You choose your own password."].map((t) => h("div", null, t));
       function setMode(m) {
         problem.replaceChildren(); rmsg.textContent = ""; step2.hidden = true;
         welcomeBox.hidden = m !== "welcome"; signBox.hidden = m !== "have"; regBox.hidden = !(m === "first" || m === "forgot"); toggle.hidden = m === "welcome";

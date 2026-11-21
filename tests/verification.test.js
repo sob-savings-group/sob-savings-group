@@ -13,6 +13,10 @@ t("a member with an email gets the code by EMAIL, even if a phone is also on rec
 t("a member with no email gets it by SMS to the phone on record", () => { const s = sent("SOB-002"); assert.strictEqual(s.channel, "sms"); assert.strictEqual(s.to, "0772000222"); });
 t("no contact, unknown ID, and an inactive member: nothing is sent, and the reply looks the same", () => { ["SOB-004", "SOB-099", "SOB-003", ""].forEach((i) => assert.strictEqual(A.otpStart(env, db, i).send, null)); });
 t("the member can ask by email address instead of the SOB ID", () => assert.strictEqual(sent("aaron@example.com").channel, "email"));
+t("the SOB number and the email or phone typed with it must belong to the same member, or nothing is sent", () => {
+  assert.ok(A.otpStart(env, db, "SOB-001", "aaron@example.com").send, "matching email (any capitals)"); reset(); assert.ok(A.otpStart(env, db, "SOB-001", "0772123456").send, "matching phone (any spaces)"); reset();
+  assert.strictEqual(A.otpStart(env, db, "SOB-001", "0772000222").send, null, "another member's phone: nothing sent"); reset(); assert.strictEqual(A.otpStart(env, db, "SOB-001", "grace@example.com").send, null, "an email that is not on record: nothing sent"); reset();
+  assert.ok(A.otpStart(env, db, "SOB-001").send, "older apps that send only the ID still work"); });
 t("one request a minute: the second is silently not sent", () => { assert.ok(sent("SOB-001")); assert.strictEqual(A.otpStart(env, db, "SOB-001").send, null); });
 t("the right code sets the password, signs in, and clears the first-time flag", () => { const c = digitsOf(sent("SOB-001")); const r = A.otpVerify(env, db, "SOB-001", c, "my-new-pass"); assert.ok(r.ok && r.token); assert.ok(!db.users[0].mustChange); assert.ok(A.login(env, db, "SOB-001", "my-new-pass").ok);
   assert.strictEqual(code(A.otpVerify(env, db, "SOB-001", c, "again-again")), "BAD_CODE", "a code works once"); db.users[0] = mk("SOB-001", "123456", true); });

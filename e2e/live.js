@@ -46,7 +46,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? "  ok  " : "FAIL  ") + m)
   await pg.fill("#mid", "ADMIN"); await pg.fill("#pin", "admin-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "ADMIN signs in through the same form");
   await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.fill("#mid", "chairperson"); await pg.fill("#pin", "chair-pin-1"); await pg.click("#login-go"); await pg.waitForSelector("#hero"); ok(true, "CHAIR signs in through the same form (role name accepted)");
   /* verification: the code goes to the email on record; a wrong code is refused; the right one creates the password and signs in */
-  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.click("#pin-toggle"); await pg.click("#choose-first"); await pg.fill("#reg-id", mem.id); mails.length = 0; await pg.click("#reg-send"); await pg.waitForSelector("#reg-step2:not([hidden])");
+  await pg.click("#logout"); await pg.waitForSelector("#login-go"); await pg.click("#pin-toggle"); await pg.click("#choose-first"); await pg.fill("#reg-id", mem.id); await pg.fill("#reg-contact", mem.email || mem.phone); mails.length = 0; await pg.click("#reg-send"); await pg.waitForSelector("#reg-step2:not([hidden])");
   ok(mails.length === 1 && mails[0].to === mem.email && /code is \d{6}/.test(mails[0].b), "the verification code is emailed to the address on record");
   ok(!/\d{6}/.test(await pg.innerText("#reg-msg")), "the screen never shows the code itself");
   await pg.fill("#reg-code", "000000"); await pg.fill("#reg-pw", "brand-new-pass"); await pg.click("#reg-go"); await pg.waitForSelector("#login-error"); ok(/wrong or has expired/.test(await pg.innerText("#login-error")), "a wrong code is refused");
