@@ -47,6 +47,6 @@ const server = () => S.readAll(env.ss), rems = () => server().reminders || [];
   await pg.click("#notice-apology"); await pg.check('[data-member="' + M1.id + '"]'); await pg.check('[data-member="' + M2.id + '"]'); ok(!(await pg.locator("#notice-go").isDisabled()), "apology preset + two members enables Send");
   await pg.screenshot({ path: process.env.SHOT_DIR ? process.env.SHOT_DIR + "/notice.png" : "/tmp/notice.png" });
   await pg.click("#notice-go"); await pg.waitForSelector(".toast"); approveAll(); const out = server().outbox || [];
-  ok(out.length === 2 && out.every((m) => /^SOB-\d+: Yesu yebazibwe/.test(m.body) && m.body.length <= 160), "two texts queued, each starting with the member's SOB ID, one SMS each");
+  ok(out.length === 2 && out.every((m) => /^SOB-\d+: Tusonyiwe olw/.test(m.body) && m.body.length <= 160), "two texts queued, each starting with the member's SOB ID, one SMS each");
   ok(errs.length === 0, "no page errors " + errs.join("|")); await b.close(); srv.close(); console.log(fails ? fails + " FAILED" : "sms identity e2e passed");
 })();

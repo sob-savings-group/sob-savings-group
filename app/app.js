@@ -683,7 +683,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
   const recipientLine = (m, shared) => { const k = N.normalizePhone(m.phone), twin = k && shared[k] && shared[k].length > 1 ? shared[k].filter((x) => x !== m.id) : [];
     return h("span", { class: "mute", style: "font-size:13px" }, " · " + m.id + " · " + maskPhone(m.phone) + " · ", N.phoneConfirmed(m) ? h("span", { class: "ok" }, "number confirmed") : h("span", { class: "warn" }, "not confirmed"), twin.length ? h("b", { class: "warn" }, " · same number as " + twin.join(", ")) : null); };
-  const APOLOGY = "Yesu yebazibwe. Tusonyiwe olw'obubaka bw'okujjukiza bwe mwafuna. Byali byakulabirako. Tukuuma obwesige bwammwe.";
+  const APOLOGY = "Tusonyiwe olw'obubaka bw'okujjukiza ebbanja bwofuna. Tetwagala kuswaaza tuli bakuumi b'obwesigwa. sasula b4 24 Nov. Blessing. Elder Pr. Kironde(c/p)";
   function numbersForm() {
     const shared = sharedNumbers(), picked = new Set(), rule = N.getSmsRule(st.db).requireConfirmed, go = h("button", { class: "primary", id: "confirm-go", disabled: true }, "Confirm 0"), note = h("input", { id: "confirm-note", placeholder: "How you checked, e.g. phoned the member" }), err = h("div", { class: "err", role: "alert" });
     const sync = () => { go.textContent = "Confirm " + picked.size; go.disabled = !picked.size; };
@@ -701,7 +701,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     ta.value = ""; const sync = () => { const len = (picked.size ? "SOB-000: " : "").length + ta.value.length; cnt.textContent = ta.value.length + " characters. Each text starts with the member's SOB ID and must stay in one SMS (160)."; go.textContent = "Send to " + picked.size; go.disabled = !picked.size || !ta.value.trim() || len > 160; };
     ta.oninput = sync;
     const m = Modal("Send a message", h("div", null, h("p", { class: "mute" }, "Tap who should get it. Plain letters only. The Chairperson approves before anything is queued."),
-      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the Luganda apology")),
+      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text")),
       ta, cnt,
       h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
       err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
