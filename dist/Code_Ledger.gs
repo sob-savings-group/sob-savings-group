@@ -2488,6 +2488,8 @@ __M['core/reminders'] = (function(){ const module = {exports:{}}; const require 
   function autoRun(db, ctx, gateways) {
     G.require(ctx, "notify.manage"); const auto = getAuto(db), today = ctx.today, out = { date: today, enabled: auto.enabled, sent: [], skipped: [], failed: [], note: "" };
     if (!auto.enabled) { out.note = "Automatic reminders are switched off. Nothing was sent."; return out; }
+    /* Sunday is the church\'s day of rest: no automatic reminder goes out. Monday carries on counting down from the deadline, and the Bishop notice (sent "N days or fewer" before it) still goes. */
+    if (new Date(today + "T00:00:00Z").getUTCDay() === 0) { out.note = "No automatic reminders on Sunday. Nothing was sent."; G.audit(db, ctx, "AutoReminderRun", today, "Run skipped", null, { reason: out.note }, "Scheduled daily run"); return out; }
     if (!(gateways && gateways.SMS && gateways.SMS.live === true)) { out.note = "The SMS gateway is not live (set up and tested). Nothing was sent."; G.audit(db, ctx, "AutoReminderRun", today, "Run skipped", null, { reason: out.note }, "Scheduled daily run"); return out; }
     const cfg = getConfig(db), done = (r) => r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED";
     for (const loan of L.activeLoans(db).filter((l) => !l.voided)) {
@@ -4155,8 +4157,10 @@ __M['backend/auth'] = (function(){ const module = {exports:{}}; const require = 
   const newCode = (env) => String(parseInt(env.hash(env.randomToken() + env.randomToken()).slice(0, 8), 16) % 1000000).padStart(6, "0");
   const samePhone = (a, b) => { a = digits(a); b = digits(b); return a.length >= 9 && b.length >= 9 && a.slice(-9) === b.slice(-9); };
   /* Returns { ok:true, send:{channel,to,subject,body} | null }. send is null when nothing should go out (unknown member, no contact, too soon): the caller replies identically. */
-  function otpStart(env, db, ident) {
+  function otpStart(env, db, ident, contact) {
     const out = { ok: true, send: null }, r = resolve(db, ident); if (!r) return out;
+    /* the member types BOTH the SOB number and an email or phone; they must belong to the same member on record, or nothing is sent and the reply looks the same */
+    if (String(contact || "").trim()) { const c = String(contact).trim(), mine = [r.member.email, r.user.email, r.member.phone, r.user.phone, r.member.contact]; if (!mine.some((x) => x && (isEmail(c) ? lc(x) === lc(c) : samePhone(x, c)))) return out; }
     const id = r.user.id, gap = "otpgap:" + id, cnt = "otpcnt:" + id;
     if (env.cache.get(gap) || Number(env.cache.get(cnt) || 0) >= OTP_HOURLY) return out;
     const email = [r.member.email, r.user.email].find(isEmail), phone = [r.member.phone, r.user.phone, r.member.contact].find((p) => digits(p).length >= 9);
@@ -4287,7 +4291,7 @@ __M['backend/api'] = (function(){ const module = {exports:{}}; const require = _
       if (body.action === "login") return A.login(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.pin);
       /* Verification codes (public, no session): sent to the email on record, or by SMS when there is no email. The reply is the same whether or not the details matched. */
       if (body.action === "otpStart") {
-        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id);
+        const r = A.otpStart(env, { users: S.readCollection(env.ss, "users"), members: S.readCollection(env.ss, "members") }, body.id, body.contact);
         const generic = { ok: true, message: "If those details match a member, a code has been sent to the email on record (or by SMS if there is no email). It works for 10 minutes." };
         if (!r.send) return generic;
         if (r.send.channel === "email") { try { if (!env.mail) throw new Error("no mail"); env.mail(r.send.to, r.send.subject, r.send.body); } catch (e) { return fail("EMAIL_UNAVAILABLE: the email could not be sent. Ask the Secretary for help"); } }
@@ -4492,7 +4496,7 @@ function __env(){
   return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
-var SOB_BUILD = "181eb8b6a4";
+var SOB_BUILD = "704f0cbaad";
 function __json(o){ return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 /* Whatever happens inside, the web app answers with JSON - never Google's HTML error page - so the app can always say what went wrong. */
 function doPost(e){
