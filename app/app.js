@@ -36,8 +36,8 @@
           st.user = r === "Member" ? { id: m.id, name: m.name, role: "Member", memberId: m.id } : { id: "demo-" + r, name: "Demo " + r, role: r }; st.view = null; render(); } }, "Enter"))));
     } else {
       /* ONE sign-in for everybody: SOB ID, Staff ID or email + password. The server finds the role; render() then shows only what that role may use. */
-      const mid = h("input", { id: "mid", placeholder: "SOB-014, email or phone", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
-      const pin = h("input", { type: "password", id: "pin", placeholder: "Password", autocomplete: "current-password", enterkeyhint: "go" });
+      const mid = h("input", { id: "mid", placeholder: "Type your SOB number, email or phone", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false", enterkeyhint: "next" });
+      const pin = h("input", { type: "password", id: "pin", placeholder: "Type your password", autocomplete: "current-password", enterkeyhint: "go" });
       const show = h("button", { type: "button", id: "pin-show", class: "ghost", "aria-label": "Show or hide password", onclick: () => { const on = pin.type === "password"; pin.type = on ? "text" : "password"; show.textContent = on ? "Hide" : "Show"; } }, "Show");
       let working = false; const problem = h("div", { id: "login-problem" }); if (st.conn && !st.conn.ok) connBanner(problem, st.conn.error);
       const MSG = { BAD_CREDENTIALS: "Incorrect ID or password. Please check and try again.", MEMBER_PENDING: "Your membership is pending approval. Please contact the Administrator.", MEMBER_INACTIVE: "Your account is currently inactive or restricted. Please contact the Administrator.", BAD_CODE: "That code is wrong or has expired. Request a new one.", WEAK_PIN: "Choose a password of at least 6 characters.", EMAIL_UNAVAILABLE: "We could not send the email. Please contact the Secretary.", SMS_UNAVAILABLE: "We could not send the text message. Please contact the Secretary." };
@@ -68,10 +68,10 @@
       const back = () => { problem.replaceChildren(); pwStep.hidden = true; idStep.hidden = false; pin.value = ""; if (toggleRef) toggleRef.hidden = false; mid.focus(); };
       mid.addEventListener("keydown", (ev) => { if (ev.key === "Enter") next(); }); pin.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
       /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
-      const rid = h("input", { id: "reg-id", placeholder: "SOB-014", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
-      const rcontact = h("input", { id: "reg-contact", placeholder: "Email or phone", autocapitalize: "none", autocomplete: "email", autocorrect: "off", spellcheck: "false" });
-      const rcode = h("input", { id: "reg-code", placeholder: "6-digit code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
-      const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "New password (6+ characters)", autocomplete: "new-password" });
+      const rid = h("input", { id: "reg-id", placeholder: "Type your SOB number, e.g. SOB-014", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rcontact = h("input", { id: "reg-contact", placeholder: "Type your email or phone", autocapitalize: "none", autocomplete: "email", autocorrect: "off", spellcheck: "false" });
+      const rcode = h("input", { id: "reg-code", placeholder: "Type the 6-number code we sent you", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
+      const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "Choose your password (6 or more)", autocomplete: "new-password" });
       const rmsg = h("div", { id: "reg-msg", class: "ok-note", role: "status" });
       const step2 = h("div", { id: "reg-step2", hidden: true }, h("label", { for: "reg-code" }, "Verification code"), rcode, h("label", { for: "reg-pw" }, "Choose a password"), rpw,
         h("button", { class: "primary big", id: "reg-go", onclick: () => attempt(async () => {
