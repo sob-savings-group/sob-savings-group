@@ -745,3 +745,6 @@ body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);backg
 .toast{bottom:auto;top:calc(env(safe-area-inset-top,0px) + 72px);font-size:14.5px;padding:11px 15px}@media(min-width:1000px){.toast{bottom:auto;top:84px}}
 .login .help{flex-direction:column;align-items:center;gap:2px}
 .toast{width:calc(100% - 32px);max-width:380px}
+.steps4{display:flex;gap:6px;margin:0 0 12px}.steps4 b{flex:1;height:6px;border-radius:9px;background:#d5ddec}.steps4 b.on{background:#1d4ed8}
+#reg-box .lg-help{margin:0 0 6px}#reg-change{display:block;margin:6px auto 0;text-align:center}
+#reg-change[hidden]{display:none!important}
