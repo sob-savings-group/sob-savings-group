@@ -68,12 +68,12 @@
       const back = () => { problem.replaceChildren(); pwStep.hidden = true; idStep.hidden = false; pin.value = ""; if (toggleRef) toggleRef.hidden = false; mid.focus(); };
       mid.addEventListener("keydown", (ev) => { if (ev.key === "Enter") next(); }); pin.addEventListener("keydown", (ev) => { if (ev.key === "Enter") submit(); });
       /* Create or reset a password: a 6-digit code goes to the email on record (or by SMS when there is no email); the code proves who you are. */
-      const rid = h("input", { id: "reg-id", placeholder: "Type your SOB number, e.g. SOB-014", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
-      const rcontact = h("input", { id: "reg-contact", placeholder: "Type your email or phone", autocapitalize: "none", autocomplete: "email", autocorrect: "off", spellcheck: "false" });
-      const rcode = h("input", { id: "reg-code", placeholder: "Type the 6-number code we sent you", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
-      const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "Choose your password (6 or more)", autocomplete: "new-password" });
+      const rid = h("input", { id: "reg-id", placeholder: "SOB-014", autocapitalize: "none", autocomplete: "username", autocorrect: "off", spellcheck: "false" });
+      const rcontact = h("input", { id: "reg-contact", placeholder: "0772 123 456 or name@email.com", autocapitalize: "none", autocomplete: "email", autocorrect: "off", spellcheck: "false" });
+      const rcode = h("input", { id: "reg-code", placeholder: "6-number code", inputmode: "numeric", autocomplete: "one-time-code", maxlength: "6" });
+      const rpw = h("input", { id: "reg-pw", type: "password", placeholder: "6 or more letters or numbers", autocomplete: "new-password" });
       const rmsg = h("div", { id: "reg-msg", class: "ok-note", role: "status" });
-      const step2 = h("div", { id: "reg-step2", hidden: true }, h("label", { for: "reg-code" }, "Verification code"), rcode, h("label", { for: "reg-pw" }, "Choose a password"), rpw,
+      const step2 = h("div", { id: "reg-step2", hidden: true }, h("label", { for: "reg-code" }, "3. The 6-number code"), rcode, h("label", { for: "reg-pw" }, "4. Choose your password"), rpw,
         h("button", { class: "primary big", id: "reg-go", onclick: () => attempt(async () => {
           if (!/^\d{6}$/.test(rcode.value.trim())) throw Object.assign(new Error("Enter the 6-digit code"), { code: "FORMAT" });
           if (rpw.value.length < 6) throw Object.assign(new Error("Choose a password of at least 6 characters"), { code: "WEAK_PIN" });
@@ -81,11 +81,16 @@
         }) }, "Create password and sign in"));
       const sendCode = async () => { if (working) return; problem.replaceChildren(); rmsg.textContent = ""; const id = normId(rid.value), contact = rcontact.value.trim();
         if (!id || !contact) return problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, !id ? "Type your SOB number" : "Type your email or phone"));
-        working = true; try { const j = await st.store.call({ action: "otpStart", id, contact }); rmsg.textContent = j.message; step2.hidden = false; stepNote.textContent = "Step 3 of 4: type the code. Step 4: choose your password"; rcode.focus(); }
+        working = true; try { const j = await st.store.call({ action: "otpStart", id, contact }); rmsg.textContent = ""; setPart(2); rcode.focus(); }
         catch (e) { problem.append(h("div", { class: "err", id: "login-error", role: "alert" }, MSG[e.code] || friendly(e))); } finally { working = false; } };
-      const regTitle = h("h2", { class: "sec-sm", id: "reg-title" }, ""), regHelp = h("div", { class: "lg-help", id: "reg-help" }), stepNote = h("div", { class: "stepnote", id: "reg-steps", role: "status" }, "");
-      const regBox = h("div", { id: "reg-box", hidden: true }, regTitle, regHelp, stepNote, h("label", { for: "reg-id" }, "1. Your SOB number"), rid, h("label", { for: "reg-contact" }, "2. Your email or phone"), rcontact,
-        h("button", { class: "primary big", id: "reg-send", onclick: sendCode }, "Send me the code"), rmsg, step2);
+      const regTitle = h("h2", { class: "sec-sm", id: "reg-title" }, ""), regHelp = h("p", { class: "lg-help", id: "reg-help" }), bars = [1, 2, 3, 4].map(() => h("b")), progress = h("div", { class: "steps4", id: "reg-steps", role: "img" }, ...bars);
+      /* one thing at a time: part 1 = who you are; part 2 = the code and the new password */
+      const part1 = h("div", { id: "reg-part1" }, h("label", { for: "reg-id" }, "1. SOB number"), rid, h("label", { for: "reg-contact" }, "2. Email or phone"), rcontact, h("button", { class: "primary big", id: "reg-send", onclick: sendCode }, "Send me the code"));
+      const part2back = h("button", { type: "button", class: "linkbtn", id: "reg-change", onclick: () => setPart(1) }, "‹ Change my details");
+      const setPart = (n) => { part1.hidden = n !== 1; step2.hidden = n !== 2; part2back.hidden = n !== 2; toggle.hidden = n === 2; bars.forEach((b, i) => b.classList.toggle("on", i < (n === 1 ? 1 : 3)));
+        regTitle.textContent = n === 1 ? (curMode === "forgot" ? "Make a new password" : "Let us set you up") : "Check your phone or email";
+        regHelp.textContent = n === 1 ? "Step 1 of 4: type your details. Next we send you a 6-number code, then you choose your own password." : "Step 3 of 4: we sent a 6-number code. It works for 10 minutes."; };
+      const regBox = h("div", { id: "reg-box", hidden: true }, progress, regTitle, regHelp, part1, rmsg, step2, part2back);
       const signBox = h("div", { id: "sign-box", hidden: true },
         (idStep = h("div", { id: "id-step" }, h("label", { for: "mid" }, "SOB ID, email or phone"), mid, h("button", { class: "primary big", id: "login-go", onclick: next }, "Continue"))),
         (pwStep = h("div", { id: "pw-step", hidden: true }, h("div", { class: "who-row" }, (who = h("b", { id: "pw-who" }, "")), h("button", { type: "button", class: "linkbtn", id: "pw-back", onclick: back }, "Change")), h("label", { for: "pin" }, "Password"), h("div", { class: "pinrow" }, pin, show),
@@ -95,12 +100,11 @@
         h("button", { type: "button", id: "choose-have", class: "primary big", onclick: () => setMode("have") }, "Sign in"), h("button", { type: "button", id: "choose-first", class: "secondary big", onclick: () => setMode("first") }, "New here? Set up"),
         h("button", { type: "button", id: "choose-forgot", class: "linkbtn", onclick: () => setMode("forgot") }, "Forgot password?"));
       const toggle = h("button", { type: "button", id: "pin-toggle", class: "linkbtn", onclick: () => { setMode("welcome"); } }, "‹ Back"); toggle.hidden = true;
-      const STEPS = ["1. Type your SOB number.", "2. Type your email or phone.", "3. We send you a 6-number code.", "4. You choose your own password."].map((t) => h("div", null, t));
+      let curMode = "welcome";
       function setMode(m) {
         problem.replaceChildren(); rmsg.textContent = ""; step2.hidden = true;
         welcomeBox.hidden = m !== "welcome"; signBox.hidden = m !== "have"; regBox.hidden = !(m === "first" || m === "forgot"); toggle.hidden = m === "welcome";
-        if (m === "first") { regTitle.textContent = "Let us set you up"; regHelp.replaceChildren(...STEPS); stepNote.textContent = "Step 1 of 4: type who you are"; }
-        if (m === "forgot") { regTitle.textContent = "Make a new password (forgot password)"; regHelp.replaceChildren(...STEPS); stepNote.textContent = "Step 1 of 4: type who you are"; }
+        curMode = m; if (m === "first" || m === "forgot") setPart(1);
         if (m === "have") { back(); mid.focus(); }
         if ((m === "first" || m === "forgot") && mid.value) rid.value = mid.value;
       }
