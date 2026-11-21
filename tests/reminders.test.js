@@ -234,7 +234,7 @@ t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then 
   assert.equal(auto(db, "2026-11-12", g).sent.length, 0, "only 2 days after the first reminder");
   assert.equal(auto(db, "2026-11-13", g).sent[0].stage, "ADMIN"); assert.equal(auto(db, "2026-11-14", g).sent.length, 0, "the Church Administration notice goes once");
   assert.equal(auto(db, "2026-11-21", g).sent.length, 0, "3 days before the deadline: not yet the Bishop stage");
-  assert.equal(auto(db, "2026-11-22", g).sent[0].stage, "BISHOP"); assert.equal(auto(db, "2026-11-23", g).sent.length, 0, "the Bishop notice goes once"); assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up");
+  assert.equal(auto(db, "2026-11-22", g).sent.length, 0, "Sunday: nothing goes out"); assert.equal(auto(db, "2026-11-23", g).sent[0].stage, "BISHOP", "Monday: the Bishop notice still goes (1 day before the deadline)"); assert.equal(auto(db, "2026-11-24", g).sent.length, 0, "the Bishop notice goes once"); assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up");
   assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
   const recs = db.reminders.filter((r) => r.auto); assert.deepEqual(recs.map((r) => r.stage), ["REGULAR", "ADMIN", "BISHOP"]); assert.ok(recs.every((r) => r.deadline === "2026-11-24" && r.delivery === "SMS_ACCEPTED" && /Church Administration/.test(r.body)));
   assert.ok(db.auditLog.filter((a) => a.entityType === "AutoReminderRun").length >= 3 && db.auditLog.some((a) => a.entityType === "Reminder" && a.action === "Prepared"));
@@ -242,10 +242,10 @@ t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then 
 t("AUTO daily: every day brings a different SMS that counts down to the deadline (24 Nov), with the two notices on their own days", () => {
   const { db } = autoWorld(), { g, sent } = gw(true); const rs = run(db, "Admin", "2026-11-18", "setReminderSettings", { minIntervalDays: 1, reason: "daily reminders (test)" }); if (rs.pendingApproval) run(db, "Chairperson", "2026-11-18", "approveRequest", { id: rs.requestId });
   setAuto(db, "2026-11-18", { enabled: true, regularEveryDays: 1, adminAfterDays: 2, bishopDaysBefore: 2 });
-  const days = ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22", "2026-11-23", "2026-11-24"], stages = days.map((d) => { const r = auto(db, d, g); assert.equal(r.sent.length, 1, d + " " + JSON.stringify(r)); return r.sent[0].stage; });
-  assert.deepEqual(stages, ["REGULAR", "REGULAR", "ADMIN", "BISHOP", "REGULAR", "REGULAR"]);
-  assert.equal(new Set(sent.map((m) => m.body)).size, 6, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body));
-  assert.match(sent[0].body, /5 days left/); assert.match(sent[1].body, /4 days left/); assert.match(sent[4].body, /tomorrow/i); assert.match(sent[5].body, /today/i);
+  const days = ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-23", "2026-11-24"], stages = days.map((d) => { const r = auto(db, d, g); assert.equal(r.sent.length, 1, d + " " + JSON.stringify(r)); return r.sent[0].stage; });
+  assert.deepEqual(stages, ["REGULAR", "REGULAR", "ADMIN", "BISHOP", "REGULAR"]); const sun = auto(db, "2026-11-22", g); assert.equal(sun.sent.length, 0, "Sunday 22 Nov: nothing is sent"); assert.match(sun.note, /Sunday/);
+  assert.equal(new Set(sent.map((m) => m.body)).size, 5, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 50, m.body));
+  assert.match(sent[0].body, /5 days left/); assert.match(sent[1].body, /4 days left/); assert.match(sent[3].body, /Bishop/); assert.match(sent[4].body, /today/i);
   assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up"); });
 t("AUTO: someone who has paid since the first reminder skips the Church Administration notice; a loan paid in full is not messaged again", () => {
   const { db, l } = autoWorld(), { g, sent } = gw(true); setAuto(db, "2026-11-10", { enabled: true }); auto(db, "2026-11-10", g);

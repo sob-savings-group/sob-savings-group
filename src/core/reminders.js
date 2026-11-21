@@ -440,6 +440,8 @@
   function autoRun(db, ctx, gateways) {
     G.require(ctx, "notify.manage"); const auto = getAuto(db), today = ctx.today, out = { date: today, enabled: auto.enabled, sent: [], skipped: [], failed: [], note: "" };
     if (!auto.enabled) { out.note = "Automatic reminders are switched off. Nothing was sent."; return out; }
+    /* Sunday is the church\'s day of rest: no automatic reminder goes out. Monday carries on counting down from the deadline, and the Bishop notice (sent "N days or fewer" before it) still goes. */
+    if (new Date(today + "T00:00:00Z").getUTCDay() === 0) { out.note = "No automatic reminders on Sunday. Nothing was sent."; G.audit(db, ctx, "AutoReminderRun", today, "Run skipped", null, { reason: out.note }, "Scheduled daily run"); return out; }
     if (!(gateways && gateways.SMS && gateways.SMS.live === true)) { out.note = "The SMS gateway is not live (set up and tested). Nothing was sent."; G.audit(db, ctx, "AutoReminderRun", today, "Run skipped", null, { reason: out.note }, "Scheduled daily run"); return out; }
     const cfg = getConfig(db), done = (r) => r.delivery === "SMS_ACCEPTED" || r.delivery === "SENT_CONFIRMED";
     for (const loan of L.activeLoans(db).filter((l) => !l.voided)) {
