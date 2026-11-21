@@ -1563,6 +1563,16 @@
     if (!Object.prototype.hasOwnProperty.call(TEMPLATES, template)) throw new Error("UNKNOWN_TEMPLATE: " + template);
     return TEMPLATES[template](vars || {});
   }
+  /* Every SMS says who it is for: the member's SOB ID replaces a bare "SOB:" at the start, so a wrong recipient can see it is not theirs. Safe to apply twice. */
+  function identify(body, id) {
+    body = String(body == null ? "" : body); id = String(id || ""); if (!id || body.indexOf(id) === 0) return body;
+    const m = /^SOB( FINAL)?:\s*/.exec(body); return m ? id + ": " + (m[1] ? "FINAL: " : "") + body.slice(m[0].length) : id + ": " + body;
+  }
+  /* A number is "confirmed" when the member proved it (typed the code sent to it) or an officer confirmed it by speaking to the member. A new or changed number is not confirmed. */
+  const phoneConfirmed = (m) => !!(m && m.phoneConfirmed && m.phoneConfirmedNo && m.phoneConfirmedNo === normalizePhone(m.phone));
+  const RULE_ID = "SMS_RULE", NOT_CONFIRMED_TEXT = "SOB: You have a notice about your account. Please open the app or call the Treasurer.";
+  const getSmsRule = (db) => { const r = ((db && db.policy) || []).find((p) => p.id === RULE_ID) || {}; return { requireConfirmed: r.requireConfirmed === true, updatedBy: r.updatedBy || "", updatedDate: r.updatedDate || "" }; };
+  const NO_RULE_TEMPLATES = ["signIn", "custom"];   // no money details in these
   /* Internal: create an outbox record. Never throws for "cannot deliver" cases — those become SKIPPED with a visible reason. */
   function queue(db, ctx, o) {
     const channel = (o.channel || "SMS").toUpperCase();
@@ -1575,7 +1585,9 @@
     if (member && member.notifyOptOut) { status = "SKIPPED"; reason = "OPTED_OUT"; }
     else if (!to) { status = "SKIPPED"; reason = "NO_VALID_PHONE"; }
     const rec = { id: G.uid("MSG"), createdAt: ctx.now, createdBy: ctx.by, memberId: o.memberId || "", to: to || "", channel, template: o.template,
-      body: render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+      body: channel === "SMS" && member ? identify(render(o.template, o.vars), member.id) : render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+    /* when the committee switched the rule on, amounts and warnings go only to a confirmed number; any other number gets a plain notice */
+    if (channel === "SMS" && member && status === "QUEUED" && !NO_RULE_TEMPLATES.includes(o.template) && getSmsRule(db).requireConfirmed && !phoneConfirmed(member)) { rec.body = identify(NOT_CONFIRMED_TEXT, member.id); rec.downgraded = true; rec.reason = "Number not confirmed: sent a plain notice without amounts"; }
     outbox.push(rec);
     return rec;
   }
@@ -1585,8 +1597,8 @@
     gateways = gateways || {};
     const limit = (o && o.limit) || 100;
     const out = { sent: 0, failed: 0, dryRun: 0, skipped: 0 };
-    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox
-    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < MAX_ATTEMPTS))).slice(0, limit);
+    const only = o && Array.isArray(o.ids) && o.ids.length ? new Set(o.ids) : null;   // a targeted run touches nothing else in the outbox; only a targeted (deliberate) run may retry a failed SMS
+    const todo = (db.outbox || []).filter((m) => (!only || only.has(m.id)) && (m.status === "QUEUED" || m.status === "DRY_RUN" || (m.status === "FAILED" && m.attempts < (m.channel === "SMS" && !only ? 1 : MAX_ATTEMPTS)))).slice(0, limit);
     todo.forEach((m) => {
       /* A receipt is only worth sending while it is fresh: an old queued one (made while no gateway was live) is cancelled, never sent late, so members are not flooded with old news. */
       if (RECEIPT_TEMPLATES.includes(m.template) && Date.parse(ctx.now) - Date.parse(m.createdAt) > 3 * 86400000) { m.status = "CANCELLED"; m.reason = "STALE_RECEIPT: older than 3 days, not sent"; out.skipped++; return; }
@@ -1632,6 +1644,30 @@
     G.audit(db, ctx, "Member", memberId, optOut ? "Notifications opted out" : "Notifications opted in", prev, m.notifyOptOut, reason);
     return m;
   }
+  function confirmPhones(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; G.need(a.note, "note (how you confirmed, e.g. 'phoned the member')"); const ids = [].concat(a.memberIds || []).filter(Boolean); if (!ids.length) throw new Error("INVALID: choose at least one member");
+    const done = [];
+    ids.forEach((id) => { const m = (db.members || []).find((x) => x.id === id); if (!m) throw new Error("UNKNOWN_MEMBER: " + id); const no = normalizePhone(m.phone); if (!no) throw new Error("NO_VALID_PHONE: " + id + " has no valid phone number to confirm");
+      const before = { confirmed: phoneConfirmed(m) }; m.phoneConfirmed = ctx.today; m.phoneConfirmedNo = no; m.phoneConfirmedBy = ctx.by; G.audit(db, ctx, "Member", id, "Phone number confirmed", before, { confirmed: true, number: no }, a.note); done.push(id); });
+    return { confirmed: done };
+  }
+  function setSmsRule(db, ctx, a) {
+    G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === RULE_ID); if (!rec) { rec = { id: RULE_ID }; db.policy.push(rec); }
+    const before = getSmsRule(db); rec.requireConfirmed = a.requireConfirmed === true || a.requireConfirmed === "true" || a.requireConfirmed === "yes"; rec.updatedBy = ctx.by; rec.updatedDate = ctx.today;
+    G.audit(db, ctx, "SmsRule", RULE_ID, "Changed", before, getSmsRule(db), a.reason); return getSmsRule(db);
+  }
+  /* The Admin's own message to chosen members (for example an apology). One SMS each: the member's SOB ID is put in front, and the whole text may not pass 160 characters. */
+  const GSM_OK = /^[\x20-\x7E\n]*$/;
+  function sendNotice(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; const ids = [].concat(a.memberIds || []).filter(Boolean); if (!ids.length) throw new Error("INVALID: choose at least one member");
+    const text = String(a.text || "").replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014]/g, "-").trim(); if (!text) throw new Error("INVALID: write the message");
+    if (!GSM_OK.test(text)) throw new Error("INVALID: use plain letters and numbers only (no special characters) so it stays one SMS");
+    const day = ctx.today, tag = text.length + ":" + text.split("").reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7), out = { queued: [], tooLong: [] };
+    ids.forEach((id) => { const m = (db.members || []).find((x) => x.id === id); if (!m) throw new Error("UNKNOWN_MEMBER: " + id); const full = identify(text, id); if (full.length > 160) { out.tooLong.push(id); return; }
+      const r = queue(db, ctx, { memberId: id, template: "custom", vars: { text: full }, channel: "SMS", dedupeKey: "MSG:" + id + ":" + day + ":" + tag }); out.queued.push({ memberId: id, outboxId: r.id, status: r.status, reason: r.reason, body: r.body }); });
+    if (out.tooLong.length) throw new Error("TOO_LONG: the message is over 160 characters with the SOB ID in front, so nothing was queued. Shorten it by " + (Math.max.apply(null, out.tooLong.map((id) => identify(text, id).length)) - 160) + " characters.");
+    G.audit(db, ctx, "Message", "custom", "Message queued", null, { to: ids, text }, a.reason || "Admin message to members"); return out;
+  }
   /* Automatic, best-effort notices after a successful command. Never allowed to break the command itself. */
   function onCommand(db, ctx, name, args, result) {
     try {
@@ -1658,7 +1694,7 @@
     (db.outbox || []).forEach((m) => { s[m.status] = (s[m.status] || 0) + 1; });
     return s;
   }
-  return { CHANNELS, MAX_ATTEMPTS, TEMPLATES, normalizePhone, render, queue, dispatch, cancel, send, setOptOut, onCommand, summary };
+  return { CHANNELS, MAX_ATTEMPTS, TEMPLATES, identify, phoneConfirmed, getSmsRule, confirmPhones, setSmsRule, sendNotice, NOT_CONFIRMED_TEXT, normalizePhone, render, queue, dispatch, cancel, send, setOptOut, onCommand, summary };
 });
 
 
@@ -2512,7 +2548,7 @@
     /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
     const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
     const v = { total: money(n), amt: n.toLocaleString("en-US"), dl, n: String(left === null ? "" : left) };
-    for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return t; }
+    for (const tpl of list) { const t = smsText(fill(tpl, v)); if (t.length <= SMS_MAX) return N.identify(t, rec.memberId); }
     throw new Error("SMS_TOO_LONG: the message would be longer than " + SMS_MAX + " characters, so it was not sent. Use WhatsApp for this member.");
   }
   function queueSms(db, ctx, a) {
@@ -2921,6 +2957,9 @@
     openReserve: (db, ctx, a) => RSV.openReserve(db, ctx, { date: a.date, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     transferToReserve: (db, ctx, a) => RSV.transferToReserve(db, ctx, { date: a.date, year: a.year, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     utilizeReserve: (db, ctx, a) => RSV.utilizeReserve(db, ctx, { date: a.date, amount: a.amount, purpose: a.purpose, evidence: a.evidence, reason: a.reason }),
+    confirmPhones: (db, ctx, a) => N.confirmPhones(db, ctx, { memberIds: a.memberIds, note: a.note }),
+    setSmsRule: (db, ctx, a) => N.setSmsRule(db, ctx, { requireConfirmed: a.requireConfirmed, reason: a.reason }),
+    sendNotice: (db, ctx, a) => N.sendNotice(db, ctx, { memberIds: a.memberIds, text: a.text, reason: a.reason }),
     setNotifyOptOut: (db, ctx, a) => N.setOptOut(db, ctx, a.memberId, !!a.optOut, a.reason),
     /* Loan reminders (WhatsApp, officer-sent). They never touch loans, repayments, interest or balances: see core/reminders.js. */
     prepareReminder: (db, ctx, a) => RM.prepare(db, ctx, { loanId: a.loanId, level: a.level }),
@@ -2969,6 +3008,9 @@
     setEscalation: { perm: "policy.manage", label: "Set who is told about overdue loans (church administrator and bishop) and when" },
     setReceiptSms: { perm: "policy.manage", label: "Switch automatic SMS receipts on or off" },
     setAutoReminders: { perm: "policy.manage", label: "Change the automatic reminder schedule" },
+    confirmPhones: { perm: "notify.manage", label: "Confirm members' phone numbers" },
+    setSmsRule: { perm: "policy.manage", label: "Send amounts and warnings only to confirmed numbers" },
+    sendNotice: { perm: "notify.manage", label: "Send a message to chosen members" },
     setReminderDates: { perm: "policy.manage", label: "Set the share-out date and approved repayment deadlines used in loan reminders" },
     distributeProfit: { perm: "profit.distribute", label: "Post the final profit distribution" }, executeShareOut: { perm: "shareout.execute", label: "Post the December share-out" }
   };
@@ -2992,6 +3034,9 @@
     if (name === "transferToReserve") return "Move UGX " + a.amount + " of FY" + (a.year || "") + " unallocated profit to the General Reserve Fund";
     if (name === "utilizeReserve") return "Use UGX " + a.amount + " from the General Reserve Fund: " + a.purpose;
     if (name === "executeShareOut") return "Share-out " + a.year;
+    if (name === "confirmPhones") return "Confirm the phone numbers of " + (a.memberIds || []).length + " member(s): " + (a.memberIds || []).join(", ");
+    if (name === "setSmsRule") return "Amounts and warnings by SMS only to confirmed numbers: " + (a.requireConfirmed === true || a.requireConfirmed === "true" || a.requireConfirmed === "yes" ? "ON" : "OFF");
+    if (name === "sendNotice") return "Message to " + (a.memberIds || []).length + " member(s): " + String(a.text || "").slice(0, 120);
     if (name === "setReceiptSms") return "Automatic SMS receipts to members: " + (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF");
     if (name === "setAutoReminders") return "Automatic reminders " + (a.enabled === undefined ? "settings" : (a.enabled === true || a.enabled === "true" || a.enabled === "yes" ? "ON" : "OFF")) + ": regular every " + a.regularEveryDays + " days; Church Administration notice after " + a.adminAfterDays + " days unpaid; Bishop notice " + a.bishopDaysBefore + " days before the deadline";
     if (name === "setReminderDates") return "Reminder dates: share-out " + a.shareOutDate + ", approved repayment deadline " + a.deadline + (a.loanDeadlines && Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length ? ", plus " + Object.keys(a.loanDeadlines).filter((k) => a.loanDeadlines[k]).length + " loan-specific deadline(s)" : "");
@@ -5438,12 +5483,43 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         Card("Backing needed", ugx(a.required), a.guarantorsApply ? "Only the part beyond the guideline" : "Guarantor policy starts " + D.longDate(a.guarantorPolicyStart) + "; none required yet"), Card("Backing accepted", ugx(a.backing), "Guarantees " + num(a.guaranteeCover) + " · security " + num(a.securityCover))),
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
+  /* ---------- who will get a text: masked number, confirmed or not, shared numbers ---------- */
+  const maskPhone = (p) => { const d = String(p || "").replace(/\D/g, ""); return d.length >= 7 ? d.slice(0, 4) + " ••• " + d.slice(-3) : "no number"; };
+  const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
+  const recipientLine = (m, shared) => { const k = N.normalizePhone(m.phone), twin = k && shared[k] && shared[k].length > 1 ? shared[k].filter((x) => x !== m.id) : [];
+    return h("span", { class: "mute", style: "font-size:13px" }, " · " + m.id + " · " + maskPhone(m.phone) + " · ", N.phoneConfirmed(m) ? h("span", { class: "ok" }, "number confirmed") : h("span", { class: "warn" }, "not confirmed"), twin.length ? h("b", { class: "warn" }, " · same number as " + twin.join(", ")) : null); };
+  const APOLOGY = "Tusonyiwe olw'obubaka bw'okujjukiza ebbanja bwofuna. Tetwagala kuswaaza tuli bakuumi b'obwesigwa. sasula b4 24 Nov. Blessing. Elder Pr. Kironde(c/p)";
+  function numbersForm() {
+    const shared = sharedNumbers(), picked = new Set(), rule = N.getSmsRule(st.db).requireConfirmed, go = h("button", { class: "primary", id: "confirm-go", disabled: true }, "Confirm 0"), note = h("input", { id: "confirm-note", placeholder: "How you checked, e.g. phoned the member" }), err = h("div", { class: "err", role: "alert" });
+    const sync = () => { go.textContent = "Confirm " + picked.size; go.disabled = !picked.size; };
+    const list = (st.db.members || []).filter((m) => m.status !== "Exited");
+    const m = Modal("Phone numbers", h("div", null,
+      h("p", { class: "mute" }, "A number is confirmed when the member enters the code we SMS to it, or when you have phoned the member and checked it is theirs. Tick the numbers you have checked."),
+      h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, N.phoneConfirmed(x) ? h("input", { type: "checkbox", disabled: true, checked: true }) : h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
+      note, err, h("div", { class: "row" }, go, h("button", { id: "rule-toggle", onclick: () => { m.close(); Form("Send amounts and warnings only to confirmed numbers", [{ type: "note", text: "Now: " + (rule ? "ON" : "OFF") + ". When ON, a member whose number is not confirmed gets only a plain notice with no amounts. Needs the Chairperson's approval." }, { name: "reason", label: "Reason (required)" }], act(async (f) => commit("setSmsRule", { requireConfirmed: !rule, reason: f.reason }), "Sent for approval")); } }, rule ? "Switch rule OFF" : "Switch rule ON"), h("button", { onclick: () => m.close() }, "Close"))));
+    go.onclick = async () => { go.disabled = true; err.textContent = "";
+      try { await commit("confirmPhones", { memberIds: [...picked], note: note.value }); m.close(); toast(st.sentForApproval ? "Sent to the Chairperson for approval" : "Numbers confirmed"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+  }
+  function noticeForm() {
+    const shared = sharedNumbers(), picked = new Set(), list = (st.db.members || []).filter((m) => m.status !== "Exited");
+    const ta = h("textarea", { id: "notice-text", maxlength: "160", rows: "4" }), cnt = h("div", { class: "mute", id: "notice-count" }), go = h("button", { class: "primary", id: "notice-go", disabled: true }, "Send to 0"), err = h("div", { class: "err", role: "alert" });
+    ta.value = ""; const sync = () => { const len = (picked.size ? "SOB-000: " : "").length + ta.value.length; cnt.textContent = ta.value.length + " characters. Each text starts with the member's SOB ID and must stay in one SMS (160)."; go.textContent = "Send to " + picked.size; go.disabled = !picked.size || !ta.value.trim() || len > 160; };
+    ta.oninput = sync;
+    const m = Modal("Send a message", h("div", null, h("p", { class: "mute" }, "Tap who should get it. Plain letters only. The Chairperson approves before anything is queued."),
+      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text")),
+      ta, cnt,
+      h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
+      err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
+    go.onclick = async () => { go.disabled = true; err.textContent = "";
+      try { await commit("sendNotice", { memberIds: [...picked], text: ta.value.trim(), reason: "Message from Admin" }); m.close(); toast(st.sentForApproval ? "Sent to the Chairperson for approval" : "Queued in the outbox"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+    sync();
+  }
   /* Tell borrowers their interest was reduced (interest stopped after fewer months). The officer picks who; each text is shown first; it is sent once per loan. */
   function reliefForm(list) {
     const picked = new Set(list.map((r) => r.loanId)), go = h("button", { class: "primary", id: "relief-go" }, "Send"), err = h("div", { class: "err", id: "relief-err", role: "alert" });
     const sync = () => { go.textContent = "Send to " + picked.size; go.disabled = !picked.size; };
     const m = Modal("Tell borrowers their interest was reduced", h("div", null, h("p", { class: "mute" }, "Each member gets this text from the figures in their loan. Untick anyone who should not get it. Nothing is sent until you press Send."),
-      h("div", { class: "preview" }, list.map((r) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", checked: true, "data-loan": r.loanId, onchange: (e) => { e.target.checked ? picked.add(r.loanId) : picked.delete(r.loanId); sync(); } }), " ", h("b", null, r.name), " · ", r.monthsNow + " instead of " + r.monthsBefore + " months · " + ugx(r.cut) + " off", h("div", { class: "mute", style: "font-size:13px;margin-left:24px" }, r.text)))),
+      h("div", { class: "preview" }, list.map((r) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", checked: true, "data-loan": r.loanId, onchange: (e) => { e.target.checked ? picked.add(r.loanId) : picked.delete(r.loanId); sync(); } }), " ", h("b", null, r.name), " · ", r.monthsNow + " instead of " + r.monthsBefore + " months · " + ugx(r.cut) + " off", (() => { const mm = st.db.members.find((x) => x.id === r.memberId); return mm ? recipientLine(mm, sharedNumbers()) : null; })(), h("div", { class: "mute", style: "font-size:13px;margin-left:24px" }, r.text)))),
       err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
     go.onclick = async () => { go.disabled = true; err.textContent = "";
       try { const r = await commit("sendInterestRelief", { loanIds: [...picked] }), q = r.queued || [], ok = q.filter((x) => x.status !== "SKIPPED").length, no = q.filter((x) => x.status === "SKIPPED").length, sk = (r.skipped || []).length;
@@ -5865,6 +5941,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         : h("div", { class: "blocked", id: "dryrun-banner" }, "Dry run: nothing is sent to any phone."),
       h("div", { class: "grid" }, ["QUEUED", "DRY_RUN", "SENT", "FAILED", "SKIPPED"].map((k) => Card(k.replace("_", "-"), String(sum[k] || 0)))),
       h("div", { class: "row" }, h("button", { class: "primary", id: "process-outbox", onclick: act(proc) }, "Process outbox"),
+        h("button", { id: "notice-open", onclick: noticeForm }, "Send a message"), h("button", { id: "numbers-open", onclick: numbersForm }, "Phone numbers"),
         h("button", { id: "send-message", onclick: () => Form("Message a member", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "channel", label: "Channel", options: ["SMS", "WHATSAPP"] }, { name: "text", label: "Message (max 320 characters)", type: "textarea" }], act(async (f) => commit("sendMessage", { memberId: f.m, channel: f.channel, text: f.text }), "Queued in the outbox")) }, "New message")),
       Table([{ label: "Created", render: (m) => D.toDisplay(String(m.createdAt).slice(0, 10)) }, { label: "To", render: (m) => m.to === "ADMIN" ? "Admin phone" : (m.memberId ? nameOf(m.memberId) + " " : "") + m.to }, { label: "Channel", key: "channel" }, { label: "Message", key: "body" },
         { label: "Status", render: (m) => badge(m.status, m.status === "SENT" ? "ok" : m.status === "FAILED" ? "bad" : m.status === "QUEUED" || m.status === "DRY_RUN" ? "warn" : "mute") }, { label: "Note", key: "reason" },
