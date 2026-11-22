@@ -207,7 +207,7 @@
     recordBroughtForward: (db, ctx, a) => FYR.recordBroughtForward(db, ctx, { year: a.year, memberId: a.memberId, amount: a.amount, evidence: a.evidence, reason: a.reason }),
     voidBroughtForward: (db, ctx, a) => FYR.voidBroughtForward(db, ctx, { id: a.id, reason: a.reason }),
     setReceiptSms: (db, ctx, a) => RM.setReceipts(db, ctx, { enabled: a.enabled, reason: a.reason }),
-    setAutoReminders: (db, ctx, a) => RM.setAuto(db, ctx, { enabled: a.enabled, regularEveryDays: a.regularEveryDays, adminAfterDays: a.adminAfterDays, bishopDaysBefore: a.bishopDaysBefore, reason: a.reason }),
+    setAutoReminders: (db, ctx, a) => RM.setAuto(db, ctx, { enabled: a.enabled, regularEveryDays: a.regularEveryDays, adminAfterDays: a.adminAfterDays, bishopDaysBefore: a.bishopDaysBefore, contactPhone: a.contactPhone, reason: a.reason }),
     setReminderDates: (db, ctx, a) => RM.setDates(db, ctx, { shareOutDate: a.shareOutDate, deadline: a.deadline, loanDeadlines: a.loanDeadlines, reason: a.reason })
   };
   /* FINAL SOB rule: material or exceptional financial actions are INITIATED by the Super Admin but only take effect when a DIFFERENT person, the Chairperson, approves.

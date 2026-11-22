@@ -247,11 +247,25 @@
   };
   const asciiSms = (t) => String(t).replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").replace(/[\u2013\u2014]/g, "-");
   const smsText = (t) => asciiSms(String(t).replace(/(^|\s)_/gm, "$1").replace(/_(?=\s|$)/gm, "").replace(/\*/g, ""));
+  /* The Bishop-stage SMS (the serious one) depends on what the member has paid since the last reminder. Each is ONE SMS (160) including the SOB ID. */
+  const SIGN = "Elder Pr. Kironde", SMS_ONE = 160;
+  const THANKS_TEXT = "Thank you. Your loan is fully paid. Forget the pressure you went through; we value your faithfulness. God bless you. " + SIGN;
+  const PART_TEXT = "Thank you for paying UGX {paid}. Balance UGX {amt}. Pay by {dl} or call Chairperson {tel}. If unpaid, Bishop acts. " + SIGN;
+  const NONE_TEXT = "UGX {amt} unpaid. Please don't keep quiet: pay or call Chairperson {tel}. If unpaid by {dl}, you go to the Bishop for action.";
+  function paidSince(db, loan, asOf) {
+    const prior = (db.reminders || []).filter((r) => r.loanId === loan.id && r.delivery !== "CANCELLED" && r.asOf && r.asOf < asOf).map((r) => r.asOf).sort(), since = prior.length ? prior[prior.length - 1] : (loan.date || "");
+    return L.activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date > since && t.date <= asOf).reduce((a, t) => a + (Number(t.amount) || 0), 0);
+  }
   const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function composeSms(db, rec, f) {
     const cfg = getConfig(db), custom = (cfg.templates[rec.level] || {}).sms, left = D.isISO(rec.deadline) && D.isISO(rec.asOf) ? daysBetween(rec.asOf, rec.deadline) : null;
     /* the friendly reminder counts down to the deadline, so each day's SMS reads differently: "5 days left", "4 days left" ... "Due tomorrow", "Due TODAY" */
     const COUNT = left === null || left < 0 ? null : left === 0 ? ["SOB: Due TODAY {dl}. Pay {total} now.", "SOB: Due today. Pay {amt} now.", "SOB: Due today. Pay {amt}."] : left === 1 ? ["SOB: Due TOMORROW. Pay {total} today.", "SOB: Due tomorrow. Pay {amt} today.", "SOB: Due tomorrow. Pay {amt}."] : left === 2 ? ["SOB: Only 2 days left! Pay {total} by {dl}.", "SOB: 2 days left! Pay {amt} by {dl}.", "SOB: 2 days left. Pay {amt}."] : ["SOB: {n} days left. Pay {total} by {dl}.", "SOB: {n} days left. Pay {amt} by {dl}.", "SOB: {n} days left. Pay {amt}."];
+    if (rec.auto && rec.stage === "BISHOP" && !custom) {   // automatic Bishop notice: says what was paid, or asks the member not to keep quiet
+      const dl0 = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n0 = Math.round(f.totalOutstanding), paid = Math.round(Number(rec.paidSinceLast) || 0);
+      const t0 = smsText(fill(paid > 0 ? PART_TEXT : NONE_TEXT, { tel: getAuto(db).contactPhone || "", paid: paid.toLocaleString("en-US"), amt: n0.toLocaleString("en-US"), dl: dl0 })), full0 = N.identify(t0.replace(/Chairperson (?=[.:])/, "the Chairperson").replace(/ +([.:])/g, "$1"), rec.memberId);
+      if (full0.length <= SMS_ONE) return full0;
+    }
     const list = custom ? [custom] : (rec.level === "FRIENDLY" && COUNT ? COUNT : SMS_TEMPLATES[rec.level]);
     /* the deadline is the one recorded on the notice when it was issued, never a value typed here or read later */
     const dl = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n = Math.round(f.totalOutstanding);
@@ -427,12 +441,13 @@
   const STAGE_LABEL = { REGULAR: "Regular reminder", ADMIN: "Notice: name goes to Church Administration", BISHOP: "Serious reminder: matter goes to the Bishop" };
   function getAuto(db) {
     const a = (((db && db.policy) || []).find((p) => p.id === KEY) || {}).auto || {}, n = (k) => (Number.isInteger(Number(a[k])) && a[k] !== "" && a[k] !== null && a[k] !== undefined ? Number(a[k]) : AUTO_DEFAULTS[k]);
-    return { enabled: a.enabled === true, regularEveryDays: n("regularEveryDays"), adminAfterDays: n("adminAfterDays"), bishopDaysBefore: n("bishopDaysBefore"), updatedBy: a.updatedBy || "", updatedDate: a.updatedDate || "" };
+    return { enabled: a.enabled === true, regularEveryDays: n("regularEveryDays"), adminAfterDays: n("adminAfterDays"), bishopDaysBefore: n("bishopDaysBefore"), contactPhone: String(a.contactPhone || "").replace(/\D/g, ""), updatedBy: a.updatedBy || "", updatedDate: a.updatedDate || "" };
   }
   function setAuto(db, ctx, a) {
     G.require(ctx, "policy.manage"); a = a || {}; G.need(a.reason, "reason"); const cur = getAuto(db);
     const int = (k, lo, hi, what) => { const v = a[k] === undefined ? cur[k] : Number(a[k]); if (!Number.isInteger(v) || v < lo || v > hi) throw new Error("INVALID: " + what + " must be a whole number from " + lo + " to " + hi); return v; };
-    const next = { enabled: a.enabled === undefined ? cur.enabled : a.enabled === true || a.enabled === "true" || a.enabled === "yes", regularEveryDays: int("regularEveryDays", 1, 30, "days between regular reminders"), adminAfterDays: int("adminAfterDays", 1, 30, "days of non-payment before the Church Administration notice"), bishopDaysBefore: int("bishopDaysBefore", 0, 14, "days before the deadline for the Bishop notice") };
+    const next = { enabled: a.enabled === undefined ? cur.enabled : a.enabled === true || a.enabled === "true" || a.enabled === "yes", regularEveryDays: int("regularEveryDays", 1, 30, "days between regular reminders"), adminAfterDays: int("adminAfterDays", 1, 30, "days of non-payment before the Church Administration notice"), bishopDaysBefore: int("bishopDaysBefore", 0, 14, "days before the deadline for the Bishop notice"), contactPhone: a.contactPhone === undefined ? cur.contactPhone : String(a.contactPhone).replace(/\D/g, "") };
+    if (next.contactPhone && !/^(0|256)\d{9}$|^\d{9}$/.test(next.contactPhone)) throw new Error("INVALID: the Chairperson's number must be a Uganda number, e.g. 07xx xxx xxx");
     db.policy = db.policy || []; let rec = db.policy.find((p) => p.id === KEY); if (!rec) { rec = { id: KEY }; db.policy.push(rec); }
     const before = clone(getAuto(db)); rec.auto = Object.assign({}, next, { updatedBy: ctx.by, updatedDate: ctx.today });
     G.audit(db, ctx, "AutoReminders", KEY, "Changed", before, clone(getAuto(db)), a.reason); return getAuto(db);
@@ -451,7 +466,11 @@
         if (!member || !/^Active$/i.test(String(member.status || "Active"))) { out.skipped.push({ loanId: loan.id, reason: "member not active" }); continue; }
         if (member.notifyOptOut) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "member switched notifications off" }); continue; }
         if (!N.normalizePhone(member.phone)) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "no valid phone number" }); continue; }
-        const f = figures(db, loan, today); if (f.error) { out.skipped.push({ loanId: loan.id, reason: f.error }); continue; } if (!(f.totalOutstanding > 0)) continue;
+        const f = figures(db, loan, today); if (f.error) { out.skipped.push({ loanId: loan.id, reason: f.error }); continue; } if (!(f.totalOutstanding > 0)) {   // paid in full: a one-off thank-you if they were reminded and have paid since
+          const reminded = (db.reminders || []).some((r) => r.loanId === loan.id && r.delivery !== "CANCELLED"), repaidAfter = reminded && paidSince(db, loan, today) > 0;
+          if (repaidAfter) { const key = "THANKS:" + loan.id, had = (db.outbox || []).find((x) => x.dedupeKey === key && x.status !== "CANCELLED");
+            if (!had || had.status === "QUEUED" || had.status === "DRY_RUN") { const q = N.queue(db, ctx, { memberId: member.id, template: "custom", vars: { text: THANKS_TEXT }, channel: "SMS", dedupeKey: key }); N.dispatch(db, ctx, gateways, { ids: [q.id] }); if (q.status === "SENT") out.sent.push({ loanId: loan.id, memberId: member.id, stage: "THANKS", sms: q.body }); else out.failed.push({ loanId: loan.id, memberId: member.id, stage: "THANKS" }); } }
+          continue; }
         const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
         if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
         const mine = (db.reminders || []).filter((r) => r.auto && r.loanId === loan.id && r.deadline === sch.deadline && done(r)), has = (st) => mine.some((r) => r.stage === st);
@@ -462,7 +481,7 @@
         else if (first && !has("ADMIN") && !has("BISHOP") && !repaidSince && daysBetween(first.asOf, today) >= auto.adminAfterDays) stage = "ADMIN";
         else if (!last || daysBetween(last.asOf, today) >= auto.regularEveryDays) stage = "REGULAR";
         if (!stage) continue;
-        rec = prepare(db, ctx, { loanId: loan.id, level: STAGE_LEVEL[stage] }); rec.auto = true; rec.stage = stage;
+        rec = prepare(db, ctx, { loanId: loan.id, level: STAGE_LEVEL[stage] }); rec.auto = true; rec.stage = stage; rec.paidSinceLast = paidSince(db, loan, today);
         const q = queueSms(db, ctx, { id: rec.id }); N.dispatch(db, ctx, gateways, { ids: [q.outboxId] }); syncSms(db, ctx, { id: rec.id });
         if (rec.delivery === "SMS_ACCEPTED") out.sent.push({ loanId: loan.id, memberId: member.id, stage, reminderId: rec.id, sms: rec.smsBody });
         else { cancel(db, ctx, { id: rec.id, reason: "Automatic SMS was not accepted by the gateway; it will be tried again at the next run" }); out.failed.push({ loanId: loan.id, memberId: member.id, stage }); }

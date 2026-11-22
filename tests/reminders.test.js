@@ -235,7 +235,7 @@ t("AUTO: regular reminder, then Church Administration after 3 days unpaid, then 
   assert.equal(auto(db, "2026-11-13", g).sent[0].stage, "ADMIN"); assert.equal(auto(db, "2026-11-14", g).sent.length, 0, "the Church Administration notice goes once");
   assert.equal(auto(db, "2026-11-21", g).sent.length, 0, "3 days before the deadline: not yet the Bishop stage");
   assert.equal(auto(db, "2026-11-22", g).sent.length, 0, "Sunday: nothing goes out"); assert.equal(auto(db, "2026-11-23", g).sent[0].stage, "BISHOP", "Monday: the Bishop notice still goes (1 day before the deadline)"); assert.equal(auto(db, "2026-11-24", g).sent.length, 0, "the Bishop notice goes once"); assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up");
-  assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 54 && /^SOB-001: /.test(m.body), m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
+  assert.equal(sent.length, 3); sent.forEach((m) => assert.ok(m.body.length <= 160 && (m.body.length <= 54 || /Bishop/.test(m.body)) && /^SOB-001: /.test(m.body), m.body)); assert.match(sent[1].body, /Church Admin/); assert.match(sent[2].body, /Bishop/);
   const recs = db.reminders.filter((r) => r.auto); assert.deepEqual(recs.map((r) => r.stage), ["REGULAR", "ADMIN", "BISHOP"]); assert.ok(recs.every((r) => r.deadline === "2026-11-24" && r.delivery === "SMS_ACCEPTED" && /Church Administration/.test(r.body)));
   assert.ok(db.auditLog.filter((a) => a.entityType === "AutoReminderRun").length >= 3 && db.auditLog.some((a) => a.entityType === "Reminder" && a.action === "Prepared"));
 });
@@ -244,7 +244,7 @@ t("AUTO daily: every day brings a different SMS that counts down to the deadline
   setAuto(db, "2026-11-18", { enabled: true, regularEveryDays: 1, adminAfterDays: 2, bishopDaysBefore: 2 });
   const days = ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-23", "2026-11-24"], stages = days.map((d) => { const r = auto(db, d, g); assert.equal(r.sent.length, 1, d + " " + JSON.stringify(r)); return r.sent[0].stage; });
   assert.deepEqual(stages, ["REGULAR", "REGULAR", "ADMIN", "BISHOP", "REGULAR"]); const sun = auto(db, "2026-11-22", g); assert.equal(sun.sent.length, 0, "Sunday 22 Nov: nothing is sent"); assert.match(sun.note, /Sunday/);
-  assert.equal(new Set(sent.map((m) => m.body)).size, 5, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 54 && /^SOB-001: /.test(m.body), m.body));
+  assert.equal(new Set(sent.map((m) => m.body)).size, 5, "six different texts: " + sent.map((m) => m.body).join(" | ")); sent.forEach((m) => assert.ok(m.body.length <= 160 && (m.body.length <= 54 || /Bishop/.test(m.body)) && /^SOB-001: /.test(m.body), m.body));
   assert.match(sent[0].body, /5 days left/); assert.match(sent[1].body, /4 days left/); assert.match(sent[3].body, /Bishop/); assert.match(sent[4].body, /today/i);
   assert.equal(auto(db, "2026-11-25", g).sent.length, 0, "after the deadline officers follow up"); });
 t("AUTO: someone who has paid since the first reminder skips the Church Administration notice; a loan paid in full is not messaged again", () => {
@@ -252,6 +252,17 @@ t("AUTO: someone who has paid since the first reminder skips the Church Administ
   run(db, "Admin", "2026-11-12", "repayLoan", { loanId: l.id, amount: 10000, date: "2026-11-12" }); assert.equal(auto(db, "2026-11-13", g).sent.length, 0, "no Church Administration notice for someone who has been paying");
   assert.equal(auto(db, "2026-11-17", g).sent[0].stage, "REGULAR", "still gets the regular reminder");
   run(db, "Admin", "2026-11-18", "repayLoan", { loanId: l.id, amount: L.loanOutstanding(db.loans[0], db, "2026-11-18"), date: "2026-11-18" }); const n = sent.length; assert.equal(auto(db, "2026-11-22", g).sent.length, 0); assert.equal(sent.length, n);
+});
+t("AUTO Bishop notice: nothing paid -> do not keep quiet; part paid -> thanks with the exact amount; paid in full -> a one-off thank-you. Each is ONE SMS with the SOB ID; the Chairperson's number is a setting, never in the program", () => {
+  const mk = (pay) => { const w = autoWorld(), x = gw(true); setAuto(w.db, "2026-11-10", { enabled: true, regularEveryDays: 30, contactPhone: "0770 111 222" }); assert.equal(RM.getAuto(w.db).contactPhone, "0770111222"); auto(w.db, "2026-11-10", x.g); if (pay) run(w.db, "Admin", "2026-11-15", "repayLoan", { loanId: w.l.id, amount: pay, date: "2026-11-15" }); return Object.assign(w, x); };
+  const a = mk(0); a.sent.length = 0; const ra = auto(a.db, "2026-11-23", a.g); assert.equal(ra.sent[0].stage, "BISHOP"); const none = a.sent[0].body; assert.match(none, /^SOB-001: UGX [\d,]+ unpaid\. Please don't keep quiet: pay or call Chairperson 0770111222\. If unpaid by 24 Nov, you go to the Bishop for action\.$/); assert.ok(none.length <= 160);
+  const b = mk(25000); b.sent.length = 0; auto(b.db, "2026-11-23", b.g); const part = b.sent[0].body; assert.match(part, /^SOB-001: Thank you for paying UGX 25,000\. Balance UGX [\d,]+\. Pay by 24 Nov or call Chairperson 0770111222\. If unpaid, Bishop acts\. Elder Pr\. Kironde$/); assert.ok(part.length <= 160);
+  const c = mk(0); c.sent.length = 0; run(c.db, "Admin", "2026-11-16", "repayLoan", { loanId: c.l.id, amount: L.loanOutstanding(c.db.loans[0], c.db, "2026-11-16"), date: "2026-11-16" });
+  const rc = auto(c.db, "2026-11-23", c.g); assert.equal(rc.sent[0].stage, "THANKS"); assert.equal(c.sent[0].body, "SOB-001: Thank you. Your loan is fully paid. Forget the pressure you went through; we value your faithfulness. God bless you. Elder Pr. Kironde"); assert.ok(c.sent[0].body.length <= 160);
+  assert.equal(auto(c.db, "2026-11-24", c.g).sent.length, 0, "the thank-you goes once"); assert.equal(c.sent.length, 1);
+  const d = autoWorld(); setAuto(d.db, "2026-11-10", { enabled: true, regularEveryDays: 30 }); const xd = gw(true); auto(d.db, "2026-11-10", xd.g); xd.sent.length = 0; auto(d.db, "2026-11-23", xd.g); assert.match(xd.sent[0].body, /call the Chairperson\./, "no number set: it says 'call the Chairperson' without a number");
+  assert.throws(() => run(d.db, "Admin", "2026-11-10", "setAutoReminders", { contactPhone: "12", reason: "x" }), /INVALID/);
+  ["src", "app"].forEach((dir) => require("fs").readdirSync(require("path").join(__dirname, "..", dir)).filter((f) => /\.js$/.test(f)).forEach((f) => assert.ok(!/0706\s?496\s?404|0770111222/.test(require("fs").readFileSync(require("path").join(__dirname, "..", dir, f), "utf8")), "no phone number in " + f)));
 });
 t("AUTO: opted-out members are skipped; a failed send is cancelled and tried again next run; nothing in the ledger changes", () => {
   const { db } = autoWorld(), bad = gw(true, { ok: false, error: "HTTP 500" }), good = gw(true); setAuto(db, "2026-11-10", { enabled: true }); const before = JSON.stringify([db.transactions, db.loans]);

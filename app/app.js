@@ -1061,8 +1061,9 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       { name: "r", label: "Regular reminder every (days) before the deadline", type: "number", value: a.regularEveryDays, inputmode: "numeric" },
       { name: "a", label: "Tell the member their name goes to Church Administration after (days with no payment)", type: "number", value: a.adminAfterDays, inputmode: "numeric" },
       { name: "b", label: "Serious reminder about the Bishop when this many days (or fewer) remain before the deadline", type: "number", value: a.bishopDaysBefore, inputmode: "numeric" },
+      { name: "tel", label: "Chairperson's number members should call (shown in the serious reminder)", type: "tel", value: a.contactPhone || "", inputmode: "tel" },
       { name: "reason", label: "Reason / authority (e.g. committee decision and date)" }],
-      act(async (f) => commit("setAutoReminders", { enabled: f.enabled === "true", regularEveryDays: Number(f.r), adminAfterDays: Number(f.a), bishopDaysBefore: Number(f.b), reason: f.reason })), "Send to the Chairperson"); };
+      act(async (f) => commit("setAutoReminders", { enabled: f.enabled === "true", regularEveryDays: Number(f.r), adminAfterDays: Number(f.a), bishopDaysBefore: Number(f.b), contactPhone: f.tel, reason: f.reason })), "Send to the Chairperson"); };
     const receiptForm = () => Form("Automatic SMS receipts to members", [
       { type: "note", text: "When ON, every successful transaction sends the member one short SMS: the amount, the new savings balance and, if they have an active loan, the loan balance. Withdrawals are sent only after the Chairperson has approved them. Imported or historical entries never send a receipt. Nothing is sent unless the SMS gateway is live. Changes need the Chairperson's approval and are recorded." },
       { name: "enabled", label: "Automatic SMS receipts", options: [{ value: "true", label: "ON" }, { value: "false", label: "OFF" }], value: String(RM.getReceipts(st.db).enabled) },
