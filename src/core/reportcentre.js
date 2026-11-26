@@ -34,7 +34,7 @@
 
   /* ---- the catalogue ---- */
   const DEFS = [];
-  const def = (group, id, title, about, filters, build) => DEFS.push({ id, group, title, about, filters, build });
+  const def = (group, id, title, about, filters, build, o) => DEFS.push(Object.assign({ id, group, title, about, filters, build }, o || {}));
 
   /* wrap a dashboard figure so its report, the dashboard card and the PDF all come from one calculation */
   const kpi = (key, sumCols, memberKey) => (db, f, p) => {
@@ -52,6 +52,9 @@
     const sav = {}; live(d).forEach((t) => { const e = L.classifyTransaction(t); if (e.savings && t.memberId) sav[t.memberId] = (sav[t.memberId] || 0) + e.savings; });
     const rows = (db.members || []).filter((m) => (!f.memberId || m.id === f.memberId) && (!f.status || m.status === f.status)).map((m) => ({ memberId: m.id, member: m.name, status: m.status || "", savings: sav[m.id] || 0, loanOwed: out[m.id] || 0, net: (sav[m.id] || 0) - (out[m.id] || 0) }));
     return mk("Member Balances", ["memberId", "member", "status", "savings", "loanOwed", "net"], { memberId: "Member ID", member: "Member", status: "Status", savings: "Savings (UGX)", loanOwed: "Loan owed (UGX)", net: "Savings less loan (UGX)" }, rows, { totals: totalsOf(rows, ["savings", "loanOwed", "net"]), notes: ["Loan owed is the loan plus interest charged to the date, less repayments."] }); });
+  def("Savings and members", "details", "Member Details", "Each member's SOB number, name, status, phone and e-mail. Personal data: officers who may export only; keep the file private.", ["member", "status"], (db, f) => {
+    const rows = (db.members || []).filter((m) => (!f.memberId || m.id === f.memberId) && (!f.status || m.status === f.status)).map((m) => ({ memberId: m.id, member: m.name, status: m.status || "", phone: m.phone || "", email: m.email || "" }));
+    return mk("Member Details", ["memberId", "member", "status", "phone", "email"], { memberId: "SOB number", member: "Member", status: "Status", phone: "Phone", email: "E-mail" }, rows, { notes: ["Personal data. Share it only with a person who needs it, and never in a public place.", rows.length + " member" + (rows.length === 1 ? "" : "s") + " listed."] }); }, { personal: true });
   def("Savings and members", "deposits", "Deposits Report", "Savings received in the period.", ["period", "member"], (db, f, p) => kpi("savingsReceived", ["amount"], ["memberId", "member"])(db, f, p));
   def("Savings and members", "withdrawals", "Withdrawals Report", "Withdrawals and share-out payments in the period.", ["period", "member"], (db, f, p) => kpi("withdrawals", ["amount"], ["memberId", "member"])(db, f, p));
   def("Savings and members", "subscriptions", "Subscriptions Report", "Annual subscriptions received in the period.", ["period", "member"], (db, f, p) => kpi("subscriptions", ["amount"], ["memberId", "member"])(db, f, p));
@@ -122,7 +125,7 @@
 
   const GROUPS = ["Savings and members", "Loans and interest", "Profit and share-out", "Accounts", "Records"];
   const CAT = { ledger: 1, deposits: 1, withdrawals: 1, subscriptions: 1, repayments: 1, disbursed: 1 };
-  const catalogue = () => DEFS.map((d) => ({ id: d.id, group: d.group, title: d.title, about: d.about, filters: CAT[d.id] ? d.filters.concat(["category"]) : d.filters }));
+  const catalogue = () => DEFS.map((d) => ({ id: d.id, group: d.group, title: d.title, about: d.about, personal: !!d.personal, filters: CAT[d.id] ? d.filters.concat(["category"]) : d.filters }));
   function run(db, id, filters, today) {
     const d = DEFS.find((x) => x.id === id); if (!d) throw new Error("NOT_FOUND: report " + id);
     const f = Object.assign({}, filters || {}); if (f.year) f.year = Number(f.year);

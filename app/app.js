@@ -890,14 +890,14 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
      Every figure comes from the same ledger calculations as the dashboard (core/reportcentre). */
   const LEGACY_SKIP = ["Loan book", "Savings by member", "Loan repayments", "Income & expenses", "Annual summary", "Financial year (current)", "Interest Receivable", "Subscriptions", "Profit distribution", "December share-out", "Financial years"];
   function reports() {
-    const RCm = S.reportcentre, cat = RCm.catalogue(), tb = FYM.table(st.db);
+    const RCm = S.reportcentre, cat = RCm.catalogue().filter((c) => !c.personal || canExport()), tb = FYM.table(st.db);
     const legacy = Object.keys(REPORTS).filter((n) => !LEGACY_SKIP.includes(n)).concat(tb.map((c) => { const n = "Year-end reconciliation " + c.label; REPORTS[n] = () => SX.yearEnd(st.db, c.year); return n; }));
     const f = st.rc = Object.assign({ id: "savings", year: "", from: "", to: "", memberId: "", status: "" }, st.rc || {});
     const entryOf = () => cat.find((c) => c.id === f.id), has = (k) => { const e = entryOf(); return !!e && e.filters.includes(k); };
     const sel = (id, label, opts, val, on) => { const el = h("select", { id, "aria-label": label, onchange: (e) => on(e.target.value) }, opts.map(([v, t]) => h("option", Object.assign({ value: v }, String(v) === String(val) ? { selected: "" } : {}), t))); return h("label", { class: "fld" }, h("span", null, label), el); };
     const date = (id, label, val, on) => h("label", { class: "fld" }, h("span", null, label), h("input", { type: "date", id, value: val, max: today(), onchange: (e) => on(e.target.value) }));
     const set = (k, v) => { f[k] = v; if (k === "id") { f.status = ""; } paint(); };
-    const statusList = () => f.id === "balances" ? ["Active", "Inactive", "Pending"] : ["Active", "Cleared", "Pending", "AwaitingApproval", "Approved", "Declined"];
+    const statusList = () => f.id === "balances" || f.id === "details" ? ["Active", "Inactive", "Pending"] : ["Active", "Cleared", "Pending", "AwaitingApproval", "Approved", "Declined"];
     const result = h("div", { id: "rc-result" });
     let rep = null;
     const run = () => { const isLegacy = !entryOf() && legacy.includes(f.id); if (isLegacy) { const r = REPORTS[f.id](); return Object.assign({}, r, { notes: r.notes || [], period: r.period || "As at " + D.longDate(today()) }); } return RCm.run(st.db, f.id, { year: f.year, from: f.from, to: f.to, memberId: f.memberId, status: f.status }, today()); };
@@ -909,8 +909,8 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       if (rep.blocked) { result.append(Banner("warn", rep.reason || "This report cannot be produced yet.")); return; }
       const tot = shownTotals(rep), lab = (k) => (rep.labels && rep.labels[k]) || heading(k).replace(/ \(UGX\)$/, "");
       result.append(h("div", { class: "rc-head" }, h("div", null, h("h2", { class: "rc-title" }, rep.title), h("div", { class: "rc-period" }, rep.period || "")), h("div", { class: "rc-count" }, pl(rep.rows.length, "line"))),
-        tot.length ? h("div", { class: "rc-totals" }, tot.map((k) => h("div", { class: "rc-total" }, h("span", null, lab(k)), h("b", { class: rep.totals[k] < 0 ? "neg" : "" }, /^(rows|entries|loans|count)$/i.test(k) ? String(rep.totals[k]) : rep.totals[k] < 0 ? "UGX (" + num(-rep.totals[k]) + ")" : ugx(rep.totals[k]))))) : null,
-        tableFromReport(rep, null), (rep.notes || []).length ? h("div", { class: "rc-notes" }, rep.notes.map((n) => h("p", null, n))) : null);
+        tot.length ? h("div", { class: "rc-totals" }, tot.map((k) => h("div", { class: "rc-total" }, h("span", null, lab(k)), h("b", { class: rep.totals[k] < 0 ? "neg" : "" }, /^(rows|entries|loans|count)$/i.test(k) ? String(rep.totals[k]) : rep.totals[k] < 0 ? "UGX (" + num(-rep.totals[k]) + ")" : ugx(rep.totals[k]))))) : "",
+        tableFromReport(rep, null), (rep.notes || []).length ? h("div", { class: "rc-notes" }, rep.notes.map((n) => h("p", null, n))) : "");
       applyPrivacy();
     }
     const barItems = () => {

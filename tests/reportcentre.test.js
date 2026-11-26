@@ -41,3 +41,9 @@ t("the Category filter keeps only entries with that purpose and re-adds the tota
   });
 }
 console.log(n + " report centre tests passed");
+t("Member Details lists id, name, status, phone and e-mail for each member, is flagged personal, and filters by status and member", () => {
+  const c = RC.catalogue().find((x) => x.id === "details"); assert.ok(c && c.personal === true && c.group === "Savings and members");
+  const r = RC.run(db, "details", {}, today); assert.deepStrictEqual(r.columns, ["memberId", "member", "status", "phone", "email"]); assert.strictEqual(r.rows.length, (db.members || []).length);
+  const m = db.members[0]; const one = RC.run(db, "details", { memberId: m.id }, today); assert.strictEqual(one.rows.length, 1); assert.strictEqual(one.rows[0].phone, m.phone || ""); assert.strictEqual(RC.run(db, "details", { status: "NoSuchStatus" }, today).rows.length, 0);
+  assert.ok(RC.catalogue().filter((x) => x.personal).length === 1, "only this report is personal");
+});
