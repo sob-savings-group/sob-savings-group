@@ -127,7 +127,16 @@
 
   // Entries awaiting/failed second-person approval never count toward any figure.
   const isCounted = (t) => !t.voided && (t.approvalStatus === undefined || t.approvalStatus === "Approved");
-  const activeTransactions = (db) => (db.transactions || []).filter(isCounted);
+  /* PERFORMANCE: while a screen or report is being worked out, indexed(db, fn) keeps one list of counted entries and groups it by loan and by member, so each
+     per-loan or per-member question is answered without scanning the whole ledger again. The index lives only for that call (it is dropped even on an error), and is
+     ignored if the ledger changes length meanwhile, so it can never serve stale figures to a later screen. Outside indexed() everything behaves exactly as before. */
+  let SCOPE = null;
+  const scopeFor = (db) => (SCOPE && SCOPE.arr === db.transactions && SCOPE.n === (db.transactions || []).length ? SCOPE : null);
+  const activeTransactions = (db) => { const s = scopeFor(db); if (s) return s.active || (s.active = (db.transactions || []).filter(isCounted)); return (db.transactions || []).filter(isCounted); };
+  const groupBy = (list, k) => { const m = new Map(); list.forEach((t) => { const g = m.get(t[k]); if (g) g.push(t); else m.set(t[k], [t]); }); return m; };
+  const txOfLoan = (db, id) => { const s = scopeFor(db); if (!s) return activeTransactions(db).filter((t) => t.loanId === id); s.byLoan = s.byLoan || groupBy(activeTransactions(db), "loanId"); return s.byLoan.get(id) || []; };
+  const txOfMember = (db, id) => { const s = scopeFor(db); if (!s) return activeTransactions(db).filter((t) => t.memberId === id); s.byMember = s.byMember || groupBy(activeTransactions(db), "memberId"); return s.byMember.get(id) || []; };
+  function indexed(db, fn) { const prev = SCOPE; SCOPE = { arr: db.transactions, n: (db.transactions || []).length }; try { return fn(); } finally { SCOPE = prev; } }
   // Loans that are not (yet / any longer) booked never count toward outstanding or exposure.
   const NOT_BOOKED = ["Pending", "AwaitingApproval", "Approved", "Declined", "Reversed"];
   const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided && !NOT_BOOKED.includes(l.status));
@@ -216,15 +225,15 @@
     return loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
   };
   const loanTotalPenalties = (loan, db) =>
-    activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
+    txOfLoan(db, loan.id).filter((t) => t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
   const loanPayable = (loan, asOf, db) =>
     Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf, db) + (db ? loanTotalPenalties(loan, db) : 0);
   const loanTotalRepaid = (loan, db) =>
-    activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
+    txOfLoan(db, loan.id).filter((t) => t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
   const loanOutstanding = (loan, db, asOf) => loanPayable(loan, asOf, db) - loanTotalRepaid(loan, db);
 
   function memberSavings(db, memberId) {
-    return activeTransactions(db).filter((t) => t.memberId === memberId)
+    return txOfMember(db, memberId)
       .reduce((a, t) => a + classifyTransaction(t).savings, 0);
   }
   /* --- guarantees: the guarantor's own money committed to other people's loans. Committed savings stay in the account (they are still
@@ -244,7 +253,7 @@
     return Math.max(0, Number(g.amount) - rel.filter((r) => !r.date || r.date <= asOf).reduce((a, r) => a + Number(r.amount), 0));
   }
   const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
-  const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  const memberSavingsAsOf = (db, memberId, asOf) => txOfMember(db, memberId).filter((t) => t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
   /* VERIFIED SAVINGS (used for settling a loan from savings). The register records each member's savings for the current savings year only: deposits + profit - withdrawals since the
      last share-out. Balances brought forward from earlier years are NOT counted here, because the old share-out entries do not clear them and the register does not confirm them.
      The loan books and the member's lifetime position are unchanged; this only decides what may be offset against a loan. */
@@ -261,8 +270,8 @@
   const confirmedAllocation = () => REPAYMENT_RULE;
   function walkAllocation(loan, db, asOf) {
     const principal = Number(loan.loanAmount) || 0, e = effectiveAsOf(loan, asOf);
-    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
-    const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
+    const reps = txOfLoan(db, loan.id).filter((t) => t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
+    const pens = txOfLoan(db, loan.id).filter((t) => t.type === "Penalty");
     let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
       let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
@@ -314,7 +323,7 @@
   }
   function memberLifetimeHistory(db, memberId, period) {
     let run = 0;
-    return activeTransactions(db).filter((t) => t.memberId === memberId)
+    return txOfMember(db, memberId).slice()
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
       .map((t) => { run += classifyTransaction(t).savings; return { ...t, runningSavings: run }; })
       .filter((t) => inPeriod(t, period));
@@ -330,7 +339,7 @@
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, indexed, txOfLoan, txOfMember, activeLoans, classifyTransaction, withinRestoreWindow,
     loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,
@@ -351,7 +360,7 @@
   /* Roles. "Admin" is the SUPER ADMIN: the only role that can input or edit financial records. The Chairperson is the SECOND APPROVER
      (reviews/approves, never inputs). The Treasurer records routine transactions (see TREASURER_WRITE). The Secretary is view-only. "Committee" is the generic read-only reviewer. */
   const WRITE = ["ledger.create", "ledger.void", "ledger.restore", "loan.review", "loan.disburse", "loan.repay", "loan.editInterest", "loan.reverse", "guarantee.manage",
-    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "reserve.manage", "security.manage", "policy.manage", "profit.distribute", "system.admin"];
+    "subscription.record", "shareout.execute", "reconcile.manage", "notify.manage", "airtime.manage", "member.manage", "history.import", "reserve.manage", "security.manage", "policy.manage", "content.manage", "profit.distribute", "system.admin"];
   const APPROVE = ["ledger.approve", "loan.secondApprove", "security.approve"];
   const READ = ["report.view", "audit.view", "shareout.preview", "report.export"];   // report.export = the Export / Share menu (PDF, print, WhatsApp, CSV); officers only
   const ALL = WRITE.concat(["loan.apply"], READ);          // Super Admin: every input permission, NOT the second-approval ones
@@ -403,13 +412,15 @@
     if (!dates.isISO(e.date)) throw new Error("INVALID: date must be YYYY-MM-DD");
     need(e.type, "type");
     if (e.memberId && !db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: " + e.memberId);
+    const chg = chargeOf(e), memberCharge = chg.amount > 0 && chg.chargedTo === "Member" && e.type === "Withdraw" ? chg.amount : 0;
     if (["Withdraw", "Share-Out", "Bank Charge"].includes(e.type) && e.memberId) {
-      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. */
+      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. A member-borne bank charge leaves too, so it counts. */
       const pos = ledger.memberPosition(db, e.memberId);
-      if (amount > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
+      if (amount + memberCharge > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw" + (memberCharge ? " (the bank charge of " + memberCharge + " also comes out of the member's savings)" : "") + " (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
     }
     const needsApproval = config.approval.requiredTypes.concat(ledger.getPolicy(db, "approval").requiredTypes || []).includes(e.type);
-    const entry = Object.assign({}, e, {
+    const clean = Object.assign({}, e); delete clean.bankCharge; delete clean.chargedTo;
+    const entry = Object.assign({}, clean, {
       id: e.id || uid("TXN"), amount, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now,
       approvalStatus: needsApproval ? "PendingApproval" : "Approved"
     });
@@ -417,7 +428,19 @@
     if (!needsApproval) { entry.approvedBy = ctx.by; entry.approvedAt = ctx.now; }
     db.transactions.push(entry);
     audit(db, ctx, "Transaction", entry.id, "Created", null, { type: entry.type, amount, memberId: entry.memberId, date: entry.date });
+    if (chg.amount > 0 && e.type === "Withdraw") addBankCharge(db, ctx, entry, chg);
     return entry;
+  }
+  /* A bank charge is entered by hand (it varies) beside the transaction it belongs to, and is recorded as its OWN ledger line so reports and the audit can show it:
+     chargedTo "Member" -> a Bank Charge taken from the member's savings; "Group" -> a group expense (purpose "Bank charges"). It is linked (chargeFor) to its transaction,
+     is approved, rejected or voided together with it, and is created in the same command, so either both are saved or neither. */
+  function chargeOf(e) { const amount = e.bankCharge === undefined || e.bankCharge === null || e.bankCharge === "" ? 0 : Number(e.bankCharge); if (!(amount >= 0) || !isFinite(amount)) throw new Error("INVALID: the bank charge must be a number, 0 or more"); return { amount, chargedTo: e.chargedTo === "Group" ? "Group" : (e.chargedTo === "Member" || !e.chargedTo ? "Member" : (() => { throw new Error("INVALID: choose who bears the bank charge: Member or Group"); })()) }; }
+  function addBankCharge(db, ctx, main, chg) {
+    const base = { date: main.date, amount: chg.amount, purpose: "Bank charges", chargeFor: main.id, chargedTo: chg.chargedTo, sourceRef: main.sourceRef || "", details: "Bank charge on " + main.type + " " + main.id };
+    const c = chg.chargedTo === "Member" ? createEntry(db, ctx, Object.assign({}, base, { type: "Bank Charge", memberId: main.memberId, purpose: "Bank charge" })) : createEntry(db, ctx, Object.assign({}, base, { type: "Expense" }));
+    c.approvalStatus = main.approvalStatus; if (main.approvalStatus !== "Approved") { delete c.approvedBy; delete c.approvedAt; }
+    audit(db, ctx, "Transaction", main.id, "Bank charge added", null, { charge: c.id, amount: chg.amount, chargedTo: chg.chargedTo });
+    return c;
   }
   function approveEntry(db, ctx, id, decision, reason) {
     require_(ctx, "ledger.approve");
@@ -428,6 +451,7 @@
     if (next === "Rejected") need(reason, "reason");
     audit(db, ctx, "Transaction", id, next, t.approvalStatus, next, reason);
     t.approvalStatus = next; t.approvedBy = ctx.by; t.approvedAt = ctx.now;
+    db.transactions.filter((x) => x.chargeFor === id && x.approvalStatus === "PendingApproval").forEach((c) => { c.approvalStatus = next; c.approvedBy = ctx.by; c.approvedAt = ctx.now; audit(db, ctx, "Transaction", c.id, next, "PendingApproval", next, "With " + id); });
     return t;
   }
   function voidEntry(db, ctx, id, reason) {
@@ -438,6 +462,7 @@
     if (t.voided) throw new Error("ALREADY_VOIDED: " + id);
     Object.assign(t, { voided: true, voidReason: reason.trim(), voidDate: ctx.today, voidTimestamp: ctx.now, voidedByRole: ctx.role, voidedBy: ctx.by });
     audit(db, ctx, "Transaction", id, "Voided", { voided: false }, { voided: true }, reason);
+    db.transactions.filter((x) => x.chargeFor === id && !x.voided).forEach((c) => { Object.assign(c, { voided: true, voidReason: "Bank charge of voided " + id + ": " + reason.trim(), voidDate: ctx.today, voidTimestamp: ctx.now, voidedByRole: ctx.role, voidedBy: ctx.by }); audit(db, ctx, "Transaction", c.id, "Voided", { voided: false }, { voided: true }, "With " + id); });
     return t;
   }
   function restoreEntry(db, ctx, id, reason) {
@@ -552,7 +577,7 @@
     if (!it) { it = { id: uid("LST"), list: a.list, label, active: false, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); } else it.active = false;
     audit(db, ctx, "List", it.id, "Option retired", { active: true }, { active: false }, reason); return it;
   }
-  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
+  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, addBankCharge, chargeOf, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
 });
 
 
@@ -1321,9 +1346,9 @@
   /* The total of the entries listed in the drill-down, computed independently of the card; the screen shows both and says whether they tie. */
   const TIE = { totalSavings: (d) => sum(d.rows, "savings"), availableCash: (d) => (d.rows.length ? d.rows[d.rows.length - 1].balance : d.opening), outstandingLoans: (d) => sum(d.rows, "balance"), interestReceivable: (d) => sum(d.rows, "unpaidInterest"), loanExposure: (d) => sum(d.rows, "committed"), members: (d) => d.rows.length,
     loansDisbursed: (d) => sum(d.rows, "amount"), repaymentsReceived: (d) => sum(d.rows, "payment"), interestReceived: (d) => sum(d.rows, "interest") };
-  const detail = (db, key, period) => { if (!BUILD[key]) throw new Error("Unknown KPI: " + key); const d = BUILD[key](frame(db, period)); d.rowsTotal = (TIE[key] || ((x) => sum(x.rows, "amount")))(d); d.tied = key === "loanExposure" ? d.rowsTotal === d.guaranteed : d.rowsTotal === d.value; return d; };
+  const detail = (db, key, period) => { if (!BUILD[key]) throw new Error("Unknown KPI: " + key); const f0 = frame(db, period), d = L.indexed(f0.d, () => BUILD[key](f0)); d.rowsTotal = (TIE[key] || ((x) => sum(x.rows, "amount")))(d); d.tied = key === "loanExposure" ? d.rowsTotal === d.guaranteed : d.rowsTotal === d.value; return d; };
   /* The dashboard: every KPI computed once for the chosen period (a card shows value + basis; a click opens report(key) for the same period). */
-  function overview(db, period) { const f = frame(db, period), o = {}; KEYS.forEach((k) => { o[k] = BUILD[k](f); }); o.awaitingApproval = awaiting(db); o.period = { from: f.from, to: f.to }; return o; }
+  function overview(db, period) { const f = frame(db, period), o = {}; L.indexed(f.d, () => { KEYS.forEach((k) => { o[k] = BUILD[k](f); }); }); o.awaitingApproval = awaiting(db); o.period = { from: f.from, to: f.to }; return o; }
   /* The report/PDF behind a KPI: the very same detail, in the shape every printable report uses. */
   function report(db, key, period, opt) {
     const d = detail(db, key, period), clean = (r) => { const o = {}; Object.keys(r).forEach((k) => { if (k !== "_open") o[k] = r[k]; }); return o; };
@@ -1520,15 +1545,95 @@
 });
 
 
+/* ../src/core/templates.js */
+/* SOB core/templates — the wording of every automatic text message is a SETTING, not code.
+   Each template has a safe default (below), a list of the placeholders it may use, and sample values for the live preview. An officer edits the words in the app;
+   the change is validated (known placeholders only, the required ones kept, length checked), approved by the Chairperson, audited, and takes effect at once.
+   Clearing a template returns it to the default. If a saved template is ever unusable, the default is used, so a message is never lost.
+   Texts are plain text for SMS and WhatsApp. "Quick messages" are the officer's own saved wordings for Send a message. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.templates = api; }
+})(typeof self !== "undefined" ? self : this, function (G, D) {
+  const KEY = "message-templates", MAX = 480, SMS_ONE = 160;
+  const money = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-US");
+  const P = {
+    amount: ["The amount, e.g. UGX 50,000", "UGX 50,000"], date: ["The date, e.g. 28/11/2026", "28/11/2026"], ref: ["The reference or loan number", "LOAN-0001"], type: ["What was recorded, e.g. Savings", "Savings"], year: ["The year", "2026"],
+    fee: ["The fee, e.g. UGX 1,000", "UGX 1,000"], reasonLine: ["The reason, with its lead-in; empty when none is given", " Reason: not enough savings."], paid: ["Amount paid since the last reminder, digits only", "50,000"],
+    amt: ["Amount still owed, digits only", "150,000"], dl: ["The repayment deadline, e.g. 24 Nov", "24 Nov"], tel: ["The Chairperson's phone number (from Automatic reminders)", "0700123456"]
+  };
+  const SIGN = "Elder Pr. Kironde";
+  /* key: [group, label, default text, placeholders it may use, placeholders that must stay in] */
+  const REG = {
+    receipt: ["Receipts and confirmations", "Money received (receipt)", "SOB: we received {amount} ({type}) on {date}. Ref {ref}.", ["amount", "type", "date", "ref"], ["amount"]],
+    repaymentReceived: ["Receipts and confirmations", "Loan repayment received", "SOB: loan repayment of {amount} received on {date}. Loan {ref}.", ["amount", "date", "ref"], ["amount"]],
+    loanApproved: ["Loans", "Loan approved", "SOB: your loan application of {amount} has been approved. Ref {ref}.", ["amount", "ref"], ["amount"]],
+    loanDeclined: ["Loans", "Loan not approved", "SOB: your loan application of {amount} was not approved.{reasonLine} Ref {ref}.", ["amount", "ref", "reasonLine"], ["amount"]],
+    loanDisbursed: ["Loans", "Loan paid out", "SOB: loan {ref} of {amount} has been disbursed.", ["ref", "amount"], ["amount"]],
+    repaymentReminder: ["Loans", "Balance reminder (single member)", "SOB: reminder - loan {ref} balance is {amount} as of {date}.", ["ref", "amount", "date"], ["amount"]],
+    shareOut: ["Year end", "Share-out recorded", "SOB: December {year} share-out recorded. Your savings withdrawn: {amount}.", ["year", "amount"], ["amount"]],
+    airtimeRequested: ["Airtime", "Airtime request received", "SOB: airtime request {ref} of {amount} received (fee {fee}). Awaiting approval.", ["ref", "amount", "fee"], ["amount"]],
+    airtimeFulfilled: ["Airtime", "Airtime sent", "SOB: your airtime request of {amount} has been fulfilled. Thank you.", ["amount"], ["amount"]],
+    airtimeRejected: ["Airtime", "Airtime not approved", "SOB: your airtime request {ref} was not approved.{reasonLine}", ["ref", "reasonLine"], []],
+    reminderThanks: ["Automatic loan reminders (Bishop stage)", "Loan fully paid: thank you", "Thank you. Your loan is fully paid. Forget the pressure you went through; we value your faithfulness. God bless you. " + SIGN, [], []],
+    reminderPart: ["Automatic loan reminders (Bishop stage)", "Part-paid: thank you and balance", "Thank you for paying UGX {paid}. Balance UGX {amt}. Pay by {dl} or call Chairperson {tel}. If unpaid, Bishop acts. " + SIGN, ["paid", "amt", "dl", "tel"], ["amt"]],
+    reminderNone: ["Automatic loan reminders (Bishop stage)", "Nothing paid: serious notice", "UGX {amt} unpaid. Please don't keep quiet: pay or call Chairperson {tel}. If unpaid by {dl}, you go to the Bishop for action.", ["amt", "dl", "tel"], ["amt"]]
+  };
+  const KEYS = Object.keys(REG);
+  const info = (key) => { const r = REG[key]; if (!r) throw new Error("UNKNOWN_TEMPLATE: " + key); return { key, group: r[0], label: r[1], text: r[2], placeholders: r[3].map((p) => ({ name: p, about: P[p][0], sample: P[p][1] })), required: r[4] }; };
+  const rec = (db) => ((db && db.policy) || []).find((p) => p.id === KEY) || {};
+  const custom = (db, key) => { const t = (rec(db).texts || {})[key]; return typeof t === "string" && t.trim() ? t : ""; };
+  const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (m, k) => (v[k] === undefined ? "" : v[k]));
+  /* the text in use: the officer's wording when it is valid, otherwise the default */
+  function text(db, key) { const r = REG[key]; if (!r) throw new Error("UNKNOWN_TEMPLATE: " + key); const c = custom(db, key); return c && !check(key, c).length ? c : r[2]; }
+  /* what a text is made of, for the counter: GSM characters fit 160 to a text (153 each when it takes several); other characters (some accents, emoji) drop that to 70 (67) */
+  const GSM = /^[A-Za-z0-9 \r\n@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-.\/:;<=>?¡ÄÖÑÜ§¿äöñüà^{}\\\[~\]|€]*$/;
+  function smsInfo(t) { t = String(t || ""); const uni = !GSM.test(t), one = uni ? 70 : 160, many = uni ? 67 : 153, len = t.length; return { length: len, unicode: uni, segments: len === 0 ? 0 : len <= one ? 1 : Math.ceil(len / many), perSegment: len <= one ? one : many }; }
+  /* problems with a proposed wording; empty list = fine */
+  function check(key, t) {
+    const r = REG[key], bad = []; if (!r) return ["Unknown message"]; t = String(t == null ? "" : t);
+    if (!t.trim()) return ["The message cannot be empty"]; if (t.length > MAX) bad.push("Too long: " + t.length + " characters (the limit is " + MAX + ")"); if (/[<>]/.test(t)) bad.push("Do not use < or >");
+    const used = (t.match(/\{(\w+)\}/g) || []).map((x) => x.slice(1, -1)); used.filter((u) => !r[3].includes(u)).forEach((u) => bad.push("{" + u + "} is not available here. You can use: " + (r[3].map((p) => "{" + p + "}").join(" ") || "no placeholders")));
+    r[4].filter((q) => !used.includes(q)).forEach((q) => bad.push("It must keep {" + q + "} so the member sees the amount"));
+    if (/\{[^}]*$/.test(t.replace(/\{\w+\}/g, ""))) bad.push("A { is not closed"); return bad;
+  }
+  const preview = (key, t) => { const r = REG[key], v = {}; r[3].forEach((p) => { v[p] = P[p][1]; }); return fill(t == null ? r[2] : t, v); };
+  /* ---------- used by the senders ---------- */
+  const render = (db, key, vars) => fill(text(db, key), vars || {});
+  const has = (key) => !!REG[key];
+  /* ---------- officers ---------- */
+  function set(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; info(a.key); const t = String(a.text == null ? "" : a.text).replace(/\r\n/g, "\n").trim();
+    const policy = (db.policy = db.policy || []); let p = policy.find((x) => x.id === KEY); if (!p) policy.push((p = { id: KEY, texts: {}, quick: [] })); p.texts = p.texts || {}; p.quick = p.quick || [];
+    const before = p.texts[a.key] || "";
+    if (!t || t === REG[a.key][2]) { delete p.texts[a.key]; } else { const bad = check(a.key, t); if (bad.length) throw new Error("INVALID: " + bad[0]); p.texts[a.key] = t; }
+    p.updatedBy = ctx.by; p.updatedDate = ctx.today; G.audit(db, ctx, "MessageTemplate", a.key, p.texts[a.key] ? "Wording changed" : "Reset to default", { text: before || "(default)" }, { text: p.texts[a.key] || "(default)" }, a.reason || ""); return { key: a.key, custom: !!p.texts[a.key] };
+  }
+  const quick = (db) => ((rec(db).quick) || []).slice();
+  function saveQuick(db, ctx, a) {
+    G.require(ctx, "notify.manage"); a = a || {}; const name = String(a.name || "").trim().slice(0, 40), t = String(a.text || "").trim();
+    if (!name) throw new Error("REQUIRED: a name for the message"); if (!t) throw new Error("REQUIRED: the message"); if (t.length > MAX) throw new Error("INVALID: too long (limit " + MAX + ")"); if (/[<>]/.test(t)) throw new Error("INVALID: do not use < or >");
+    const bad = (t.match(/\{(\w+)\}/g) || []).map((x) => x.slice(1, -1)).filter((u) => !["name", "id"].includes(u)); if (bad.length) throw new Error("INVALID: only {name} and {id} can be used in a quick message");
+    const policy = (db.policy = db.policy || []); let p = policy.find((x) => x.id === KEY); if (!p) policy.push((p = { id: KEY, texts: {}, quick: [] })); p.quick = p.quick || [];
+    let q = a.id ? p.quick.find((x) => x.id === a.id) : null; if (a.id && !q) throw new Error("NOT_FOUND: quick message"); if (!q) { q = { id: G.uid("QM") }; p.quick.push(q); }
+    if (p.quick.length > 30) throw new Error("INVALID: at most 30 quick messages"); const was = q.text || ""; Object.assign(q, { name, text: t }); G.audit(db, ctx, "MessageTemplate", q.id, a.id ? "Quick message edited" : "Quick message added", { text: was }, { name, text: t }, a.reason || ""); return q;
+  }
+  function removeQuick(db, ctx, a) { G.require(ctx, "notify.manage"); const p = rec(db), i = (p.quick || []).findIndex((x) => x.id === (a || {}).id); if (i < 0) throw new Error("NOT_FOUND: quick message"); const q = p.quick.splice(i, 1)[0]; G.audit(db, ctx, "MessageTemplate", q.id, "Quick message removed", { name: q.name }, null, (a && a.reason) || ""); return { removed: q.id }; }
+  const list = (db) => KEYS.map((k) => { const i = info(k), c = custom(db, k), valid = !c || !check(k, c).length; return Object.assign(i, { current: valid && c ? c : i.text, isCustom: !!c && valid, broken: !!c && !valid }); });
+  return { KEYS, MAX, SMS_ONE, info, list, text, render, has, check, preview, smsInfo, set, saveQuick, removeQuick, quick, fill, money };
+});
+
+
 /* ../src/core/notify.js */
 /* SOB core/notify — SMS / WhatsApp notification framework. SAFE BY DEFAULT: every message is rendered into an OUTBOX record; nothing leaves the
    system unless a gateway adapter reports `live: true` (which needs real credentials set server-side). Without one, messages are marked
    DRY_RUN ("rendered, NOT sent"). A message is only ever marked SENT after a live adapter confirmed it. Failures are logged, never hidden. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.notify = api; }
-})(typeof self !== "undefined" ? self : this, function (G, D) {
+})(typeof self !== "undefined" ? self : this, function (G, D, TP) {
   const CHANNELS = ["SMS", "WHATSAPP"];
   const MAX_ATTEMPTS = 3;
   const RECEIPT_TEMPLATES = ["receipt", "repaymentReceived", "loanDisbursed", "transactionReceipt"];
@@ -1551,6 +1656,9 @@
     transactionReceipt: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
+  /* The wording of the editable messages comes from the Message wording setting (core/templates); everything else is fixed. A broken saved wording falls back to the default. */
+  const prep = (v) => ({ amount: money(v.amount), date: D.toDisplay(v.date), ref: v.ref, type: v.type, year: v.year, fee: money(v.fee), reasonLine: v.reason ? " Reason: " + v.reason : "" });
+  function renderFor(db, template, vars) { return TP && TP.has(template) ? TP.render(db, template, prep(vars || {})) : render(template, vars); }
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
   function normalizePhone(p) {
     const s = String(p == null ? "" : p).replace(/[\s\-().]/g, "");
@@ -1585,7 +1693,7 @@
     if (member && member.notifyOptOut) { status = "SKIPPED"; reason = "OPTED_OUT"; }
     else if (!to) { status = "SKIPPED"; reason = "NO_VALID_PHONE"; }
     const rec = { id: G.uid("MSG"), createdAt: ctx.now, createdBy: ctx.by, memberId: o.memberId || "", to: to || "", channel, template: o.template,
-      body: channel === "SMS" && member ? identify(render(o.template, o.vars), member.id) : render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+      body: channel === "SMS" && member ? identify(renderFor(db, o.template, o.vars), member.id) : renderFor(db, o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
     /* when the committee switched the rule on, amounts and warnings go only to a confirmed number; any other number gets a plain notice */
     if (channel === "SMS" && member && status === "QUEUED" && !NO_RULE_TEMPLATES.includes(o.template) && getSmsRule(db).requireConfirmed && !phoneConfirmed(member)) { rec.body = identify(NOT_CONFIRMED_TEXT, member.id); rec.downgraded = true; rec.reason = "Number not confirmed: sent a plain notice without amounts"; }
     outbox.push(rec);
@@ -2299,9 +2407,9 @@
    "Opened WhatsApp" is NOT delivery: wa.me gives no receipt. Delivery states are PREPARED -> OPENED -> SENT_CONFIRMED (the officer's own confirmation). */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./notify.js") : root.SOB.notify);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reminders = api; }
-})(typeof self !== "undefined" ? self : this, function (D, L, G, N) {
+})(typeof self !== "undefined" ? self : this, function (D, L, G, N, TP) {
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
@@ -2555,7 +2663,7 @@
     const COUNT = left === null || left < 0 ? null : left === 0 ? ["SOB: Due TODAY {dl}. Pay {total} now.", "SOB: Due today. Pay {amt} now.", "SOB: Due today. Pay {amt}."] : left === 1 ? ["SOB: Due TOMORROW. Pay {total} today.", "SOB: Due tomorrow. Pay {amt} today.", "SOB: Due tomorrow. Pay {amt}."] : left === 2 ? ["SOB: Only 2 days left! Pay {total} by {dl}.", "SOB: 2 days left! Pay {amt} by {dl}.", "SOB: 2 days left. Pay {amt}."] : ["SOB: {n} days left. Pay {total} by {dl}.", "SOB: {n} days left. Pay {amt} by {dl}.", "SOB: {n} days left. Pay {amt}."];
     if (rec.auto && rec.stage === "BISHOP" && !custom) {   // automatic Bishop notice: says what was paid, or asks the member not to keep quiet
       const dl0 = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n0 = Math.round(f.totalOutstanding), paid = Math.round(Number(rec.paidSinceLast) || 0);
-      const t0 = smsText(fill(paid > 0 ? PART_TEXT : NONE_TEXT, { tel: getAuto(db).contactPhone || "", paid: paid.toLocaleString("en-US"), amt: n0.toLocaleString("en-US"), dl: dl0 })), full0 = N.identify(t0.replace(/Chairperson (?=[.:])/, "the Chairperson").replace(/ +([.:])/g, "$1"), rec.memberId);
+      const t0 = smsText(fill(paid > 0 ? TP.text(db, "reminderPart") : TP.text(db, "reminderNone"), { tel: getAuto(db).contactPhone || "", paid: paid.toLocaleString("en-US"), amt: n0.toLocaleString("en-US"), dl: dl0 })), full0 = N.identify(t0.replace(/Chairperson (?=[.:])/, "the Chairperson").replace(/ +([.:])/g, "$1"), rec.memberId);
       if (full0.length <= SMS_ONE) return full0;
     }
     const list = custom ? [custom] : (rec.level === "FRIENDLY" && COUNT ? COUNT : SMS_TEMPLATES[rec.level]);
@@ -2701,6 +2809,7 @@
   }
   /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
   function receiptAfter(db, ctx, name, args, result) {
+    if (name === "createEntries" && Array.isArray(result)) { result.forEach((e) => receiptAfter(db, ctx, "createEntry", args, e)); return; }
     try {
       if (!getReceipts(db).enabled) return; args = args || {}; let e = null;
       if (name === "createEntry" || name === "recordSubscription" || name === "approveEntry") e = result;
@@ -2761,7 +2870,7 @@
         const f = figures(db, loan, today); if (f.error) { out.skipped.push({ loanId: loan.id, reason: f.error }); continue; } if (!(f.totalOutstanding > 0)) {   // paid in full: a one-off thank-you if they were reminded and have paid since
           const reminded = (db.reminders || []).some((r) => r.loanId === loan.id && r.delivery !== "CANCELLED"), repaidAfter = reminded && paidSince(db, loan, today) > 0;
           if (repaidAfter) { const key = "THANKS:" + loan.id, had = (db.outbox || []).find((x) => x.dedupeKey === key && x.status !== "CANCELLED");
-            if (!had || had.status === "QUEUED" || had.status === "DRY_RUN") { const q = N.queue(db, ctx, { memberId: member.id, template: "custom", vars: { text: THANKS_TEXT }, channel: "SMS", dedupeKey: key }); N.dispatch(db, ctx, gateways, { ids: [q.id] }); if (q.status === "SENT") out.sent.push({ loanId: loan.id, memberId: member.id, stage: "THANKS", sms: q.body }); else out.failed.push({ loanId: loan.id, memberId: member.id, stage: "THANKS" }); } }
+            if (!had || had.status === "QUEUED" || had.status === "DRY_RUN") { const q = N.queue(db, ctx, { memberId: member.id, template: "custom", vars: { text: TP.text(db, "reminderThanks") }, channel: "SMS", dedupeKey: key }); N.dispatch(db, ctx, gateways, { ids: [q.id] }); if (q.status === "SENT") out.sent.push({ loanId: loan.id, memberId: member.id, stage: "THANKS", sms: q.body }); else out.failed.push({ loanId: loan.id, memberId: member.id, stage: "THANKS" }); } }
           continue; }
         const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
         if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
@@ -2789,16 +2898,833 @@
 });
 
 
+/* ../src/core/batch.js */
+/* SOB core/batch — enter many ledger lines, check them ALL together, submit them ALL together.
+   validate(db, rows, o) never writes anything. It returns, for every line, the errors that block it and the warnings that need a decision, so the person fixes everything in one pass.
+   apply(db, ctx, rows, o) re-runs the same validation on the server and then records every line in one command: either all are saved or none (a failure rolls the whole command back).
+   A line: { memberId, type: Savings|Withdraw|Expense|Income, amount, date, reference, purpose, bankCharge, chargedTo }. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./dates.js") : root.SOB.dates);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.batch = api;
+  }
+})(typeof self !== "undefined" ? self : this, function (G, L, N, D) {
+  const TYPES = ["Savings", "Withdraw", "Expense", "Income"], MEMBER_TYPES = ["Savings", "Withdraw"], MAX_ROWS = 200, RECEIPT_TYPES = ["Savings", "Withdraw"];
+  const num = (v) => (v === "" || v === null || v === undefined ? NaN : Number(String(v).replace(/,/g, "")));
+  const ugx = (n) => "UGX " + Math.round(n).toLocaleString("en-US");
+  const blank = (r) => !r || !["memberId", "amount", "reference", "purpose", "bankCharge"].some((k) => String(r[k] == null ? "" : r[k]).trim() !== "");
+
+  function validate(db, rows, o) {
+    o = o || {}; const today = o.today || (new Date().toISOString().slice(0, 10)), receipts = !!o.receiptsOn, out = [], seenRef = {}, seenKey = {}, running = {};
+    const ledgerRefs = {}, ledgerKeys = {};
+    (db.transactions || []).filter((t) => !t.voided).forEach((t) => { [t.reference, t.sourceRef].filter(Boolean).forEach((r) => { ledgerRefs[String(r).trim().toLowerCase()] = t; }); ledgerKeys[[t.memberId || "", t.type, Number(t.amount), t.date].join("|")] = t; });
+    const list = (rows || []).map((r, i) => ({ r, i })).filter((x) => !blank(x.r));
+    if (list.length > MAX_ROWS) return { ok: false, rows: [], errorCount: 1, warningCount: 0, summary: ["A batch can hold at most " + MAX_ROWS + " lines; split it into smaller batches."], total: list.length };
+    list.forEach(({ r, i }) => {
+      const e = [], w = [], f = {};   // f: field -> message, so the screen can mark the box
+      const bad = (field, msg) => { e.push(msg); f[field] = msg; };
+      const type = String(r.type || "").trim(); if (!TYPES.includes(type)) bad("type", "Choose what this line is (Savings, Withdrawal, Expense or Income).");
+      const mid = String(r.memberId || "").trim(), m = mid ? (db.members || []).find((x) => x.id === mid) : null;
+      if (MEMBER_TYPES.includes(type) && !mid) bad("memberId", "Choose the member."); else if (mid && !m) bad("memberId", "Member " + mid + " is not in the register.");
+      else if (m && m.status && !["Active", "Pending"].includes(m.status)) w.push(m.name + " is marked " + m.status + ". Check this line is right.");
+      const amt = num(r.amount); if (!(amt > 0) || !isFinite(amt)) bad("amount", "Enter an amount above 0."); else if (Math.round(amt) !== amt) bad("amount", "Use whole shillings, no decimals."); else if (amt > 500000000) bad("amount", "This amount looks too large. Check the zeros.");
+      const date = String(r.date || "").trim(); if (!D.isISO(date) || !D.isRealDate(date)) bad("date", "Enter a real date."); else if (date > today) bad("date", "This date is in the future."); else if (date < "2000-01-01") bad("date", "This date is too far back.");
+      const ref = String(r.reference || "").trim();
+      if (ref) { const k = ref.toLowerCase(); if (seenRef[k] !== undefined) bad("reference", "Reference " + ref + " is also on line " + (seenRef[k] + 1) + "."); else seenRef[k] = i; if (ledgerRefs[k]) bad("reference", "Reference " + ref + " is already in the ledger (" + (ledgerRefs[k].date || "") + ", " + (ledgerRefs[k].memberName || ledgerRefs[k].type) + ")."); }
+      if (["Expense", "Income"].includes(type) && !String(r.purpose || "").trim()) bad("purpose", "Say what this " + type.toLowerCase() + " is for.");
+      const chRaw = r.bankCharge === undefined || r.bankCharge === null || String(r.bankCharge).trim() === "" ? 0 : num(r.bankCharge), ch = chRaw;
+      if (!(ch >= 0) || !isFinite(ch)) bad("bankCharge", "The bank charge must be 0 or a number."); else if (ch > 0) { if (type !== "Withdraw") bad("bankCharge", "A bank charge goes only on a withdrawal."); else if (Math.round(ch) !== ch) bad("bankCharge", "Use whole shillings for the bank charge."); else if (amt > 0 && ch > amt) w.push("The bank charge is larger than the withdrawal. Check it."); }
+      if (ch > 0 && r.chargedTo && !["Member", "Group"].includes(r.chargedTo)) bad("chargedTo", "Choose who pays the bank charge.");
+      /* money available: the member's position now, plus the lines above that put money in or take it out */
+      if (m && date && D.isISO(date) && amt > 0) {
+        const key = m.id; if (!running[key]) { const pos = L.memberPosition(db, m.id); running[key] = { avail: pos.withdrawable, savings: pos.savings }; }
+        const st = running[key];
+        if (type === "Savings") { st.avail += amt; st.savings += amt; }
+        if (type === "Withdraw") { const memberCharge = ch > 0 && (r.chargedTo || "Member") === "Member" ? ch : 0, need = amt + memberCharge;
+          if (need > st.avail) bad("amount", m.name + " can withdraw only " + ugx(Math.max(0, st.avail)) + (running[key].lines ? " after the lines above" : "") + (memberCharge ? " (the bank charge of " + ugx(memberCharge) + " also comes from their savings)" : "") + ". This needs " + ugx(need) + "."); else { st.avail -= need; st.savings -= need; }
+          running[key].lines = true; }
+      }
+      /* the same line twice (same member, type, amount, date) is almost always a double entry */
+      if (m && amt > 0 && date) { const k = [m.id, type, amt, date].join("|"); if (seenKey[k] !== undefined) w.push("Looks the same as line " + (seenKey[k] + 1) + " (same member, type, amount and date). Is it a double entry?"); else seenKey[k] = i; if (ledgerKeys[k]) w.push("The ledger already has the same member, type, amount and date. Is it a double entry?"); }
+      /* SMS receipts: warn when this line would send one but the member's number cannot receive it */
+      if (receipts && m && RECEIPT_TYPES.includes(type) && !N.normalizePhone(m.phone)) w.push(m.name + " has " + (m.phone ? "an invalid phone number (" + m.phone + ")" : "no phone number") + ", so no SMS receipt can be sent. Fix it in Members, or accept that no SMS goes out for this line.");
+      out.push({ index: i, line: i + 1, errors: e, warnings: w, fields: f, ok: e.length === 0 });
+    });
+    const errorCount = out.reduce((a, x) => a + x.errors.length, 0), warningCount = out.reduce((a, x) => a + x.warnings.length, 0);
+    const money = (types, key) => list.reduce((a, { r }) => (types.includes(String(r.type)) ? a + (num(r[key]) > 0 ? num(r[key]) : 0) : a), 0);
+    return { ok: errorCount === 0 && out.length > 0, rows: out, errorCount, warningCount, total: out.length, deposits: money(["Savings", "Income"], "amount"), payouts: money(["Withdraw", "Expense"], "amount"), charges: money(["Withdraw"], "bankCharge") };
+  }
+
+  /* Records every line in one go. Throws before saving anything if a single error remains; warnings must be accepted (o.acceptWarnings). */
+  function apply(db, ctx, rows, o) {
+    o = o || {}; const v = validate(db, rows, { today: ctx.today, receiptsOn: false });
+    if (!v.total) throw new Error("INVALID: there are no lines to submit");
+    if (v.errorCount) throw new Error("INVALID: " + v.errorCount + " problem" + (v.errorCount === 1 ? "" : "s") + " still to fix. Nothing was saved. First: line " + v.rows.find((x) => x.errors.length).line + ": " + v.rows.find((x) => x.errors.length).errors[0]);
+    if (v.warningCount && !(o.acceptWarnings === true || o.acceptWarnings === "true")) throw new Error("WARNINGS: " + v.warningCount + " warning" + (v.warningCount === 1 ? "" : "s") + " have not been accepted. Nothing was saved.");
+    const made = []; const list = (rows || []).filter((r) => !blank(r));
+    list.forEach((r) => {
+      const type = String(r.type).trim(), amount = num(r.amount), purpose = String(r.purpose || "").trim() || (type === "Savings" ? "Savings" : type === "Withdraw" ? "Member withdrawal" : type), ref = String(r.reference || "").trim(), ch = num(r.bankCharge) > 0 ? num(r.bankCharge) : 0;
+      const e = { date: String(r.date).trim(), memberId: String(r.memberId || "").trim() || undefined, amount, type, purpose };
+      if (ref) e.reference = ref; if (type === "Withdraw" && ch > 0) { e.bankCharge = ch; e.chargedTo = r.chargedTo === "Group" ? "Group" : "Member"; }
+      made.push(G.createEntry(db, ctx, e));
+    });
+    G.audit(db, ctx, "Batch", "BATCH", "Recorded", null, { lines: made.length, ids: made.map((x) => x.id) }, "Batch entry");
+    return made;
+  }
+  return { validate, apply, TYPES, MAX_ROWS };
+});
+
+
+/* ../src/core/content.js */
+/* SOB core/content — everything members read that is not money: announcements, notices, the Spiritual Corner (verses by category), investment ideas, opportunities,
+   Uganda economy notes, financial education and articles. It is DATA, not code: officers add, edit, publish, retire and schedule items inside the app, every change
+   is audited, and nothing here needs a deployment. Items are plain text only (the app never treats them as HTML).
+   An item: { id, kind, category, title, body, reference, translation, capital, link, startDate, endDate, pinned, status: Draft|Published|Retired, seedKey, by, at }. */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.content = api; }
+})(typeof self !== "undefined" ? self : this, function (G, D) {
+  const KINDS = { announcement: "Announcement", notice: "Notice", verse: "Spiritual Corner", idea: "Investment idea", opportunity: "Opportunity", economy: "Uganda economy", education: "Financial education", article: "Article", message: "Spiritual message" };
+  const VERSE_CATEGORIES = ["Saving", "Borrowing and Loans", "Investment", "Stewardship and Finance", "Giving and Generosity", "Discipline", "Wisdom", "Temptation", "Integrity", "Work and Diligence", "Contentment", "Wealth and Prosperity"];
+  const CAPITAL = ["Under UGX 100,000", "UGX 100,000 to 500,000", "UGX 500,000 to 2,000,000", "Above UGX 2,000,000"];
+  const OPP_CATEGORIES = ["Business", "Skills and training", "Grants and programmes", "Jobs", "Other"];
+  const ECONOMY_CATEGORIES = ["Agriculture", "Trade", "Manufacturing", "Tourism", "ICT", "Real Estate", "Financial Services", "Energy", "Transport", "Emerging sectors"];
+  const EDU_CATEGORIES = ["Saving", "Borrowing", "Budgeting", "Investing", "Safety and scams", "Record keeping"];
+  const CATEGORIES = { verse: VERSE_CATEGORIES, idea: CAPITAL, opportunity: OPP_CATEGORIES, economy: ECONOMY_CATEGORIES, education: EDU_CATEGORIES };
+  const LIMITS = { title: 120, body: 4000, reference: 60, translation: 20, link: 300, category: 60 };
+  const clean = (v, max) => String(v == null ? "" : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F<>]/g, "").trim().slice(0, max);
+  const safeLink = (u) => { const s = clean(u, LIMITS.link); return /^https:\/\/[^\s]+$/i.test(s) ? s : ""; };
+
+  function save(db, ctx, a) {
+    G.require(ctx, "content.manage"); a = a || {}; db.contentItems = db.contentItems || [];
+    const kind = String(a.kind || ""); if (!KINDS[kind]) throw new Error("INVALID: choose what kind of item this is");
+    const title = G.need(clean(a.title, LIMITS.title), "title"), body = G.need(clean(a.body, LIMITS.body), "text");
+    const category = clean(a.category, LIMITS.category); if (CATEGORIES[kind] && !category) throw new Error("REQUIRED: category");
+    if (a.link && !safeLink(a.link)) throw new Error("INVALID: a link must start with https://");
+    for (const k of ["startDate", "endDate"]) if (a[k] && !(D.isISO(a[k]) && D.isRealDate(a[k]))) throw new Error("INVALID: " + k + " must be a real date");
+    if (a.startDate && a.endDate && a.endDate < a.startDate) throw new Error("INVALID: the end date is before the start date");
+    const status = ["Draft", "Published", "Retired"].includes(a.status) ? a.status : "Draft";
+    const rec = a.id ? db.contentItems.find((x) => x.id === a.id) : null; if (a.id && !rec) throw new Error("NOT_FOUND: " + a.id);
+    const next = { kind, category, title, body, reference: clean(a.reference, LIMITS.reference), translation: clean(a.translation, LIMITS.translation), capital: "", link: safeLink(a.link), startDate: a.startDate || "", endDate: a.endDate || "", pinned: a.pinned === true || a.pinned === "true", status };
+    if (rec) { const before = JSON.parse(JSON.stringify(rec)); Object.assign(rec, next, { updatedBy: ctx.by, updatedAt: ctx.now }); G.audit(db, ctx, "Content", rec.id, "Edited", { title: before.title, status: before.status }, { title, status }, a.reason || ""); return rec; }
+    const item = Object.assign({ id: G.uid("CNT"), createdBy: ctx.by, createdAt: ctx.now }, next); db.contentItems.push(item); G.audit(db, ctx, "Content", item.id, status === "Published" ? "Published" : "Created", null, { kind, title, status }, a.reason || ""); return item;
+  }
+  function setStatus(db, ctx, a) {
+    G.require(ctx, "content.manage"); const it = (db.contentItems || []).find((x) => x.id === (a || {}).id); if (!it) throw new Error("NOT_FOUND: content item");
+    const status = a.status; if (!["Draft", "Published", "Retired"].includes(status)) throw new Error("INVALID: status"); const was = it.status;
+    it.status = status; it.updatedBy = ctx.by; it.updatedAt = ctx.now; G.audit(db, ctx, "Content", it.id, status === "Published" ? "Published" : status === "Retired" ? "Retired" : "Unpublished", { status: was }, { status }, a.reason || ""); return it;
+  }
+  /* what members may read today: published, inside its dates */
+  const live = (it, today) => it && it.status === "Published" && (!it.startDate || it.startDate <= today) && (!it.endDate || it.endDate >= today);
+  const published = (db, today, o) => { o = o || {}; return (db.contentItems || []).filter((x) => live(x, today) && (!o.kind || x.kind === o.kind) && (!o.category || x.category === o.category)).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))); };
+  const dayNo = (iso) => Math.floor(new Date(iso + "T00:00:00Z").getTime() / 86400000);
+  /* one verse and one tip per day: the same for everyone on a given day, different tomorrow, never depends on a server */
+  function daily(db, today, kind) { const list = published(db, today, { kind }).slice().sort((a, b) => String(a.id).localeCompare(String(b.id))); return list.length ? list[dayNo(today) % list.length] : null; }
+  /* items published or changed since a date, so the app can show what is new */
+  const since = (db, today, iso) => published(db, today).filter((x) => String(x.updatedAt || x.createdAt || "").slice(0, 10) > String(iso || "0000-00-00"));
+  function loadStarter(db, ctx, pack) {
+    G.require(ctx, "content.manage"); db.contentItems = db.contentItems || []; let added = 0;
+    (pack || []).forEach((p) => { if (db.contentItems.some((x) => x.seedKey === p.seedKey)) return; db.contentItems.push(Object.assign({ id: G.uid("CNT"), status: "Published", pinned: false, startDate: "", endDate: "", link: "", reference: "", translation: "", createdBy: ctx.by, createdAt: ctx.now, seed: true }, p)); added++; });
+    G.audit(db, ctx, "Content", "STARTER", "Starter content loaded", null, { added }, "Starter pack"); return { added, total: db.contentItems.length };
+  }
+  return { KINDS, CATEGORIES, VERSE_CATEGORIES, CAPITAL, OPP_CATEGORIES, ECONOMY_CATEGORIES, EDU_CATEGORIES, LIMITS, save, setStatus, published, daily, since, loadStarter, live };
+});
+
+
+/* ../src/core/content_seed.js */
+/* SOB core/content_seed — the STARTER pack of content (Spiritual Corner verses in the public-domain King James Version, investment ideas, Uganda economy notes,
+   financial education, opportunities and a welcome notice). An officer loads it once from Content > Load starter content; after that every item is edited
+   or retired inside the app. Nothing here is member data. Officers should review it: ideas and economy notes are general guides, not advice or current figures. */
+(function (root, factory) {
+  const pack = factory();
+  if (typeof module === "object" && module.exports) module.exports = pack; else { root.SOB = root.SOB || {}; root.SOB.contentSeed = pack; }
+})(typeof self !== "undefined" ? self : this, function () {
+  return [
+{
+"kind": "verse",
+"category": "Saving",
+"title": "Proverbs 21:20",
+"reference": "Proverbs 21:20",
+"translation": "KJV",
+"body": "There is treasure to be desired and oil in the dwelling of the wise; but a foolish man spendeth it up.",
+"seedKey": "verse-01"
+},
+{
+"kind": "verse",
+"category": "Saving",
+"title": "Proverbs 6:6-8",
+"reference": "Proverbs 6:6-8",
+"translation": "KJV",
+"body": "Go to the ant, thou sluggard; consider her ways, and be wise: Which having no guide, overseer, or ruler, Provideth her meat in the summer, and gathereth her food in the harvest.",
+"seedKey": "verse-02"
+},
+{
+"kind": "verse",
+"category": "Saving",
+"title": "Proverbs 13:11",
+"reference": "Proverbs 13:11",
+"translation": "KJV",
+"body": "Wealth gotten by vanity shall be diminished: but he that gathereth by labour shall increase.",
+"seedKey": "verse-03"
+},
+{
+"kind": "verse",
+"category": "Borrowing and Loans",
+"title": "Proverbs 22:7",
+"reference": "Proverbs 22:7",
+"translation": "KJV",
+"body": "The rich ruleth over the poor, and the borrower is servant to the lender.",
+"seedKey": "verse-04"
+},
+{
+"kind": "verse",
+"category": "Borrowing and Loans",
+"title": "Romans 13:8",
+"reference": "Romans 13:8",
+"translation": "KJV",
+"body": "Owe no man any thing, but to love one another: for he that loveth another hath fulfilled the law.",
+"seedKey": "verse-05"
+},
+{
+"kind": "verse",
+"category": "Borrowing and Loans",
+"title": "Psalm 37:21",
+"reference": "Psalm 37:21",
+"translation": "KJV",
+"body": "The wicked borroweth, and payeth not again: but the righteous sheweth mercy, and giveth.",
+"seedKey": "verse-06"
+},
+{
+"kind": "verse",
+"category": "Borrowing and Loans",
+"title": "Proverbs 22:26-27",
+"reference": "Proverbs 22:26-27",
+"translation": "KJV",
+"body": "Be not thou one of them that strike hands, or of them that are sureties for debts. If thou hast nothing to pay, why should he take away thy bed from under thee?",
+"seedKey": "verse-07"
+},
+{
+"kind": "verse",
+"category": "Investment",
+"title": "Ecclesiastes 11:2",
+"reference": "Ecclesiastes 11:2",
+"translation": "KJV",
+"body": "Give a portion to seven, and also to eight; for thou knowest not what evil shall be upon the earth.",
+"seedKey": "verse-08"
+},
+{
+"kind": "verse",
+"category": "Investment",
+"title": "Ecclesiastes 11:6",
+"reference": "Ecclesiastes 11:6",
+"translation": "KJV",
+"body": "In the morning sow thy seed, and in the evening withhold not thine hand: for thou knowest not whether shall prosper, either this or that, or whether they both shall be alike good.",
+"seedKey": "verse-09"
+},
+{
+"kind": "verse",
+"category": "Investment",
+"title": "Matthew 25:21",
+"reference": "Matthew 25:21",
+"translation": "KJV",
+"body": "His lord said unto him, Well done, thou good and faithful servant: thou hast been faithful over a few things, I will make thee ruler over many things: enter thou into the joy of thy lord.",
+"seedKey": "verse-10"
+},
+{
+"kind": "verse",
+"category": "Investment",
+"title": "Proverbs 21:5",
+"reference": "Proverbs 21:5",
+"translation": "KJV",
+"body": "The thoughts of the diligent tend only to plenteousness; but of every one that is hasty only to want.",
+"seedKey": "verse-11"
+},
+{
+"kind": "verse",
+"category": "Stewardship and Finance",
+"title": "Luke 16:10",
+"reference": "Luke 16:10",
+"translation": "KJV",
+"body": "He that is faithful in that which is least is faithful also in much: and he that is unjust in the least is unjust also in much.",
+"seedKey": "verse-12"
+},
+{
+"kind": "verse",
+"category": "Stewardship and Finance",
+"title": "1 Corinthians 4:2",
+"reference": "1 Corinthians 4:2",
+"translation": "KJV",
+"body": "Moreover it is required in stewards, that a man be found faithful.",
+"seedKey": "verse-13"
+},
+{
+"kind": "verse",
+"category": "Stewardship and Finance",
+"title": "Luke 14:28",
+"reference": "Luke 14:28",
+"translation": "KJV",
+"body": "For which of you, intending to build a tower, sitteth not down first, and counteth the cost, whether he have sufficient to finish it?",
+"seedKey": "verse-14"
+},
+{
+"kind": "verse",
+"category": "Stewardship and Finance",
+"title": "Proverbs 27:23",
+"reference": "Proverbs 27:23",
+"translation": "KJV",
+"body": "Be thou diligent to know the state of thy flocks, and look well to thy herds.",
+"seedKey": "verse-15"
+},
+{
+"kind": "verse",
+"category": "Giving and Generosity",
+"title": "Luke 6:38",
+"reference": "Luke 6:38",
+"translation": "KJV",
+"body": "Give, and it shall be given unto you; good measure, pressed down, and shaken together, and running over, shall men give into your bosom. For with the same measure that ye mete withal it shall be measured to you again.",
+"seedKey": "verse-16"
+},
+{
+"kind": "verse",
+"category": "Giving and Generosity",
+"title": "2 Corinthians 9:7",
+"reference": "2 Corinthians 9:7",
+"translation": "KJV",
+"body": "Every man according as he purposeth in his heart, so let him give; not grudgingly, or of necessity: for God loveth a cheerful giver.",
+"seedKey": "verse-17"
+},
+{
+"kind": "verse",
+"category": "Giving and Generosity",
+"title": "Proverbs 11:25",
+"reference": "Proverbs 11:25",
+"translation": "KJV",
+"body": "The liberal soul shall be made fat: and he that watereth shall be watered also himself.",
+"seedKey": "verse-18"
+},
+{
+"kind": "verse",
+"category": "Giving and Generosity",
+"title": "Acts 20:35",
+"reference": "Acts 20:35",
+"translation": "KJV",
+"body": "I have shewed you all things, how that so labouring ye ought to support the weak, and to remember the words of the Lord Jesus, how he said, It is more blessed to give than to receive.",
+"seedKey": "verse-19"
+},
+{
+"kind": "verse",
+"category": "Discipline",
+"title": "Proverbs 25:28",
+"reference": "Proverbs 25:28",
+"translation": "KJV",
+"body": "He that hath no rule over his own spirit is like a city that is broken down, and without walls.",
+"seedKey": "verse-20"
+},
+{
+"kind": "verse",
+"category": "Discipline",
+"title": "Proverbs 12:1",
+"reference": "Proverbs 12:1",
+"translation": "KJV",
+"body": "Whoso loveth instruction loveth knowledge: but he that hateth reproof is brutish.",
+"seedKey": "verse-21"
+},
+{
+"kind": "verse",
+"category": "Discipline",
+"title": "Proverbs 13:18",
+"reference": "Proverbs 13:18",
+"translation": "KJV",
+"body": "Poverty and shame shall be to him that refuseth instruction: but he that regardeth reproof shall be honoured.",
+"seedKey": "verse-22"
+},
+{
+"kind": "verse",
+"category": "Wisdom",
+"title": "Proverbs 4:7",
+"reference": "Proverbs 4:7",
+"translation": "KJV",
+"body": "Wisdom is the principal thing; therefore get wisdom: and with all thy getting get understanding.",
+"seedKey": "verse-23"
+},
+{
+"kind": "verse",
+"category": "Wisdom",
+"title": "Proverbs 3:13-14",
+"reference": "Proverbs 3:13-14",
+"translation": "KJV",
+"body": "Happy is the man that findeth wisdom, and the man that getteth understanding. For the merchandise of it is better than the merchandise of silver, and the gain thereof than fine gold.",
+"seedKey": "verse-24"
+},
+{
+"kind": "verse",
+"category": "Wisdom",
+"title": "James 1:5",
+"reference": "James 1:5",
+"translation": "KJV",
+"body": "If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him.",
+"seedKey": "verse-25"
+},
+{
+"kind": "verse",
+"category": "Temptation",
+"title": "1 Timothy 6:9",
+"reference": "1 Timothy 6:9",
+"translation": "KJV",
+"body": "But they that will be rich fall into temptation and a snare, and into many foolish and hurtful lusts, which drown men in destruction and perdition.",
+"seedKey": "verse-26"
+},
+{
+"kind": "verse",
+"category": "Temptation",
+"title": "1 Corinthians 10:13",
+"reference": "1 Corinthians 10:13",
+"translation": "KJV",
+"body": "There hath no temptation taken you but such as is common to man: but God is faithful, who will not suffer you to be tempted above that ye are able; but will with the temptation also make a way to escape, that ye may be able to bear it.",
+"seedKey": "verse-27"
+},
+{
+"kind": "verse",
+"category": "Integrity",
+"title": "Proverbs 10:9",
+"reference": "Proverbs 10:9",
+"translation": "KJV",
+"body": "He that walketh uprightly walketh surely: but he that perverteth his ways shall be known.",
+"seedKey": "verse-28"
+},
+{
+"kind": "verse",
+"category": "Integrity",
+"title": "Proverbs 11:1",
+"reference": "Proverbs 11:1",
+"translation": "KJV",
+"body": "A false balance is abomination to the LORD: but a just weight is his delight.",
+"seedKey": "verse-29"
+},
+{
+"kind": "verse",
+"category": "Integrity",
+"title": "Proverbs 28:6",
+"reference": "Proverbs 28:6",
+"translation": "KJV",
+"body": "Better is the poor that walketh in his uprightness, than he that is perverse in his ways, though he be rich.",
+"seedKey": "verse-30"
+},
+{
+"kind": "verse",
+"category": "Work and Diligence",
+"title": "Proverbs 10:4",
+"reference": "Proverbs 10:4",
+"translation": "KJV",
+"body": "He becometh poor that dealeth with a slack hand: but the hand of the diligent maketh rich.",
+"seedKey": "verse-31"
+},
+{
+"kind": "verse",
+"category": "Work and Diligence",
+"title": "Proverbs 14:23",
+"reference": "Proverbs 14:23",
+"translation": "KJV",
+"body": "In all labour there is profit: but the talk of the lips tendeth only to penury.",
+"seedKey": "verse-32"
+},
+{
+"kind": "verse",
+"category": "Work and Diligence",
+"title": "Colossians 3:23",
+"reference": "Colossians 3:23",
+"translation": "KJV",
+"body": "And whatsoever ye do, do it heartily, as to the Lord, and not unto men;",
+"seedKey": "verse-33"
+},
+{
+"kind": "verse",
+"category": "Work and Diligence",
+"title": "2 Thessalonians 3:10",
+"reference": "2 Thessalonians 3:10",
+"translation": "KJV",
+"body": "For even when we were with you, this we commanded you, that if any would not work, neither should he eat.",
+"seedKey": "verse-34"
+},
+{
+"kind": "verse",
+"category": "Contentment",
+"title": "1 Timothy 6:6-8",
+"reference": "1 Timothy 6:6-8",
+"translation": "KJV",
+"body": "But godliness with contentment is great gain. For we brought nothing into this world, and it is certain we can carry nothing out. And having food and raiment let us be therewith content.",
+"seedKey": "verse-35"
+},
+{
+"kind": "verse",
+"category": "Contentment",
+"title": "Philippians 4:11",
+"reference": "Philippians 4:11",
+"translation": "KJV",
+"body": "Not that I speak in respect of want: for I have learned, in whatsoever state I am, therewith to be content.",
+"seedKey": "verse-36"
+},
+{
+"kind": "verse",
+"category": "Contentment",
+"title": "Hebrews 13:5",
+"reference": "Hebrews 13:5",
+"translation": "KJV",
+"body": "Let your conversation be without covetousness; and be content with such things as ye have: for he hath said, I will never leave thee, nor forsake thee.",
+"seedKey": "verse-37"
+},
+{
+"kind": "verse",
+"category": "Wealth and Prosperity",
+"title": "Deuteronomy 8:18",
+"reference": "Deuteronomy 8:18",
+"translation": "KJV",
+"body": "But thou shalt remember the LORD thy God: for it is he that giveth thee power to get wealth, that he may establish his covenant which he sware unto thy fathers, as it is this day.",
+"seedKey": "verse-38"
+},
+{
+"kind": "verse",
+"category": "Wealth and Prosperity",
+"title": "Proverbs 10:22",
+"reference": "Proverbs 10:22",
+"translation": "KJV",
+"body": "The blessing of the LORD, it maketh rich, and he addeth no sorrow with it.",
+"seedKey": "verse-39"
+},
+{
+"kind": "verse",
+"category": "Wealth and Prosperity",
+"title": "3 John 1:2",
+"reference": "3 John 1:2",
+"translation": "KJV",
+"body": "Beloved, I wish above all things that thou mayest prosper and be in health, even as thy soul prospereth.",
+"seedKey": "verse-40"
+},
+{
+"kind": "verse",
+"category": "Wealth and Prosperity",
+"title": "Proverbs 3:9-10",
+"reference": "Proverbs 3:9-10",
+"translation": "KJV",
+"body": "Honour the LORD with thy substance, and with the firstfruits of all thine increase: So shall thy barns be filled with plenty, and thy presses shall burst out with new wine.",
+"seedKey": "verse-41"
+},
+{
+"kind": "idea",
+"category": "Under UGX 100,000",
+"title": "Vegetables on a small plot",
+"body": "Grow fast crops such as sukuma wiki, onions, tomatoes or eggplant on a small piece of land or even in sacks near home. Sell to neighbours, markets and small restaurants. Learn when your crop sells best and plant so it is ready then.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-01"
+},
+{
+"kind": "idea",
+"category": "Under UGX 100,000",
+"title": "Snacks and street food",
+"body": "Cook and sell what people already buy every day, such as chapati, samosas, roasted maize or groundnuts. Start with one product, count your costs per piece, and set a price that leaves a profit.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-02"
+},
+{
+"kind": "idea",
+"category": "Under UGX 100,000",
+"title": "Selling airtime and small items",
+"body": "A small stand with airtime, phone accessories, soap or school items. Buy in the amount you can sell in a week so money is not tied up in stock.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-03"
+},
+{
+"kind": "idea",
+"category": "Under UGX 100,000",
+"title": "Sewing, mending and crafts",
+"body": "If you can sew, make or repair clothes, school uniforms, bags or baskets. Even a basic machine can earn steadily, and skills can be taught to others.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-04"
+},
+{
+"kind": "idea",
+"category": "UGX 100,000 to 500,000",
+"title": "Poultry: a small unit",
+"body": "Start with a small number of layers or broilers with a simple, clean house, good feed and vaccination. Ask a local vet or an experienced farmer first. Eggs give steady income; broilers give quick turnover.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-05"
+},
+{
+"kind": "idea",
+"category": "UGX 100,000 to 500,000",
+"title": "Mobile money agent",
+"body": "A licensed agent earns commission on each transaction. It needs float (money to give out) and a good location. Ask a mobile money company about requirements and keep your float safe.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-06"
+},
+{
+"kind": "idea",
+"category": "UGX 100,000 to 500,000",
+"title": "Seasonal crops: maize, beans, cassava",
+"body": "Rent or use land for a food crop that sells every season. Plan inputs and labour early, and store or sell when the price is better, instead of selling in a hurry at harvest.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-07"
+},
+{
+"kind": "idea",
+"category": "UGX 100,000 to 500,000",
+"title": "Bees and honey",
+"body": "Hives need little land and little daily work. Honey and wax are sold locally. Training from an extension officer or a beekeeping group helps a lot.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-08"
+},
+{
+"kind": "idea",
+"category": "UGX 500,000 to 2,000,000",
+"title": "Piggery or goat rearing",
+"body": "Animals can grow in value over time. You need a proper shelter, feed, clean water and regular veterinary care. Start with a small number and sell offspring.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-09"
+},
+{
+"kind": "idea",
+"category": "UGX 500,000 to 2,000,000",
+"title": "Fish farming: small pond",
+"body": "A well-managed pond can supply fish for sale. It needs a good water source, quality fingerlings, feed and patience. Get advice from the district fisheries office before you dig.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-10"
+},
+{
+"kind": "idea",
+"category": "UGX 500,000 to 2,000,000",
+"title": "Small shop or kiosk",
+"body": "Sell daily needs close to where people live. Choose items that move fast, record every sale, and never mix shop money with household money.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-11"
+},
+{
+"kind": "idea",
+"category": "UGX 500,000 to 2,000,000",
+"title": "Water, laundry or car wash",
+"body": "A service people use every week with low stock costs. Location and reliability matter most.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-12"
+},
+{
+"kind": "idea",
+"category": "Above UGX 2,000,000",
+"title": "Land or a small rental room",
+"body": "Buy a plot or build a room to rent. It is slow to start but holds value. Check the land title, the seller and local rules carefully, and use a lawyer before paying.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-13"
+},
+{
+"kind": "idea",
+"category": "Above UGX 2,000,000",
+"title": "Join a registered SACCO or group investment",
+"body": "Pool money with a trusted group so each member can take part in bigger projects. Make sure it is registered, has written rules, keeps records and shares reports with members.\n\nStarter idea. Prices and demand change: confirm today's costs and ask someone already doing it before you spend. Start small, keep records, and grow from what works.",
+"seedKey": "idea-14"
+},
+{
+"kind": "economy",
+"category": "Agriculture",
+"title": "Agriculture: the backbone",
+"body": "Most Ugandans earn a living from farming. Coffee, tea, maize, beans, cassava, matooke, fruits and fish are important for food and for income. Prices change with seasons and weather, so storing, processing and selling together can raise what a farmer earns.\n\nWhy it matters to you: food is always needed, so farming and farm services are a steady place to look for opportunity.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-01"
+},
+{
+"kind": "economy",
+"category": "Trade",
+"title": "Trade: buying and selling",
+"body": "Uganda trades with its East African neighbours and the world. Markets, shops, wholesalers and transporters move goods every day. Small traders earn most when they know their costs, keep records and have reliable suppliers.\n\nWhy it matters to you: a small shop or stall is one of the quickest ways to start, but profits depend on stock management.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-02"
+},
+{
+"kind": "economy",
+"category": "Manufacturing",
+"title": "Manufacturing: making and processing",
+"body": "Factories and workshops turn raw materials into goods such as drinks, food, building materials and household items. Processing farm produce (for example milling, packing or making juice) adds value.\n\nWhy it matters to you: small-scale processing, packaging and repair work can start with little capital.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-03"
+},
+{
+"kind": "economy",
+"category": "Tourism",
+"title": "Tourism: visitors and local travel",
+"body": "Wildlife, scenery, culture and events bring visitors and money into hotels, guides, transport, crafts and food businesses. Local travel and church or school events also create demand.\n\nWhy it matters to you: crafts, catering, guiding and transport can serve both visitors and local events.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-04"
+},
+{
+"kind": "economy",
+"category": "ICT",
+"title": "ICT: phones and the internet",
+"body": "Mobile phones, mobile money and the internet have changed how people pay, learn and sell. Skills in phones, design, data entry and digital marketing are in demand.\n\nWhy it matters to you: you can learn and sell skills online, and use mobile money safely to save and pay.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-05"
+},
+{
+"kind": "economy",
+"category": "Real Estate",
+"title": "Real estate: land, rooms and buildings",
+"body": "Housing and land are in demand as towns grow. Rental rooms, small plots and building services earn money, but land fraud is common.\n\nWhy it matters to you: always verify the title and the seller, use written agreements, and get legal advice before paying.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-06"
+},
+{
+"kind": "economy",
+"category": "Financial Services",
+"title": "Financial services: banks, SACCOs and mobile money",
+"body": "Banks, microfinance institutions, SACCOs and mobile money give people places to save and borrow. Rules and interest rates differ. Group savings schemes like SOB let members build savings and borrow on agreed terms.\n\nWhy it matters to you: compare the cost of any loan, borrow only for something that will earn or protect your income, and keep records.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-07"
+},
+{
+"kind": "economy",
+"category": "Energy",
+"title": "Energy: power and fuel",
+"body": "Hydropower is Uganda's main source of electricity. Solar systems, clean cooking and fuel supply are growing needs, and oil development is expected to bring new activity.\n\nWhy it matters to you: solar sales and repair, and supplying energy-saving cookers, are practical small businesses.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-08"
+},
+{
+"kind": "economy",
+"category": "Transport",
+"title": "Transport: moving people and goods",
+"body": "Roads, boda bodas, taxis, trucks, the lake and the airport move people and goods. Transport costs affect the price of almost everything.\n\nWhy it matters to you: transport work earns daily, but fuel, repairs and licences must be counted before you borrow to buy a vehicle.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-09"
+},
+{
+"kind": "economy",
+"category": "Emerging sectors",
+"title": "Emerging sectors",
+"body": "Growing areas include agro-processing, digital services, renewable energy, creative industries (music, film, design), health services and education services.\n\nWhy it matters to you: look for a gap in your own area and test it on a small scale first.\n\nOverview only. Officers: update with current figures and local detail.",
+"seedKey": "eco-10"
+},
+{
+"kind": "education",
+"category": "Saving",
+"title": "Pay yourself first",
+"body": "When money comes in, set aside your savings first, then spend what is left. Saving what remains at the end of the month usually means saving nothing.",
+"seedKey": "edu-01"
+},
+{
+"kind": "education",
+"category": "Saving",
+"title": "Build an emergency fund",
+"body": "Aim to keep enough to cover a few weeks of basic costs for sickness, school fees or a bad harvest. Keep it separate so you are not tempted to spend it.",
+"seedKey": "edu-02"
+},
+{
+"kind": "education",
+"category": "Borrowing",
+"title": "Borrow only to earn or protect income",
+"body": "A loan used for something that earns money can help. A loan for things you will use up is harder to pay back. Ask: how will this loan pay itself back?",
+"seedKey": "edu-03"
+},
+{
+"kind": "education",
+"category": "Borrowing",
+"title": "Know what a loan really costs",
+"body": "Add up the interest and all fees and compare the total with the amount you receive. Pay on time: late payment makes a loan more costly and hurts the people who guaranteed you.",
+"seedKey": "edu-04"
+},
+{
+"kind": "education",
+"category": "Borrowing",
+"title": "Being a guarantor",
+"body": "When you guarantee a member's loan, your own savings can be held back and, if they cannot pay, you may carry the loss. Guarantee only people you know well and only what you can afford.",
+"seedKey": "edu-05"
+},
+{
+"kind": "education",
+"category": "Budgeting",
+"title": "Write down income and spending",
+"body": "For one month, write down every shilling in and out. You will see where money leaks, and where you can save. A simple notebook is enough.",
+"seedKey": "edu-06"
+},
+{
+"kind": "education",
+"category": "Budgeting",
+"title": "Needs first, wants later",
+"body": "List your needs (food, rent, fees, health) and cover them first. Plan for wants after, and wait a few days before big purchases.",
+"seedKey": "edu-07"
+},
+{
+"kind": "education",
+"category": "Investing",
+"title": "Start small and test",
+"body": "Try a business idea on a small scale before you put in all your money. Keep records of cost and sales so you know whether it really pays.",
+"seedKey": "edu-08"
+},
+{
+"kind": "education",
+"category": "Investing",
+"title": "Do not put all your money in one place",
+"body": "Spread risk: keep some savings safe, some in your business, and some for emergencies. If one fails, you do not lose everything.",
+"seedKey": "edu-09"
+},
+{
+"kind": "education",
+"category": "Safety and scams",
+"title": "Beware 'get rich quick' offers",
+"body": "If someone promises very high returns with no risk, or asks you to recruit others to earn, it is almost certainly a scam. Check with your officers before you send money.",
+"seedKey": "edu-10"
+},
+{
+"kind": "education",
+"category": "Safety and scams",
+"title": "Protect your mobile money PIN",
+"body": "Never share your PIN or the code sent to your phone, even with someone who says they are from the bank or the company. Real staff never ask for it.",
+"seedKey": "edu-11"
+},
+{
+"kind": "education",
+"category": "Record keeping",
+"title": "Keep your receipts and references",
+"body": "Keep your deposit slips, mobile money messages and loan papers. If a figure ever looks wrong, they let officers and you find the answer quickly.",
+"seedKey": "edu-12"
+},
+{
+"kind": "education",
+"category": "Record keeping",
+"title": "Check your statement every month",
+"body": "Open your statement in this app and match it with your own records. Report any difference to the Treasurer early.",
+"seedKey": "edu-13"
+},
+{
+"kind": "opportunity",
+"category": "Grants and programmes",
+"title": "Government enterprise programmes (ask first)",
+"body": "Uganda has had government programmes that support groups, women and young people to start or grow businesses, such as the Youth Livelihood Programme, the Uganda Women Entrepreneurship Programme and the Emyooga enterprise groups. Eligibility, funding and whether they are open change over time.\n\nWhere to ask: your sub-county or district Community Development Officer. Officers: update this item with the current status and the date.",
+"seedKey": "opp-01"
+},
+{
+"kind": "opportunity",
+"category": "Skills and training",
+"title": "Short practical skills courses",
+"body": "Vocational and technical institutes and many training centres run short courses in tailoring, welding, hairdressing, catering, solar installation, phone repair and farming. A skill can become a business or a job.\n\nOfficers: add local courses here with the place, cost and dates.",
+"seedKey": "opp-02"
+},
+{
+"kind": "opportunity",
+"category": "Business",
+"title": "Register your business",
+"body": "A registered business can open an account more easily, apply for tenders and loans, and build trust with customers. Registration of business names and companies is done through the national registrar (URSB). Ask an officer or a local business adviser for the steps and costs.",
+"seedKey": "opp-03"
+},
+{
+"kind": "announcement",
+"category": "",
+"title": "Welcome to the new SOB app",
+"body": "This app now has more than your statement. Visit the Spiritual Corner for a verse each day, read ideas for small businesses, check opportunities, and learn about money. Officers add new items regularly, so look back often.",
+"seedKey": "ann-01",
+"pinned": true
+}
+];
+});
+
+
 /* ../src/core/commands.js */
 /* SOB core/commands — the ONLY ways to change the ledger. A closed whitelist: the server (and the demo UI) run exactly these,
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./batch.js") : root.SOB.batch, isNode ? require("./content.js") : root.SOB.content, isNode ? require("./content_seed.js") : root.SOB.contentSeed, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L, BT, CT, SEED, TPL) {
+  /* A bank charge typed on a loan payout: attached to the payout entry this command just created (same transaction, saved or refused together). */
+  function withDisbursementCharge(db, ctx, a, n0) {
+    const chg = G.chargeOf(a); if (!(chg.amount > 0)) return;
+    const main = db.transactions.slice(n0).reverse().find((t) => /^Loan Disbursement/.test(t.type)); if (!main) throw new Error("INVALID: no loan payout was recorded, so no bank charge was added");
+    G.addBankCharge(db, ctx, main, chg);
+  }
   const COMMANDS = {
-    createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt }),
+    setMessageTemplate: (db, ctx, a) => TPL.set(db, ctx, a),
+    saveQuickMessage: (db, ctx, a) => TPL.saveQuick(db, ctx, a),
+    removeQuickMessage: (db, ctx, a) => TPL.removeQuick(db, ctx, a),
+    saveContent: (db, ctx, a) => CT.save(db, ctx, a),
+    setContentStatus: (db, ctx, a) => CT.setStatus(db, ctx, a),
+    loadStarterContent: (db, ctx) => CT.loadStarter(db, ctx, SEED),
+    createEntries: (db, ctx, a) => BT.apply(db, ctx, a.entries, { acceptWarnings: a.acceptWarnings }),   // many ledger lines in one go: all saved or none
+    createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt, reference: a.reference || undefined, bankCharge: a.type === "Withdraw" ? a.bankCharge : 0, chargedTo: a.chargedTo }),
 
     /* OUTSTANDING ENTRIES: records the owner has confirmed but not yet entered, supplied as a PRIVATE file (never in the repository). Everything goes through the
        existing rules: Savings and Loan Repayment post with their original date (repayments through repayLoan, so the loan, its owner, its start date and the outstanding
@@ -2894,10 +3820,10 @@
     distributeProfit: (db, ctx, a) => PR.distribute(db, ctx, { period: a.period, factorValues: a.factorValues }),
     approveLoan: (db, ctx, a) => LN.approveLoan(db, ctx, a.loanId, a.note),
     declineLoan: (db, ctx, a) => LN.declineLoan(db, ctx, a.loanId, a.reason),
-    disburseLoan: (db, ctx, a) => LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }),
+    disburseLoan: (db, ctx, a) => { const n0 = db.transactions.length, r = LN.disburseLoan(db, ctx, a.loanId, { assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, date: a.date }); withDisbursementCharge(db, ctx, a, n0); return r; },
     settleLoanFromSavings: (db, ctx, a) => LN.settleFromSavings(db, ctx, a.loanId, a.date, a.amount),
-    addDisbursement: (db, ctx, a) => LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }),
-    recordExistingLoan: (db, ctx, a) => LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }),
+    addDisbursement: (db, ctx, a) => { const n0 = db.transactions.length, r = LN.addDisbursement(db, ctx, a.loanId, { amount: a.amount, date: a.date, reason: a.reason }); withDisbursementCharge(db, ctx, a, n0); return r; },
+    recordExistingLoan: (db, ctx, a) => { const n0 = db.transactions.length, r = LN.recordExistingLoan(db, ctx, { memberId: a.memberId, amount: a.amount, date: a.date, assignedMonthlyInterest: a.assignedMonthlyInterest, graceMonths: a.graceMonths, graceAuthorisedBy: a.graceAuthorisedBy, remarks: a.remarks }); withDisbursementCharge(db, ctx, a, n0); return r; },
     repayLoan: (db, ctx, a) => LN.repayLoan(db, ctx, a.loanId, a.amount, a.date),
     editAssignedInterest: (db, ctx, a) => LN.editAssignedInterest(db, ctx, a.loanId, a.amount, a.reason),
     lockInterest: (db, ctx, a) => LN.lockInterest(db, ctx, a.loanId, a.reason, a.date), unlockInterest: (db, ctx, a) => LN.unlockInterest(db, ctx, a.loanId, a.reason, a.date),
@@ -3007,6 +3933,7 @@
      handled in governance.createEntry.) The Super Admin cannot bypass this: the command is NOT executed, it is stored as a request with its arguments and the
      result of a trial run, and approveRequest alone (Chairperson only, never the requester) executes it. Routine savings deposits and loan repayments are not gated. */
   const GATED = {
+    setMessageTemplate: { perm: "notify.manage", label: "Change the wording of an automatic message" },
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
     correctLoan: { perm: "loan.editInterest", label: "Correct a loan (restore, monthly interest, lock)" },
@@ -3942,6 +4869,12 @@
   def("Savings and members", "details", "Member Details", "Each member's SOB number, name, status, phone and e-mail. Personal data: officers who may export only; keep the file private.", ["member", "status"], (db, f) => {
     const rows = (db.members || []).filter((m) => (!f.memberId || m.id === f.memberId) && (!f.status || m.status === f.status)).map((m) => ({ memberId: m.id, member: m.name, status: m.status || "", phone: m.phone || "", email: m.email || "" }));
     return mk("Member Details", ["memberId", "member", "status", "phone", "email"], { memberId: "SOB number", member: "Member", status: "Status", phone: "Phone", email: "E-mail" }, rows, { notes: ["Personal data. Share it only with a person who needs it, and never in a public place.", rows.length + " member" + (rows.length === 1 ? "" : "s") + " listed."] }); }, { personal: true });
+  def("Accounts", "bankcharges", "Bank Charges Report", "Every bank charge typed on a withdrawal or a loan payout: who paid it (the member or the group) and the transaction it belongs to.", ["period", "member"], (db, f, p) => {
+    const all = (db.transactions || []).filter((x) => !x.voided && x.chargeFor), by = {}; (db.transactions || []).forEach((x) => { by[x.id] = x; });
+    const rows = all.filter((x) => x.date <= p.to && (!p.from || x.date >= p.from)).filter((x) => { const m = x.memberId || (by[x.chargeFor] || {}).memberId; return !f.memberId || m === f.memberId; }).sort((a, b) => (a.date < b.date ? -1 : 1)).map((x) => { const mainTx = by[x.chargeFor] || {}, who = x.memberId || mainTx.memberId || "";
+      return { date: kd(x.date), memberId: who, member: nm(db, who), on: (mainTx.type || "") + (mainTx.amount ? " of " + Number(mainTx.amount).toLocaleString("en-US") : ""), paidBy: x.chargedTo === "Group" ? "Group" : "Member", amount: Number(x.amount) || 0, ref: x.chargeFor }; });
+    return mk("Bank Charges Report", ["date", "memberId", "member", "on", "paidBy", "amount", "ref"], { date: "Date", memberId: "SOB number", member: "Member", on: "Charge on", paidBy: "Paid by", amount: "Charge (UGX)", ref: "Transaction" }, rows,
+      { totals: { amount: sum(rows, "amount"), member: sum(rows.filter((r) => r.paidBy === "Member"), "amount"), group: sum(rows.filter((r) => r.paidBy === "Group"), "amount") }, notes: ["Member = taken from the member's savings. Group = a group expense."] }); });
   def("Savings and members", "deposits", "Deposits Report", "Savings received in the period.", ["period", "member"], (db, f, p) => kpi("savingsReceived", ["amount"], ["memberId", "member"])(db, f, p));
   def("Savings and members", "withdrawals", "Withdrawals Report", "Withdrawals and share-out payments in the period.", ["period", "member"], (db, f, p) => kpi("withdrawals", ["amount"], ["memberId", "member"])(db, f, p));
   def("Savings and members", "subscriptions", "Subscriptions Report", "Annual subscriptions received in the period.", ["period", "member"], (db, f, p) => kpi("subscriptions", ["amount"], ["memberId", "member"])(db, f, p));
@@ -4016,7 +4949,7 @@
   function run(db, id, filters, today) {
     const d = DEFS.find((x) => x.id === id); if (!d) throw new Error("NOT_FOUND: report " + id);
     const f = Object.assign({}, filters || {}); if (f.year) f.year = Number(f.year);
-    const p = periodOf(db, f, today), rep = d.build(db, f, p);
+    const p = periodOf(db, f, today), rep = L.indexed(db, () => d.build(db, f, p));
     if (f.category && rep.columns.indexOf("details") >= 0) {   /* Category = the purpose recorded on the entry (a managed list); totals are re-added from the lines that remain */
       const want = String(f.category).trim().toLowerCase(); rep.rows = rep.rows.filter((r) => String(r.details || "").toLowerCase().indexOf(want) === 0);
       const t2 = {}; Object.keys(rep.totals || {}).forEach((k) => { if (rep.columns.indexOf(k) >= 0) t2[k] = rep.rows.reduce((a, r) => a + (Number(r[k]) || 0), 0); }); rep.totals = t2;
@@ -4030,6 +4963,214 @@
     return rep;
   }
   return { catalogue, run, GROUPS, periodOf };
+});
+
+
+/* ../src/core/status.js */
+/* SOB core/status — the System Status Centre. One list of checks an administrator can read at a glance: what is working, what needs attention,
+   and exactly what to do about it. Nothing here writes anything and nothing here needs a deployment to change a threshold: every limit is a setting
+   in LIMITS (override with o.limits). compose(db, facts, o) -> { overall: "ok"|"warn"|"fail", items: [{ id, group, label, state, detail, action }], actions: [..] }.
+   `facts` is what the server reports about itself (its build, gateway switches, e-mail quota, triggers, last run) or null when the server cannot be reached. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.status = api; }
+})(typeof self !== "undefined" ? self : this, function () {
+  const LIMITS = { staleRunDays: 2, staleBackupDays: 3, queueWarnCount: 20, queueOldDays: 2, failedWarnCount: 1, emailQuotaLow: 20, rowsWarn: 20000, rowsFail: 60000, approvalsWarn: 5, approvalsOldDays: 3 };
+  const days = (a, b) => Math.round((new Date(b + "T00:00:00Z") - new Date(a + "T00:00:00Z")) / 86400000);
+  const rank = { ok: 0, info: 0, warn: 1, fail: 2 };
+  const plural = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+
+  function compose(db, facts, o) {
+    o = o || {}; const lim = Object.assign({}, LIMITS, o.limits || {}), today = o.today, items = [];
+    const add = (id, group, label, state, detail, action) => items.push({ id, group, label, state, detail, action: action || "" });
+    const outbox = db.outbox || [], audit = db.auditLog || [], dOf = (m) => String(m.createdAt || m.createdDate || "").slice(0, 10);
+
+    /* ---- the server ---- */
+    if (!facts) {
+      add("backend", "Connection", "Backend connection", "fail", "The app could not reach the ledger server" + (o.error ? " (" + o.error + ")" : "") + ". Nothing you see here was changed.",
+        "Check your internet. If other people see the same problem, open the Apps Script project, Deploy > Manage deployments, and confirm the web app is still deployed with access set to Anyone. Your records in the Sheet are safe.");
+    } else {
+      add("backend", "Connection", "Backend connection", "ok", "The ledger server answered.");
+      const a = o.appBuild || "", s = facts.build || o.serverBuild || "";
+      if (a && s && a !== s) add("version", "Connection", "App and server version", "warn", "App " + a.slice(0, 6) + " and server " + s.slice(0, 6) + " are different builds.",
+        "Only needed if the update says the server changed: paste the latest Code_Ledger.gs and Deploy > Manage deployments > pencil > New version. If the release note says no server change, ignore this.");
+      else add("version", "Connection", "App and server version", "ok", s ? "Both are build " + s.slice(0, 6) + "." : "Version not reported.");
+      if (facts.timeZone && facts.timeZone !== "Africa/Kampala") add("tz", "Connection", "Time zone", "warn", "The server clock uses " + facts.timeZone + ", not Africa/Kampala. Reminder times and dates can be off.", "In the Apps Script project: Project Settings > Time zone > Africa/Kampala.");
+    }
+
+    /* ---- messaging ---- */
+    const sms = facts && facts.sms;
+    if (facts) {
+      if (!sms || !sms.configured) add("sms", "Messaging", "SMS gateway", "warn", "No SMS gateway key is saved. Messages are prepared but not sent.", "Apps Script > Project Settings > Script Properties: add SOB_SMS_GATEWAY_KEY, then run testSms from the editor on your own phone.");
+      else if (!sms.live) add("sms", "Messaging", "SMS gateway", "warn", "A key is saved but the gateway is switched OFF, so nothing is sent.", "After testSms succeeds on your own phone, set Script Property SOB_SMS_LIVE to yes-tested.");
+      else add("sms", "Messaging", "SMS gateway", "ok", "Live. Messages are sent through the gateway phone.");
+      if (sms && sms.live && !sms.adminPhone) add("smsAdminPhone", "Messaging", "Test phone", "info", "SOB_ADMIN_PHONE is not set, so testSms cannot run.", "Add your own number as Script Property SOB_ADMIN_PHONE.");
+      const wa = facts.wa; if (wa && wa.configured) add("wa", "Messaging", "WhatsApp", wa.live ? "ok" : "warn", wa.live ? "Live." : "Configured but switched OFF.", wa.live ? "" : "Set Script Property SOB_WA_LIVE to yes-tested after a successful test.");
+      if (facts.emailQuota === undefined || facts.emailQuota === null) add("email", "Messaging", "E-mail service", "warn", "Could not read the e-mail allowance" + (facts.emailError ? " (" + facts.emailError + ")" : "") + ".", "Run authorizeSOB once from the Apps Script editor to give e-mail permission, then deploy a New version.");
+      else if (facts.emailQuota < lim.emailQuotaLow) add("email", "Messaging", "E-mail service", "warn", plural(facts.emailQuota, "e-mail") + " left in today's allowance.", "Sign-in codes by e-mail may stop until tomorrow. Use SMS codes, or wait for the allowance to reset.");
+      else add("email", "Messaging", "E-mail service", "ok", plural(facts.emailQuota, "e-mail") + " left in today's allowance.");
+    }
+
+    /* ---- queue and failures (from the ledger itself, so they show even when the server cannot be reached) ---- */
+    const cnt = (st) => outbox.filter((m) => m.status === st).length, queued = outbox.filter((m) => m.status === "QUEUED"), dry = cnt("DRY_RUN");
+    const oldQ = today ? queued.filter((m) => dOf(m) && days(dOf(m), today) >= lim.queueOldDays).length : 0;
+    if (queued.length === 0 && dry === 0) add("queue", "Messaging", "Message queue", "ok", "Nothing is waiting.");
+    else if (queued.length >= lim.queueWarnCount || oldQ) add("queue", "Messaging", "Message queue", "warn", plural(queued.length, "message") + " waiting to be sent" + (oldQ ? ", " + oldQ + " for " + lim.queueOldDays + " days or more" : "") + ".", "Messages > Process outbox. If they stay QUEUED, check the SMS gateway above and that the gateway phone is on and online.");
+    else add("queue", "Messaging", "Message queue", queued.length ? "info" : "ok", plural(queued.length, "message") + " waiting" + (dry ? ", " + dry + " prepared but not sent (gateway off)" : "") + ".", dry ? "Messages prepared while the gateway was off are not sent later. Send them again once the gateway is live." : "");
+    const failed = outbox.filter((m) => m.status === "FAILED" && (!today || !dOf(m) || days(dOf(m), today) <= 14));
+    if (failed.length >= lim.failedWarnCount) { const why = {}; failed.forEach((m) => { const r = String(m.reason || m.error || "no reason recorded").slice(0, 60); why[r] = (why[r] || 0) + 1; }); const top = Object.keys(why).sort((a, b) => why[b] - why[a]).slice(0, 2).map((r) => r + " (" + why[r] + ")").join("; ");
+      add("failed", "Messaging", "Failed messages (last 14 days)", "warn", plural(failed.length, "message") + " failed. Most common: " + top + ".", "Messages > filter FAILED > read the Note. Fix the cause (number, gateway phone, token), then resend the ones that still matter. The system never re-sends an SMS by itself."); }
+    else add("failed", "Messaging", "Failed messages (last 14 days)", "ok", "None.");
+
+    /* ---- scheduled jobs ---- */
+    if (facts) {
+      const trig = facts.triggers; if (!trig) add("triggers", "Scheduled jobs", "Triggers", "warn", "Could not read the schedule" + (facts.triggersError ? " (" + facts.triggersError + ")" : "") + ".", "Run authorizeSOB once from the Apps Script editor, then deploy a New version.");
+      else { const has = (f) => trig.some((t) => t.fn === f);
+        add("trigReminders", "Scheduled jobs", "Daily reminders", has("dailyReminders") ? "ok" : "warn", has("dailyReminders") ? "Scheduled (about 9am)." : "Not scheduled. Automatic reminders will not run.", has("dailyReminders") ? "" : "In the Apps Script editor run installReminderTrigger once.");
+        add("trigBackup", "Scheduled jobs", "Daily backup", has("dailyBackup") ? "ok" : "warn", has("dailyBackup") ? "Scheduled (about 2am)." : "Not scheduled. No automatic backups.", has("dailyBackup") ? "" : "In the Apps Script editor run installBackupTrigger once."); }
+      const lr = facts.lastReminderRun, auto = o.autoEnabled;
+      if (lr && lr.at) { const d = String(lr.at).slice(0, 10), age = today ? days(d, today) : 0, line = d + ": " + (lr.sent || 0) + " sent, " + (lr.failed || 0) + " failed" + (lr.note ? ". " + lr.note : "");
+        add("lastRun", "Scheduled jobs", "Last reminder run", auto && age > lim.staleRunDays ? "warn" : (lr.failed ? "warn" : "ok"), line + (age > 0 ? " (" + plural(age, "day") + " ago)" : " (today)") + ".", auto && age > lim.staleRunDays ? "Automatic reminders are on but have not run for " + plural(age, "day") + ". Check the Daily reminders trigger above." : (lr.failed ? "Some reminders failed: see Failed messages." : "")); }
+      else { const e = audit.filter((x) => x.entityType === "AutoReminderRun").pop();
+        add("lastRun", "Scheduled jobs", "Last reminder run", auto ? "warn" : "info", e ? "Last recorded run: " + e.date + " (" + e.action + ")." : "No automatic reminder run has been recorded yet.", auto ? "Automatic reminders are on, but no run is recorded. Check the Daily reminders trigger above." : ""); }
+    }
+
+    /* ---- reminders and approvals ---- */
+    if (o.autoEnabled !== undefined) add("autoSwitch", "Operations", "Automatic reminders", o.autoEnabled ? (o.deadlineApproved === false ? "warn" : "ok") : "info", o.autoEnabled ? (o.deadlineApproved === false ? "On, but no approved deadline, so nothing will be prepared." : "On.") : "Off.", o.autoEnabled && o.deadlineApproved === false ? "Loan Reminders: set the deadline; the Chairperson approves it." : "");
+    const pend = (db.approvalRequests || []).filter((r) => r.status === "Pending"), oldP = today ? pend.filter((r) => r.requestedDate && days(r.requestedDate, today) >= lim.approvalsOldDays).length : 0;
+    add("approvals", "Operations", "Waiting for approval", oldP || pend.length >= lim.approvalsWarn ? "warn" : (pend.length ? "info" : "ok"), pend.length ? plural(pend.length, "request") + " waiting" + (oldP ? ", " + oldP + " for " + lim.approvalsOldDays + " days or more" : "") + "." : "Nothing waiting.", pend.length ? "The Chairperson: Approvals > approve or decline." : "");
+
+    /* ---- backups and growth ---- */
+    if (o.backups) { const b = o.backups[0], age = b && today ? days(String(b.createdAt).slice(0, 10), today) : null;
+      add("backup", "Data", "Latest backup", !b ? "warn" : age > lim.staleBackupDays ? "warn" : "ok", !b ? "No backup found." : "Saved " + String(b.createdAt).slice(0, 10) + (age ? " (" + plural(age, "day") + " ago)" : " (today)") + ".", !b || age > lim.staleBackupDays ? "System > Backups > Save a snapshot now, and check the Daily backup trigger above." : ""); }
+    const rows = (db.transactions || []).length + outbox.length + audit.length;
+    add("size", "Data", "Records stored", rows >= lim.rowsFail ? "fail" : rows >= lim.rowsWarn ? "warn" : "ok", rows.toLocaleString("en-US") + " rows (" + (db.transactions || []).length.toLocaleString("en-US") + " transactions, " + outbox.length.toLocaleString("en-US") + " messages, " + audit.length.toLocaleString("en-US") + " audit lines).",
+      rows >= lim.rowsWarn ? "The app is getting heavy to load. Ask for the archive step (move closed financial years to an archive sheet) before it slows down for members." : "");
+
+    const overall = items.reduce((m, i) => Math.max(m, rank[i.state] || 0), 0), actions = items.filter((i) => i.action && (i.state === "warn" || i.state === "fail")).map((i) => ({ id: i.id, label: i.label, action: i.action }));
+    return { overall: ["ok", "warn", "fail"][overall], items, actions, counts: { ok: items.filter((i) => i.state === "ok").length, warn: items.filter((i) => i.state === "warn").length, fail: items.filter((i) => i.state === "fail").length } };
+  }
+  return { compose, LIMITS };
+});
+
+
+/* ../src/core/search.js */
+/* SOB core/search — one smart search over everything the signed-in person is allowed to see.
+   It is a pure function of the data the app already holds (a member's data is already limited by the server), so it can never reveal more than the screens do.
+   search(db, env, query, opts) -> { groups:[{cat, items:[{id, cat, title, sub, marks, target, score}]}], total, didYouMean, tokens }
+   - partial words, amounts (10,000 / 10000), phone numbers (0772…, +256772…), SOB IDs, references, receipts, dates ("nov 2026", 2026-11-28)
+   - typo tolerance (one or two letters, only when needed), ranking by match quality, recency and category, filters by category / year / dates
+   - a per-database index is built once and reused for every keystroke; each category is capped, so a large ledger stays fast.
+   env: { staff, memberId, today, screens:[{id,title,group,ic}], reports:[{id,title,about,group}], help:[{id,title,text,view}], nameOf(id) } */
+(function (root, factory) {
+  const isNode = typeof module === "object" && module.exports;
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates);
+  if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.search = api; }
+})(typeof self !== "undefined" ? self : this, function (D) {
+  const CATS = ["Members", "Loans", "Savings", "Withdrawals", "Loan repayments", "Share-outs", "Other entries", "Approvals", "Financial years", "Reports", "Screens", "Settings", "Help", "Announcements", "Spiritual Corner", "Ideas and opportunities", "Learn"];
+  const HELP = [
+    { id: "h-loan", title: "How do I apply for a loan?", text: "loan apply borrow application guarantor eligibility how much can i borrow", view: "myloans", staffView: "loans" },
+    { id: "h-pin", title: "I forgot my password or PIN", text: "forgot password pin reset change secret login code email", view: "more", staffView: "members" },
+    { id: "h-statement", title: "Where is my statement?", text: "statement download pdf savings history account print", view: "savings", staffView: "reports" },
+    { id: "h-withdraw", title: "How do I withdraw savings?", text: "withdraw withdrawal take money cash out savings treasurer", view: "savings", staffView: "ledger" },
+    { id: "h-airtime", title: "How do I request airtime?", text: "airtime phone credit request buy", view: "airtime", staffView: "airtime" },
+    { id: "h-share", title: "When is the share-out and profit paid?", text: "share-out shareout profit december dividend interest paid year end", view: "myshare", staffView: "shareout" },
+    { id: "h-sub", title: "Annual subscription", text: "subscription annual fee pay yearly membership", view: "mysubs", staffView: "subs" },
+    { id: "h-notice", title: "Stop or restart text messages", text: "sms whatsapp notices opt out stop messages notifications", view: "more", staffView: "messages" },
+    { id: "h-charge", title: "Bank charges on withdrawals and payouts", text: "bank charge fee withdrawal disbursement member group expense", view: "savings", staffView: "ledger" }
+  ];
+  const SETTINGS = [
+    { id: "s-reminders", title: "Automatic loan reminders", text: "reminder deadline chairperson contact switch auto on off schedule", view: "reminders" },
+    { id: "s-lists", title: "Lists and options (purposes, categories)", text: "lists options purposes categories dropdown settings", view: "system" },
+    { id: "s-backup", title: "Backups", text: "backup restore download snapshot export data", view: "system" },
+    { id: "s-status", title: "System Status Centre", text: "status health check diagnostics system sms quota triggers", view: "status" },
+    { id: "s-content", title: "Manage content (verses, notices, ideas)", text: "content announcements spiritual verses ideas opportunities articles notices manage", view: "content" },
+    { id: "s-messages", title: "Message templates and sending", text: "message templates sms whatsapp email wording placeholders send notice", view: "messages" }
+  ];
+  const norm = (s) => String(s == null ? "" : s).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "");
+  const digits = (s) => String(s || "").replace(/\D/g, "");
+  const phoneKeys = (p) => { const d = digits(p); if (!d) return ""; const local = d.startsWith("256") ? "0" + d.slice(3) : d; return local + " " + d; };
+  const wordsOf = (s) => norm(s).split(/[^a-z0-9]+/).filter(Boolean);
+  function lev(a, b, max) {   // edit distance with an early stop
+    if (Math.abs(a.length - b.length) > max) return max + 1; let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) { const cur = [i]; let rowMin = i; for (let j = 1; j <= b.length; j++) { const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); cur.push(v); if (v < rowMin) rowMin = v; } if (rowMin > max) return max + 1; prev = cur; }
+    return prev[b.length];
+  }
+  const allowed = (len) => (len < 4 ? 0 : len < 8 ? 1 : 2);
+  const dateText = (iso) => (D.isISO(iso) ? iso + " " + D.longDate(iso) + " " + D.toDisplay(iso) : "");
+  const catOfTx = (t) => /^Withdraw/.test(t.type) ? "Withdrawals" : /^Savings|^Subscription|^Balance/.test(t.type) && !/Loan/.test(t.type) ? "Savings" : /Loan Repayment/.test(t.type) ? "Loan repayments" : /^Share-?Out/i.test(t.type) ? "Share-outs" : "Other entries";
+  const KIND_CAT = { announcement: "Announcements", notice: "Announcements", message: "Spiritual Corner", verse: "Spiritual Corner", idea: "Ideas and opportunities", opportunity: "Ideas and opportunities", economy: "Learn", education: "Learn", article: "Learn" };
+
+  /* ---------- the index: built once per data set, reused for every keystroke ---------- */
+  const cache = new WeakMap();
+  const sig = (db) => [(db.transactions || []).length, (db.members || []).length, (db.loans || []).length, (db.contentItems || []).length, db.revision || 0, (db.approvalRequests || []).length].join("|");
+  function build(db, env) {
+    const R = [], nm = (id) => (env.nameOf ? env.nameOf(id) : id) || id, staff = !!env.staff;
+    const add = (r) => { r.hay = r.fields.map((f) => [norm(f[0]), f[1]]); r.words = {}; R.push(r); };
+    if (staff) (db.members || []).forEach((m) => add({ cat: "Members", id: m.id, title: m.name, sub: m.id + (m.phone ? " · " + m.phone : "") + (m.status && m.status !== "Active" ? " · " + m.status : ""), fields: [[m.name, 100], [m.id, 95], [phoneKeys(m.phone), 90], [m.location || "", 40], [m.email || "", 50], [m.status || "", 15]], target: { view: "members", open: "member", id: m.id }, rec: 0 }));
+    (db.loans || []).filter((l) => !l.voided).forEach((l) => add({ cat: "Loans", id: l.id, title: (staff ? nm(l.memberId) : "My loan") + " · " + l.id, sub: l.status + " · UGX " + Number(l.loanAmount || 0).toLocaleString("en-US") + (l.purpose ? " · " + l.purpose : ""), fields: [[l.id, 95], [staff ? nm(l.memberId) : "my loan", 80], [l.memberId || "", 70], [l.status || "", 30], [l.purpose || "", 40], [String(l.loanAmount || ""), 85], [dateText(l.date), 35]], nums: [Number(l.loanAmount || 0)], date: l.date, year: String((l.date || "").slice(0, 4)), target: { view: staff ? "loans" : "myloans", open: "loan", id: l.id }, rec: l.date || "" }));
+    (db.transactions || []).filter((t) => !t.voided).forEach((t) => { const cat = catOfTx(t), who = staff ? nm(t.memberId) : "";
+      add({ cat, id: t.id, title: (who ? who + " · " : "") + t.type + " · UGX " + Number(t.amount || 0).toLocaleString("en-US"), sub: D.longDate(t.date) + (t.reference ? " · ref " + t.reference : "") + (t.receipt ? " · receipt " + t.receipt : "") + (t.purpose && String(t.purpose).length < 50 ? " · " + t.purpose : ""),
+        fields: [[who, 60], [t.memberId || "", 55], [t.type || "", 50], [String(t.amount || ""), 85], [t.reference || "", 90], [t.receipt || "", 90], [t.purpose || "", 40], [dateText(t.date), 35], [t.id || "", 80], [t.loanId || "", 60]], nums: [Number(t.amount || 0)], date: t.date, year: String(t.forYear || (t.date || "").slice(0, 4)), target: { view: staff ? "ledger" : "savings", open: "txn", id: t.id }, rec: t.date || "" }); });
+    if (staff) {
+      (db.shareOutEvents || []).forEach((e) => add({ cat: "Share-outs", id: e.id, title: "Share-out " + e.year, sub: D.longDate(e.date) + " · UGX " + Number(e.totalWithdrawn || 0).toLocaleString("en-US"), fields: [["share-out shareout " + e.year, 90], [dateText(e.date), 35], [String(e.totalWithdrawn || ""), 70]], nums: [Number(e.totalWithdrawn || 0)], date: e.date, year: String(e.year), target: { view: "shareout" }, rec: e.date || "" }));
+      (db.approvalRequests || []).forEach((r) => add({ cat: "Approvals", id: r.id, title: (r.command || r.type || "Approval") + " · " + (r.status || ""), sub: (r.requestedBy || r.by || "") + " " + (r.at || r.createdAt || "").slice(0, 10), fields: [[r.command || r.type || "", 80], [r.status || "", 60], [r.requestedBy || r.by || "", 50], [r.reason || "", 40], [JSON.stringify(r.args || {}).slice(0, 200), 20]], date: (r.at || r.createdAt || "").slice(0, 10), year: (r.at || r.createdAt || "").slice(0, 4), target: { view: "approvals" }, rec: r.at || r.createdAt || "" }));
+      (db.yearCycles || []).forEach((c) => add({ cat: "Financial years", id: "FY" + c.year, title: "Financial year " + c.year, sub: c.status || "", fields: [["financial year fy " + c.year, 95], [c.status || "", 30]], year: String(c.year), target: { view: "fyears", open: "fy", id: c.year }, rec: String(c.year) }));
+      (env.reports || []).forEach((r) => add({ cat: "Reports", id: r.id, title: r.title, sub: r.group || r.about || "", fields: [[r.title, 100], [r.about || "", 40], [r.group || "", 30]], target: { view: "reports", open: "report", id: r.id }, rec: "" }));
+    } else (env.reports || []).forEach((r) => add({ cat: "Reports", id: r.id, title: r.title, sub: r.about || "", fields: [[r.title, 100], [r.about || "", 40]], target: { view: "savings" }, rec: "" }));
+    (env.screens || []).forEach((s) => add({ cat: "Screens", id: s.id, title: s.title, sub: s.group || "", fields: [[s.title, 100], [s.group || "", 30]], target: { view: s.id }, ic: s.ic, rec: "" }));
+    if (staff) SETTINGS.filter((s) => !s.view || (env.screens || []).some((x) => x.id === s.view)).forEach((s) => add({ cat: "Settings", id: s.id, title: s.title, sub: "Settings", fields: [[s.title, 100], [s.text, 55]], target: { view: s.view }, rec: "" }));
+    HELP.forEach((s) => add({ cat: "Help", id: s.id, title: s.title, sub: "Help", fields: [[s.title, 100], [s.text, 60]], target: { view: staff ? s.staffView : s.view }, rec: "" }));
+    (db.contentItems || []).filter((c) => staff || c.status === "Published").forEach((c) => add({ cat: KIND_CAT[c.kind] || "Learn", id: c.id, title: c.title + (c.reference ? " (" + c.reference + ")" : ""), sub: (c.category || "") + (staff && c.status !== "Published" ? " · " + c.status : ""), fields: [[c.title, 100], [c.reference || "", 90], [c.category || "", 50], [c.body || "", 25]], target: { view: staff ? "content" : "grow", open: "content", id: c.id, kind: c.kind }, date: (c.updatedAt || c.createdAt || "").slice(0, 10), rec: c.updatedAt || c.createdAt || "" }));
+    const vocab = new Set(); R.forEach((r) => { if (["Members", "Screens", "Reports", "Help", "Settings", "Loans"].includes(r.cat)) r.hay.forEach((f) => { if (f[1] >= 50) f[0].split(/[^a-z0-9]+/).forEach((w) => { if (w.length >= 4) vocab.add(w); }); }); });
+    return { R, vocab: Array.from(vocab) };
+  }
+  const indexFor = (db, env) => { const k = sig(db) + "|" + (env.staff ? "s" : "m") + (env.screens || []).length + (env.reports || []).length; let e = cache.get(db); if (!e || e.k !== k) { e = { k, idx: build(db, env) }; cache.set(db, e); } return e.idx; };
+
+  /* ---------- matching one word against a record: 0 = no match, else 1..100 ---------- */
+  function matchToken(r, tok, fuzzy) {
+    const numeric = /^\d[\d,]*$/.test(tok), tn = tok.replace(/,/g, ""); let best = 0;
+    if (numeric && tn.length >= 3 && r.nums && r.nums.some((n) => String(n) === tn)) best = 100;
+    for (const [text, w] of r.hay) {
+      if (!text || w * 1 <= best * 0) continue;
+      let s = 0; const q = numeric ? tn : tok;
+      if (text === q) s = 100; else if (text.startsWith(q)) s = 85; else if (text.includes(" " + q) || text.includes("/" + q) || text.includes("-" + q)) s = 70; else if (q.length >= 2 && text.includes(q)) s = 50;
+      else if (fuzzy && q.length >= 4 && /^[a-z]+$/.test(q)) { const a = allowed(q.length); const ws = (r.words[text] || (r.words[text] = text.split(/[^a-z0-9]+/).filter((x) => x.length >= 3))); for (const w2 of ws) { if (Math.abs(w2.length - q.length) <= a && lev(w2, q, a) <= a) { s = 28; break; } } }
+      if (s) { const v = s * w / 100; if (v > best) best = v; }
+    }
+    return best;
+  }
+  const inRange = (r, o) => (!o.year || !r.year || r.year === String(o.year)) && (!o.from || !r.date || r.date >= o.from) && (!o.to || !r.date || r.date <= o.to);
+  /* where in a text the words matched, so the screen can highlight them */
+  function marks(text, tokens) {
+    text = String(text == null ? "" : text); const low = norm(text), spans = [];
+    tokens.forEach((t) => { const q = t.replace(/,/g, ""); if (!q) return;
+      if (/^\d+$/.test(q)) { const re = new RegExp(q.split("").join(",?"), "g"); let m; while ((m = re.exec(low)) && spans.length < 12) { spans.push([m.index, m.index + m[0].length]); if (!m[0]) break; } return; }
+      let i = low.indexOf(q); while (i >= 0 && spans.length < 12) { spans.push([i, i + q.length]); i = low.indexOf(q, i + q.length); } });
+    if (!spans.length) return [{ t: text, hit: false }];
+    spans.sort((a, b) => a[0] - b[0]); const merged = []; spans.forEach((s) => { const l = merged[merged.length - 1]; if (l && s[0] <= l[1]) l[1] = Math.max(l[1], s[1]); else merged.push(s.slice()); });
+    const out = []; let p = 0; merged.forEach(([a, b]) => { if (a > p) out.push({ t: text.slice(p, a), hit: false }); out.push({ t: text.slice(a, b), hit: true }); p = b; }); if (p < text.length) out.push({ t: text.slice(p), hit: false }); return out;
+  }
+  function search(db, env, q, o) {
+    o = o || {}; const per = o.perCategory || 5, idx = indexFor(db, env), raw = norm(q).trim();
+    const tokens = raw.split(/\s+/).filter(Boolean).slice(0, 6), cats = o.cats && o.cats.length ? o.cats : null;
+    if (!tokens.length) return { groups: [], total: 0, tokens, didYouMean: [] };
+    const run = (fuzzy) => { const hits = [];
+      for (const r of idx.R) { if (cats && !cats.includes(r.cat)) continue; if (!inRange(r, o)) continue; let sum = 0, ok = true;
+        for (const t of tokens) { const m = matchToken(r, t, fuzzy); if (!m) { ok = false; break; } sum += m; }
+        if (!ok) continue; let score = sum / tokens.length; if (r.rec && /^\d{4}/.test(r.rec)) score += Math.max(0, 4 - ((Date.parse(env.today || "2026-01-01") - Date.parse(String(r.rec).slice(0, 10))) / 86400000) / 90); if (r.cat === "Members" || r.cat === "Loans") score += 3; hits.push({ r, score }); }
+      return hits; };
+    let hits = run(false), fuzzy = false; if (hits.length < 3 && raw.length >= 4) { const more = run(true); if (more.length > hits.length) { hits = more; fuzzy = true; } }
+    hits.sort((a, b) => b.score - a.score);
+    const byCat = {}; hits.forEach((h) => { (byCat[h.r.cat] = byCat[h.r.cat] || []).push(h); });
+    const limit = o.expand ? 40 : per, groups = CATS.filter((c) => byCat[c]).map((c) => ({ cat: c, count: byCat[c].length, top: byCat[c][0].score, items: byCat[c].slice(0, o.expandCat === c ? 40 : limit).map((h) => ({ id: h.r.id, cat: h.r.cat, title: h.r.title, sub: h.r.sub, marks: marks(h.r.title, tokens), subMarks: marks(h.r.sub, tokens), target: h.r.target, ic: h.r.ic, score: Math.round(h.score) })) }));
+    groups.sort((a, b) => b.top - a.top || CATS.indexOf(a.cat) - CATS.indexOf(b.cat));
+    let didYouMean = []; if (!hits.length) { const t = tokens.filter((x) => x.length >= 3 && !/^\d/.test(x)); const seen = new Set(); t.forEach((w) => { const a = Math.max(1, allowed(w.length)); idx.vocab.forEach((v) => { if (!seen.has(v) && (v.startsWith(w.slice(0, 3)) || lev(v, w, a) <= a) && lev(v, w, a + 1) <= a + 1) { seen.add(v); } }); }); didYouMean = Array.from(seen).slice(0, 5); }
+    return { groups, total: hits.length, tokens, fuzzy, didYouMean };
+  }
+  /* what to show before anything is typed: the screens a person is likely to want */
+  const quick = (db, env) => indexFor(db, env).R.filter((r) => r.cat === "Screens").slice(0, 8).map((r) => ({ id: r.id, cat: r.cat, title: r.title, sub: r.sub, marks: [{ t: r.title, hit: false }], subMarks: [{ t: r.sub, hit: false }], target: r.target, ic: r.ic }));
+  return { search, quick, marks, CATS, HELP, SETTINGS, lev, norm, phoneKeys };
 });
 
 
@@ -4535,6 +5676,16 @@
   /* kind: true/"bad" = error, "warn" = needs attention, anything else = success */
   function toast(msg, kind) { const k = kind === true || kind === "bad" ? "bad" : kind === "warn" ? "warn" : "ok"; const old = document.querySelector(".toast"); if (old) old.remove();
     const t = h("div", { class: "toast " + k, role: k === "bad" ? "alert" : "status" }, Icon(k === "ok" ? "check" : "alert"), h("span", null, msg)); document.body.append(t); setTimeout(() => t.remove(), k === "bad" ? 7000 : 3500); }
+  /* Accounting-style entry: 1250000 shows as 1,250,000 while typing; the value handed on is the plain number (no commas). Money fields = type "number" labelled UGX, or {money:true}. */
+  const isMoney = (f) => f.money === true || (f.type === "number" && /UGX|amount/i.test(f.label || "") && f.money !== false);
+  const withCommas = (d) => String(d).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  function moneyInput(f) {
+    const el = h("input", { name: f.name, type: "text", "data-money": "1", inputmode: "numeric", autocomplete: "off", placeholder: f.placeholder || "e.g. 125,000", "aria-label": f.label });
+    const fmt = (raw) => { const d = String(raw == null ? "" : raw).replace(/[^\d]/g, "").replace(/^0+(?=\d)/, ""); return withCommas(d); };
+    el.addEventListener("input", () => { const pos = el.selectionStart, before = el.value, digitsBefore = before.slice(0, pos == null ? before.length : pos).replace(/[^\d]/g, "").length; el.value = fmt(before); let i = 0, seen = 0; while (i < el.value.length && seen < digitsBefore) { if (/\d/.test(el.value[i])) seen++; i++; } try { el.setSelectionRange(i, i); } catch (e) {} });
+    el.value = f.value != null && f.value !== "" ? fmt(f.value) : "";
+    return { el, get: () => el.value.replace(/,/g, ""), set: (v) => { el.value = fmt(v); } };
+  }
   /* Form modal: fields [{name,label,type,value,options,required}] -> onSubmit(values) may throw; the message is shown, nothing is half-saved. */
   function Form(title, fields, onSubmit, submitLabel) {
     const inputs = {};
@@ -4556,13 +5707,17 @@
         paint(); inputs[f.name] = { get value() { return val === OTHER ? txt.value.trim() : val; }, set value(v) { val = v; paint(); }, setAttribute() {} };
         return h("div", null, h("label", null, f.label), box, txt);
       }
+      if (isMoney(f)) { const mi = moneyInput(f); inputs[f.name] = { get value() { return mi.get(); }, set value(v) { mi.set(v); }, setAttribute() {}, el: mi.el }; return h("div", { "data-field": f.name }, h("label", null, f.label), mi.el); }
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
       if (f.max) el.setAttribute("max", f.max); if (f.min != null) el.setAttribute("min", f.min); if (f.inputmode) el.setAttribute("inputmode", f.inputmode); if (f.type === "number" && !f.inputmode) el.setAttribute("inputmode", "decimal"); if (f.type === "date") el.required = true;
-      if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);
+      if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", { "data-field": f.name }, h("label", null, f.label), el);
     }));
+    const showWhen = fields.filter((f) => typeof f.showWhen === "function" && f.type !== "note"), cur = () => { const v = {}; fields.forEach((f) => { if (f.type !== "note" && inputs[f.name]) v[f.name] = inputs[f.name].value; }); return v; };
+    const applyWhen = () => { if (!showWhen.length) return; const v = cur(); showWhen.forEach((f) => { const wrap = body.querySelector('[data-field="' + f.name + '"]'); if (wrap) wrap.hidden = !f.showWhen(v); }); };
+    body.addEventListener("change", applyWhen); body.addEventListener("input", applyWhen); setTimeout(applyWhen, 0);
     const err = h("div", { class: "err", role: "alert" });
     const m = Modal(title, h("div", null, body, err, h("div", { class: "row" }, h("button", { class: "primary", "data-submit": "1", onclick: async () => {
-      const v = {}; fields.forEach((f) => { if (f.type !== "note") v[f.name] = inputs[f.name].value; });
+      const v = {}; fields.forEach((f) => { if (f.type !== "note") { const w = body.querySelector('[data-field="' + f.name + '"]'); v[f.name] = w && w.hidden ? "" : inputs[f.name].value; } });
       const btn = m.el.querySelector("[data-submit]"); if (btn.disabled) return; btn.disabled = true; err.textContent = "";
       try { await onSubmit(v); m.close(); } catch (e) { err.textContent = friendly(e); btn.disabled = false; }
     } }, submitLabel || "Save"), h("button", { "data-cancel": "1", onclick: () => m.close() }, "Cancel"))), { sticky: true });
@@ -4571,14 +5726,14 @@
   const RAW_JS = /\b(is not defined|is not a function|is not iterable|Cannot read propert|Cannot set propert|undefined|null is not|Unexpected token|SyntaxError|ReferenceError|TypeError|RangeError|at \w+ \()/;
   const friendly = (e) => {
     const m = String((e && e.message) || e);
-    if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost. Please try again. If it happens again, tell the Treasurer or Secretary."; }
+    if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost and no figure was changed. Please try again. If it happens again, tell the Treasurer or Secretary and say what you were doing."; }
     if (/PENDING_SOB_DECISION/.test(m)) return "Blocked: SOB has not yet decided this rule. " + m.replace(/^.*?PENDING_SOB_DECISION:?\s*/, "");
-    if (e && e.code === "CONFLICT") return "Someone else changed the ledger. Your change was not saved — reload and try again.";
-    if ((e && e.code === "NETWORK") || /^NETWORK:/.test(m) || /Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection. Check your data or Wi-Fi and try again.";
-    if ((e && e.code === "TIMEOUT") || /^TIMEOUT/.test(m)) return "This is taking too long. Check your connection and try again.";
-    if (/^ENDPOINT_/.test((e && e.code) || m)) return "The SOB records are not available right now. Please try again in a few minutes. If it continues, tell the Treasurer or Secretary.";
+    if (e && e.code === "CONFLICT") return "Someone else changed the ledger at the same moment. Your change was NOT saved. Reload, check the latest figures, then enter it again.";
+    if ((e && e.code === "NETWORK") || /^NETWORK:/.test(m) || /Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection, so nothing was saved. Check your data or Wi-Fi and try again.";
+    if ((e && e.code === "TIMEOUT") || /^TIMEOUT/.test(m)) return "This is taking too long. Your change may or may not have been saved: open the Ledger and check before you try again.";
+    if (/^ENDPOINT_/.test((e && e.code) || m)) return "The SOB records could not be reached, so nothing was changed. Please try again in a few minutes. If it continues, tell the Treasurer or Secretary.";
     if (e && e.code === "UNAUTHENTICATED") return "Your session has ended. Please sign in again.";
-    if (/^\s*UNKNOWN_COMMAND:/.test(m)) return "The Google backend is out of date. Paste the latest Code.gs in Apps Script, deploy a New version and reload. (Action: " + m.replace(/^\s*UNKNOWN_COMMAND:\s*/, "") + ")";
+    if (/^\s*UNKNOWN_COMMAND:/.test(m)) return "The records server is older than this app, so this action is not available yet. Nothing was changed. Ask an officer to install the latest update (the System Status screen shows what is out of date). (Action: " + m.replace(/^\s*UNKNOWN_COMMAND:\s*/, "") + ")";
     const PLAIN = { ALREADY_APPLIED: "You already have a loan application in progress. Please wait until it is decided.", ALREADY_VOIDED: "This record has already been cancelled.", NOT_VOIDED: "This record is not cancelled.", RESTORE_WINDOW_CLOSED: "The time allowed to restore this record has passed. Please enter a new correcting entry instead.", OFFLINE_MODE: "This copy is not connected to the SOB server.", FORBIDDEN: "You do not have permission to do this.", NOT_FOUND: "We could not find that record. Please refresh and try again.", UNKNOWN_MEMBER: "That member was not found.", UNKNOWN_ACTION: "Something went wrong. Please refresh and try again.", INVALID_REQUEST: "Something went wrong. Please refresh and try again.", UNAUTHENTICATED: "Your session has ended. Please sign in again.", BAD_CREDENTIALS: "That did not match. Please check and try again." };
     const code = (/^([A-Z][A-Z_]+)(?::\s*(.*))?$/s.exec(m.trim()) || [])[1];
     if (code && PLAIN[code] && !/\S/.test((/^[A-Z_]+:\s*(.*)$/s.exec(m.trim()) || [, ""])[1])) return PLAIN[code];
@@ -4613,8 +5768,130 @@
   }
   const Field = (label, value) => h("div", { class: "kv" }, h("span", null, label), h("b", null, value));
   const Avatar = (name) => h("span", { class: "avatar", "aria-hidden": "true" }, String(name || "?").split(/\s+/).map((x) => x[0]).slice(0, 2).join("").toUpperCase());
-  window.SOBUI = { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Skeleton, Banner, Chips, Confirm, Field, Avatar };
+  window.SOBUI = { moneyInput, withCommas, h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Skeleton, Banner, Chips, Confirm, Field, Avatar };
 })();
+
+
+/* grow.js */
+/* SOB app/grow — the non-money side of the app. Members: Spiritual Corner (a verse a day, every category), Investment ideas by starting capital, Opportunities,
+   Uganda economy notes, Financial education, Notices. Super Admin: one Content screen to add, edit, publish, schedule and retire any item, or load the starter pack.
+   Everything is DATA in the Content sheet (core/content): no deployment is needed to change a word. All text is shown as plain text. */
+window.SOBGrow = function (E) {
+  const { st, act, commit, render, today, go } = E, { h, toast, Form, Modal, Chips, Section, Row, List, Empty, Icon, Confirm } = window.SOBUI, CT = window.SOB.content;
+  const items = (kind) => (st.db.contentItems || []).filter((x) => !kind || x.kind === kind);
+  const live = (kind, cat) => CT.published({ contentItems: st.db.contentItems || [] }, today(), { kind, category: cat });
+  const para = (t) => String(t || "").split(/\n{2,}/).map((x) => h("p", { class: "gr-p" }, x));
+  const verseCard = (v, big) => h("div", { class: "card gr-verse" + (big ? " big" : ""), "data-verse": v.id }, h("div", { class: "gr-q" }, "“" + v.body + "”"), h("div", { class: "gr-ref" }, "— " + v.reference + (v.translation ? " (" + v.translation + ")" : "") + (v.category ? " · " + v.category : "")));
+  const open = (it) => Modal(it.title, h("div", null, it.kind === "verse" ? verseCard(it, true) : para(it.body), it.link ? h("p", null, h("a", { href: it.link, target: "_blank", rel: "noopener noreferrer" }, "Read more")) : null, it.endDate ? h("p", { class: "mute" }, "Open until " + it.endDate) : null));
+  const SECTIONS = [["verse", "Spiritual Corner"], ["idea", "Ideas"], ["opportunity", "Opportunities"], ["economy", "Uganda"], ["education", "Learn"], ["notice", "Notices"]];
+  const NEWDAYS = 7, isNew = (it) => it && String(it.updatedAt || it.createdAt || "").slice(0, 10) >= require_addDays(today(), -NEWDAYS) && !it.seed;
+  const require_addDays = (d, n) => window.SOB.dates.addDays(d, n);
+  /* the Home page cards: today's verse, today's tip, and the notices that are live now */
+  function homeCards(part) {
+    const db = { contentItems: st.db.contentItems || [] }, out = [], v = CT.daily(db, today(), "verse"), t = CT.daily(db, today(), "education"), ann = live("announcement").concat(live("notice")).slice(0, 3);
+    if (part === "top") { ann.forEach((a) => out.push(h("div", { class: "card gr-note click", role: "button", tabindex: 0, "data-notice": a.id, onclick: () => open(a) }, h("b", null, a.title), h("div", { class: "mute" }, a.body.slice(0, 110) + (a.body.length > 110 ? "…" : ""))))); return out; }
+    if (v) out.push(Section("Verse for today", h("button", { class: "iconbtn", "aria-label": "Spiritual Corner", onclick: () => { st.growTab = "verse"; go("grow"); } }, Icon("chevron"))), verseCard(v));
+    if (t) out.push(Section("Money tip of the day"), h("div", { class: "card click", role: "button", tabindex: 0, "data-tip": t.id, onclick: () => open(t) }, h("b", null, t.title), h("div", { class: "mute" }, t.body.slice(0, 140) + (t.body.length > 140 ? "…" : ""))));
+    return out;
+  }
+  function memberView() {
+    const tab = st.growTab || "verse", cats = CT.CATEGORIES[tab], cat = st.growCat || "";
+    const all = tab === "notice" ? live("announcement").concat(live("notice")) : live(tab, cat), n = SECTIONS.map(([k]) => (k === "notice" ? live("announcement").concat(live("notice")) : live(k)).filter(isNew).length);
+    const el = h("div", { id: "grow" }, Chips(SECTIONS.map(([k, l], i) => [k, l + (n[i] ? " ●" : "")]), tab, (k) => { st.growTab = k; st.growCat = ""; render(); }));
+    if (cats) el.append(h("div", { class: "gr-cat" }, h("select", { id: "gr-cat", "aria-label": "Category", onchange: (e) => { st.growCat = e.target.value; render(); } }, [h("option", { value: "" }, "All categories")].concat(cats.map((c) => h("option", { value: c, selected: c === cat }, c))))));
+    if (!all.length) { el.append(Empty({ icon: "book", title: "Nothing here yet", sub: "Your officers add new items often. Please check again soon." })); return el; }
+    if (tab === "verse") { all.forEach((v) => el.append(verseCard(v))); return el; }
+    el.append(List(all.map((it) => Row({ icon: tab === "idea" ? "chart" : tab === "opportunity" ? "gift" : tab === "economy" ? "book" : "bell", title: it.title + (isNew(it) ? "  ● new" : ""), sub: (it.category ? it.category + " · " : "") + it.body.slice(0, 90) + "…", onOpen: () => open(it) }))));
+    return el;
+  }
+  /* ---------- officer's Content screen ---------- */
+  const CATSEL = (kind) => (CT.CATEGORIES[kind] || []);
+  function itemForm(it, kind) {
+    it = it || {}; kind = it.kind || kind || "verse";
+    const f = [{ name: "kind", label: "Type", options: Object.keys(CT.KINDS).map((k) => ({ value: k, label: CT.KINDS[k] })), value: kind }, { name: "category", label: "Category (verses, ideas, opportunities, Uganda, learn)", options: [""].concat([].concat(...Object.values(CT.CATEGORIES))), value: it.category || "" },
+      { name: "title", label: "Title", value: it.title || "" }, { name: "body", label: "Text", type: "textarea", value: it.body || "" }, { name: "reference", label: "Verse reference (e.g. Proverbs 21:20)", value: it.reference || "" }, { name: "translation", label: "Bible translation", value: it.translation || "KJV" },
+      { name: "link", label: "Link (https://, optional)", value: it.link || "" }, { name: "startDate", label: "Show from (optional)", type: "date", value: it.startDate || "" }, { name: "endDate", label: "Show until (optional)", type: "date", value: it.endDate || "" },
+      { name: "status", label: "Status", options: ["Draft", "Published", "Retired"], value: it.status || "Published" }];
+    Form(it.id ? "Edit item" : "New item", f, act(async (v) => { await commit("saveContent", Object.assign({}, v, { id: it.id })); }, "Saved"), "Save");
+  }
+  function staffView() {
+    const k = st.contentKind || "all", all = items().slice().sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""))), shown = k === "all" ? all : all.filter((x) => x.kind === k);
+    return h("div", { id: "content-manager" },
+      h("p", { class: "mute" }, "Everything members read here is yours to change. Published items show to members at once; drafts and retired items stay hidden. Texts are shown as plain text."),
+      h("div", { class: "row" }, h("button", { class: "primary", id: "content-new", onclick: () => itemForm(null, k === "all" ? "" : k) }, "Add an item"), all.length ? null : h("button", { id: "content-starter", onclick: act(async () => { const r = await commit("loadStarterContent", {}); toast("Starter content loaded"); }) }, "Load starter content"), all.length && !all.some((x) => x.seed) ? h("button", { id: "content-starter", onclick: act(async () => { await commit("loadStarterContent", {}); toast("Starter content loaded"); }) }, "Load starter content") : null),
+      Chips([["all", "All (" + all.length + ")"]].concat(Object.keys(CT.KINDS).map((x) => [x, CT.KINDS[x]])), k, (x) => { st.contentKind = x; render(); }),
+      shown.length ? List(shown.map((it) => Row({ icon: "book", title: it.title, sub: CT.KINDS[it.kind] + (it.category ? " · " + it.category : "") + " · " + it.status + (it.endDate ? " · until " + it.endDate : ""), onOpen: () => Modal(it.title, h("div", null, para(it.body), h("div", { class: "row" },
+        h("button", { "data-act": "edit-content", onclick: () => itemForm(it) }, "Edit"),
+        it.status !== "Published" ? h("button", { class: "primary", "data-act": "publish-content", onclick: act(async () => { await commit("setContentStatus", { id: it.id, status: "Published" }); }, "Published") }, "Publish") : null,
+        it.status === "Published" ? h("button", { "data-act": "unpublish-content", onclick: act(async () => { await commit("setContentStatus", { id: it.id, status: "Draft" }); }, "Hidden from members") }, "Hide") : null,
+        it.status !== "Retired" ? h("button", { class: "danger", "data-act": "retire-content", onclick: act(async () => { await commit("setContentStatus", { id: it.id, status: "Retired" }); }, "Retired") }, "Retire") : null))) }))) : Empty({ icon: "book", title: "No items yet", sub: "Add one, or load the starter content." }));
+  }
+  return { memberView, staffView, homeCards, isNew };
+};
+
+
+/* smartsearch.js */
+/* SOB app/smartsearch — the search overlay: opens from the magnifier on every screen (or "/" or Ctrl+K), shows results while you type, grouped, highlighted, with filters,
+   recent searches, "did you mean" help, keyboard and touch use. The matching itself is core/search (pure, tested); this file only draws it and takes you to the result. */
+window.SOBSmartSearch = function (E) {
+  const { st, go, isStaff, screens, reports, nameOf, openMember, openLoan, today } = E, { h, Icon, Modal } = window.SOBUI, SR = window.SOB.search, D = window.SOB.dates;
+  const RKEY = "sob.recentSearches", getRecent = () => { try { return JSON.parse(localStorage.getItem(RKEY) || "[]").slice(0, 6); } catch (e) { return []; } };
+  const addRecent = (q) => { q = String(q || "").trim(); if (q.length < 2) return; try { localStorage.setItem(RKEY, JSON.stringify([q].concat(getRecent().filter((x) => x !== q)).slice(0, 6))); } catch (e) {} };
+  const clearRecent = () => { try { localStorage.removeItem(RKEY); } catch (e) {} };
+  const env = () => ({ staff: isStaff(), memberId: st.user.memberId, today: today(), nameOf, screens: screens(), reports: reports() });
+  const mk = (parts) => parts.map((p) => (p.hit ? h("mark", null, p.t) : p.t));
+  function txnCard(id) { const t = (st.db.transactions || []).find((x) => x.id === id); if (!t) return; Modal(t.type + " · " + D.longDate(t.date), h("div", { class: "kvs" }, [["Amount", "UGX " + Number(t.amount).toLocaleString("en-US")], ["Member", nameOf(t.memberId) + " (" + t.memberId + ")"], ["Date", D.longDate(t.date)], ["Reference", t.reference || "—"], ["Receipt", t.receipt || "—"], ["Purpose", t.purpose || "—"], ["Entry", t.id]].map((r) => h("div", { class: "kv" }, h("span", null, r[0]), h("b", null, r[1]))))); }
+  function contentCard(id) { const c = (st.db.contentItems || []).find((x) => x.id === id); if (!c) return; Modal(c.title, h("div", null, String(c.body || "").split(/\n{2,}/).map((p) => h("p", { style: "white-space:pre-wrap" }, p)), c.reference ? h("p", { class: "mute" }, c.reference) : null)); }
+  function openTarget(it) {
+    const t = it.target || {};
+    if (t.open === "member") { go("members"); openMember(t.id); } else if (t.open === "loan") { go(t.view); openLoan(t.id); } else if (t.open === "txn") { go(t.view); txnCard(t.id); }
+    else if (t.open === "report") { st.rc = Object.assign({}, st.rc || {}, { id: t.id }); go("reports"); } else if (t.open === "content") { go(t.view); contentCard(t.id); } else if (t.view) go(t.view);
+  }
+  function open() {
+    if (document.querySelector(".pal-bg")) return;
+    const f = { cats: [], year: "", from: "", to: "" }; let items = [], sel = 0, last = "", more = null, showF = false, tm = 0;
+    const input = h("input", { type: "search", id: "pal-input", placeholder: isStaff() ? "Search members, amounts, phones, loans, reports…" : "Search your savings, loans, help, verses…", "aria-label": "Search", autocomplete: "off", autocapitalize: "off", spellcheck: "false", inputmode: "search" });
+    const list = h("div", { class: "pal-list", id: "pal-list", role: "listbox" }), fbar = h("div", { class: "pal-f", id: "pal-filters" });
+    const bg = h("div", { class: "pal-bg", onclick: (e) => { if (e.target === bg) close(); } }, h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Search" },
+      h("div", { class: "pal-top" }, Icon("search", 20), input, h("button", { class: "pal-fb", id: "pal-ftoggle", "aria-label": "Filters", onclick: () => { showF = !showF; paintF(); } }, Icon("sliders", 18)), h("button", { class: "pal-x", "aria-label": "Close search", onclick: () => close() }, "✕")), fbar, list, h("div", { class: "pal-foot" }, h("span", null, "↑↓ move"), h("span", null, "Enter open"), h("span", null, "Esc close"))));
+    const close = () => { document.removeEventListener("keydown", key, true); bg.remove(); };
+    const years = () => { const s = new Set(); (st.db.yearCycles || []).forEach((c) => s.add(String(c.year))); (st.db.transactions || []).forEach((t) => s.add(String(t.date || "").slice(0, 4))); s.delete(""); return Array.from(s).sort().reverse(); };
+    function paintF() {
+      fbar.replaceChildren(); fbar.hidden = !showF; if (!showF) return;
+      const cats = SR.CATS.filter((c) => !(!isStaff() && ["Members", "Approvals", "Financial years", "Settings"].includes(c)));
+      fbar.append(h("div", { class: "pal-chips" }, cats.map((c) => h("button", { class: "chip" + (f.cats.includes(c) ? " on" : ""), "data-fcat": c, onclick: () => { f.cats = f.cats.includes(c) ? f.cats.filter((x) => x !== c) : f.cats.concat(c); paintF(); run(true); input.focus(); } }, c))),
+        h("div", { class: "pal-dates" }, h("label", null, "Year", h("select", { id: "pal-year", onchange: (e) => { f.year = e.target.value; run(true); } }, [h("option", { value: "" }, "Any year")].concat(years().map((y) => h("option", { value: y, selected: y === f.year }, y))))),
+          h("label", null, "From", h("input", { type: "date", id: "pal-from", value: f.from, onchange: (e) => { f.from = e.target.value; run(true); } })), h("label", null, "To", h("input", { type: "date", id: "pal-to", value: f.to, onchange: (e) => { f.to = e.target.value; run(true); } })), h("button", { onclick: () => { f.cats = []; f.year = f.from = f.to = ""; paintF(); run(true); } }, "Clear")));
+    }
+    const draw = (res) => {
+      list.replaceChildren(); items = [];
+      const q = input.value.trim();
+      if (!q) {
+        const rec = getRecent();
+        if (rec.length) { list.append(h("div", { class: "pal-h" }, "Recent searches", h("button", { class: "pal-clear", onclick: () => { clearRecent(); draw(); } }, "Clear"))); rec.forEach((r) => list.append(h("button", { class: "pal-i", "data-recent": r, onclick: () => { input.value = r; run(true); input.focus(); } }, Icon("clock", 18), h("span", null, r)))); }
+        list.append(h("div", { class: "pal-h" }, "Go to")); SR.quick(st.db, env()).forEach((it) => { items.push(it); list.append(row(it, items.length - 1)); });
+        list.append(h("div", { class: "pal-tip" }, isStaff() ? "Try: a name, SOB-004, 0772…, 150,000, a receipt number, “nov 2026”, or “backup”." : "Try: “withdraw”, “loan”, “share-out”, “proverbs”, or an amount."));
+        sel = 0; return;
+      }
+      if (!res || !res.total) {
+        list.append(h("div", { class: "pal-empty" }, h("b", null, "Nothing found for “" + q + "”"), h("div", null, "Check the spelling, remove a word, or clear the filters.")));
+        (res && res.didYouMean || []).forEach((w) => list.append(h("button", { class: "pal-i", "data-suggest": w, onclick: () => { input.value = w; run(true); } }, Icon("search", 18), h("span", null, "Did you mean ", h("b", null, w), "?"))));
+        list.append(h("div", { class: "pal-h" }, "Or go to")); SR.quick(st.db, env()).slice(0, 5).forEach((it) => { items.push(it); list.append(row(it, items.length - 1)); }); sel = 0; return;
+      }
+      res.groups.forEach((g) => { list.append(h("div", { class: "pal-h", "data-group": g.cat }, g.cat, h("span", { class: "pal-n" }, String(g.count)))); g.items.forEach((it) => { items.push(it); list.append(row(it, items.length - 1)); });
+        if (g.count > g.items.length) list.append(h("button", { class: "pal-more", "data-more": g.cat, onclick: () => { more = g.cat; run(true); } }, "Show all " + g.count + " in " + g.cat)); });
+      if (sel >= items.length) sel = 0; mark();
+    };
+    const IC = { Members: "user", Loans: "loan", Savings: "wallet", Withdrawals: "wallet", "Loan repayments": "loan", "Share-outs": "gift", "Other entries": "receipt", Approvals: "check", "Financial years": "book", Reports: "download", Screens: "home", Settings: "sliders", Help: "bell", Announcements: "bell", "Spiritual Corner": "book", "Ideas and opportunities": "chart", Learn: "book" };
+    const row = (it, i) => h("button", { class: "pal-i" + (i === sel ? " sel" : ""), role: "option", "data-pal": it.id, "data-cat": it.cat, onclick: () => pick(it) }, Icon(it.ic || IC[it.cat] || "search", 20), h("span", null, h("span", { class: "pal-t" }, mk(it.marks)), it.sub ? h("small", null, mk(it.subMarks || [{ t: it.sub, hit: false }])) : null));
+    const mark = () => { list.querySelectorAll(".pal-i[data-pal]").forEach((b, i) => { b.classList.toggle("sel", i === sel); if (i === sel && b.scrollIntoView) b.scrollIntoView({ block: "nearest" }); }); };
+    const pick = (it) => { addRecent(input.value); close(); openTarget(it); };
+    function run(now) { clearTimeout(tm); const go2 = () => { const q = input.value; last = q; const o = { cats: f.cats, year: f.year, from: f.from, to: f.to, expandCat: more }; if (more && !q) more = null; draw(q.trim() ? SR.search(st.db, env(), q, o) : null); }; if (now) go2(); else tm = setTimeout(go2, 40); }
+    const key = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } else if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); mark(); } else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, sel - 1); mark(); } else if (e.key === "Enter" && items[sel] && document.activeElement === input) { e.preventDefault(); pick(items[sel]); } };
+    document.addEventListener("keydown", key, true); input.addEventListener("input", () => { more = null; sel = 0; run(false); }); document.body.append(bg); paintF(); run(true); input.focus();
+  }
+  return { open };
+};
 
 
 /* member.js */
@@ -4622,7 +5899,7 @@
    Colours always mean the same thing: green = available, amber = held for guarantees, coral = loan owed, blue = interest, teal = profit. */
 window.SOBMember = function (E) {
   const { h, ugx, num, badge, Table, Modal, Form, toast, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Banner, Chips, Confirm, Field } = window.SOBUI;
-  const { st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
+  const { st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, grow } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
   const me = () => st.user.memberId, myName = () => (st.db.members.find((m) => m.id === me()) || {}).name || st.user.name;
   const help = () => S.reports.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
 
@@ -4682,6 +5959,7 @@ window.SOBMember = function (E) {
     const el = h("div", null, signInfo());
     if (reqs.length) el.append(Banner("warn", reqs.length === 1 ? "Someone has asked you to guarantee a loan." : reqs.length + " people have asked you to guarantee a loan.", { label: "Review", onclick: () => go("myguar") }));
     if (!paidSub) el.append(Banner("info", "Your " + year + " annual subscription is not recorded yet. Please see the Treasurer.", { label: "Details", onclick: () => go("mysubs") }));
+    if (grow) grow("top").forEach((n) => el.append(n));
     cheer(pos, paidSub);
     el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }] : [])),
       h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }));
@@ -4698,6 +5976,7 @@ window.SOBMember = function (E) {
     /* Guarantees summary */
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
     if (given.length) el.append(Section("Loans I guarantee"), List([Row({ icon: "shield", tone: "commit", title: given.length + (given.length === 1 ? " active guarantee" : " active guarantees"), sub: "Held until the borrowers repay", right: ugx(pos.committed), onOpen: () => go("myguar") })]));
+    if (grow) grow().forEach((n) => el.append(n));
     /* Shortcuts */
     el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("book", "My statement", "See every transaction", () => openStatement(me(), false)), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
     /* Recent activity */
@@ -4962,11 +6241,11 @@ window.SOBMember = function (E) {
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
+  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["status", "System Status", "Admin", "shield"], ["content", "Content", "Admin", "book"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
   /* the four tabs on a phone's bottom bar depend on the role: each role sees its own most-used screens first, everything else is under More or Search */
   const PHONE_TABS = { Admin: ["dash", "members", "loans", "ledger"], Chairperson: ["dash", "approvals", "loans", "reports"], Treasurer: ["dash", "ledger", "members", "loans"], Secretary: ["dash", "members", "reports", "ledger"], Committee: ["dash", "reports", "members", "loans"] };
   const phoneTab = (k) => (PHONE_TABS[st.user && st.user.role] || PHONE_TABS.Admin).indexOf(k);
-  const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
+  const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["grow", "Grow", null, "chart"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
     if (!st.live || !st.user || st.user.mustChangePin || st.refreshing) return; st.refreshing = true;
@@ -5019,7 +6298,7 @@ window.SOBMember = function (E) {
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
     if (staff) { const cur = nav.find((n) => n[0] === st.view); if (cur) { main.append(h("div", { class: "pagetitle" + (st.view === "dash" ? " hide-m" : "") }, backBtn, h("h1", null, cur[1]))); backPlaced = !!backBtn; } }
     if (backBtn && !backPlaced) main.prepend(backBtn);
-    try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
+    try { main.append(L.indexed(st.db, () => VIEWS[st.view]())); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
   /* ---------- drill-down helpers ---------- */
@@ -5189,23 +6468,12 @@ window.SOBMember = function (E) {
     return h("div", { id: "menu-screen" }, h("section", { class: "panel acct" }, h("span", { class: "avatar" }, (st.user.name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()), h("div", { class: "am" }, h("div", { class: "an" }, st.user.name), h("div", { class: "ar" }, roleLabel(st.user.role) + (st.live ? "" : " · demo")))), groups.map((g) => h("section", { class: "mgroup" }, h("h2", { class: "sec" }, g.g), h("div", { class: "mlist" }, g.items.map(([k, l, , ic]) => { const b = navBadge(k); return h("button", { class: "mrow", "data-menu": k, onclick: () => go(k) }, Icon(ic, 22), h("span", { class: "mt" }, l), b ? h("span", { class: "badge-n" }, String(b)) : null, Icon("chevron", 16, "go")); })))));
   }
   /* SEARCH: reach any screen, member or loan from anywhere (press / or Ctrl+K on a computer) */
+  let SS = null;
   function openSearch() {
-    if (document.querySelector(".pal-bg")) return;
-    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && !["menu", "more"].includes(n[0]));
-    const input = h("input", { type: "search", id: "pal-input", placeholder: staff ? "Search screens, members, loans…" : "Where do you want to go?", "aria-label": "Search", autocomplete: "off", inputmode: "search" }), list = h("div", { class: "pal-list", id: "pal-list", role: "listbox" });
-    const bg = h("div", { class: "pal-bg", onclick: (e) => { if (e.target === bg) close(); } }, h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Search" }, input, list, h("div", { class: "pal-foot" }, h("span", null, "↑↓ to move"), h("span", null, "Enter to open"), h("span", null, "Esc to close"))));
-    let items = [], sel = 0; const close = () => { document.removeEventListener("keydown", key, true); bg.remove(); };
-    const run = (it) => { close(); it.run(); };
-    const draw = () => { list.replaceChildren(); if (!items.length) { list.append(h("div", { class: "pal-empty" }, "Nothing matches that. Try a name, an SOB ID or a screen.")); return; } let lastH = "";
-      items.forEach((it, i) => { if (it.h !== lastH) { list.append(h("div", { class: "pal-h" }, it.h)); lastH = it.h; } list.append(h("button", { class: "pal-i" + (i === sel ? " sel" : ""), role: "option", "data-pal": it.id, onclick: () => run(it) }, Icon(it.ic, 20), h("span", null, it.t, it.s ? h("small", null, it.s) : null))); });
-      const s = list.querySelector(".sel"); if (s && s.scrollIntoView) s.scrollIntoView({ block: "nearest" }); };
-    const build = (q) => { q = q.trim().toLowerCase(); const out = [];
-      nav.filter((n) => !q || n[1].toLowerCase().includes(q) || (NAV_GROUP[n[0]] || "").toLowerCase().includes(q)).slice(0, q ? 6 : 8).forEach((n) => out.push({ h: "Go to", id: n[0], ic: n[3], t: n[1], s: NAV_GROUP[n[0]] || "", run: () => go(n[0]) }));
-      if (staff && q.length >= 2) { (st.db.members || []).filter((m) => (m.name || "").toLowerCase().includes(q) || (m.id || "").toLowerCase().includes(q) || String(m.phone || "").replace(/\s/g, "").includes(q.replace(/\s/g, ""))).slice(0, 6).forEach((m) => out.push({ h: "Members", id: m.id, ic: "user", t: m.name, s: m.id, run: () => { go("members"); openMember(m.id); } }));
-        (st.db.loans || []).filter((l) => !l.voided && ((l.id || "").toLowerCase().includes(q) || nameOf(l.memberId).toLowerCase().includes(q))).slice(0, 5).forEach((l) => out.push({ h: "Loans", id: l.id, ic: "loan", t: nameOf(l.memberId), s: l.id + " · " + l.status, run: () => { go("loans"); openLoan(l.id); } })); }
-      items = out; sel = 0; draw(); };
-    const key = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } else if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); } else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); } else if (e.key === "Enter" && items[sel]) { e.preventDefault(); run(items[sel]); } };
-    document.addEventListener("keydown", key, true); input.addEventListener("input", () => build(input.value)); document.body.append(bg); build(""); input.focus();
+    if (!SS) SS = window.SOBSmartSearch({ st, go, isStaff, nameOf, openMember, openLoan, today,
+      screens: () => (isStaff() ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && !["menu", "more"].includes(n[0]) && !(!isStaff() && MV.hiddenTab(n[0]))).map((n) => ({ id: n[0], title: n[1], group: NAV_GROUP[n[0]] || "", ic: n[3] })),
+      reports: () => (isStaff() ? S.reportcentre.catalogue().filter((c) => !c.personal || canExport()) : []).map((c) => ({ id: c.id, title: c.title, about: c.about, group: c.group })) });
+    SS.open();
   }
   document.addEventListener("keydown", (e) => { if (!st.user || document.querySelector(".pal-bg")) return; const t = e.target, typing = t && /INPUT|TEXTAREA|SELECT/.test(t.tagName); if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !typing)) { e.preventDefault(); openSearch(); } });
   /* ---------- the full member statement: one account object feeds this screen, the PDF and the WhatsApp text ---------- */
@@ -5385,10 +6653,11 @@ window.SOBMember = function (E) {
     if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); upd(); }
   }
   /* a small live-preview panel for a form: compute() returns {rows:[[label,value,cls]], error, note}; the Save button is off while there is an error */
+  const withCommasUI = (v) => (window.SOBUI && window.SOBUI.withCommas ? window.SOBUI.withCommas(String(Math.round(Number(v) || 0))) : String(v));
   function livePanel(m, names, compute) {
     const box = h("div", { class: "preview" }), go = m.el.querySelector("[data-submit]"); m.el.querySelector(".err").before(box);
     const q = (n) => m.el.querySelector('[name="' + n + '"]'), row = (r) => h("div", { class: "pv-row " + (r[2] || "") }, h("span", null, r[0]), h("b", null, r[1]));
-    const upd = () => { let r; try { r = compute((n) => (q(n) ? q(n).value : "")); } catch (e) { console.error("[SOB] preview:", e); r = { error: "Cannot show the result for these values." }; }
+    const upd = () => { let r; try { r = compute((n) => (q(n) ? (q(n).dataset && q(n).dataset.money ? q(n).value.replace(/,/g, "") : q(n).value) : "")); } catch (e) { console.error("[SOB] preview:", e); r = { error: "Cannot show the result for these values." }; }
       box.replaceChildren(...(r.rows || []).map(row), r.error ? Banner("bad", r.error) : null, r.note ? h("p", { class: "mute" }, r.note) : null); if (go) go.disabled = !!r.error; };
     names.forEach((n) => { const e = q(n); if (e) { e.addEventListener("input", upd); e.addEventListener("change", upd); } }); upd();
   }
@@ -5401,7 +6670,7 @@ window.SOBMember = function (E) {
       return { rows: [["Owed on " + D.toDisplay(d), ugx(owed)], ["This payment", ugx(a)], ["Owed after", ugx(owed - a), "good"], ["Loan after", owed - a === 0 ? "Cleared · interest stops" : "Still running", owed - a === 0 ? "good" : ""]] }; });
   }
   function payoutForm(loan, id) {
-    const m = Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"));
+    const m = Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }].concat(chargeFields()), act(async (f) => { await commit("addDisbursement", Object.assign({ loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }, chargeArgs(f))); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"));
     livePanel(m, ["amount", "date"], (g) => { const a = Number(g("amount")), d = g("date"); if (!(a > 0)) return { rows: [["Loan now", ugx(loan.loanAmount)]], note: "Type the amount to see the result." };
       if (D.isISO(d) && loan.date && d < loan.date) return { error: "A further payout cannot be before the first payout (" + D.toDisplay(loan.date) + ")." };
       return { rows: [["Loan now", ugx(loan.loanAmount)], ["Further payout", ugx(a)], ["Loan after", ugx(Number(loan.loanAmount) + a), "good"]], note: "The Chairperson approves before it counts." }; });
@@ -5423,8 +6692,8 @@ window.SOBMember = function (E) {
       if (loan.date && d < loan.date) return say([Banner("bad", "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ").")], false);
       const owed = L.loanOutstanding(loan, st.db, d), sav = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), w = L.loanInterestPosition(loan, st.db, d), due = (w.unpaidInterest || 0) + (w.unpaidPenalties || 0);
       if (!(owed > 0)) return say([Banner("warn", "Nothing is owed on " + D.toDisplay(d) + ".")], false);
-      if (ai && !touched) ai.value = Math.min(owed, sav) > 0 ? Math.min(owed, sav) : "";
-      const take = Number(ai && ai.value);
+      if (ai && !touched) ai.value = Math.min(owed, sav) > 0 ? withCommasUI(Math.min(owed, sav)) : "";
+      const take = Number(ai && String(ai.value).replace(/,/g, ""));
       const head = [row("Owed on " + D.toDisplay(d), ugx(owed)), row("Member's savings", ugx(sav))];
       if (!(take > 0)) return say(head.concat([h("p", { class: "mute" }, "Type the amount to take from savings.")]), false);
       if (take > owed) return say(head.concat([Banner("bad", "That is more than is owed (" + ugx(owed) + ").")]), false);
@@ -5450,7 +6719,7 @@ window.SOBMember = function (E) {
       { name: "reason", label: "Reason (required)" });
     const m = Form("Correct this loan", fields, act(async (f) => { await commit("correctLoan", { loanId: id, restore: f.restore === "yes", amount: f.amount, lockFrom: f.lockFrom, reason: f.reason }); M().remove(); openLoan(id); }, "Correction sent to the Chairperson for one approval"), "Send for approval");
     const q = (n) => m.el.querySelector('[name="' + n + '"]');
-    const upd = () => { const a = q("amount") && q("amount").value, lk = q("lockFrom") && q("lockFrom").value, amt = a === "" || a == null ? Number(v.assignedMonthlyInterest) || 0 : Number(a);
+    const upd = () => { const a = q("amount") && q("amount").value.replace(/,/g, ""), lk = q("lockFrom") && q("lockFrom").value, amt = a === "" || a == null ? Number(v.assignedMonthlyInterest) || 0 : Number(a);
       if (lk && !D.isISO(lk)) { preview.textContent = ""; return; }
       if (lk && loan.date && lk < loan.date) { preview.textContent = "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ")."; return; }
       const c2 = Object.assign({}, loan, { voided: false, assignedMonthlyInterest: amt, interestLocks: (loan.interestLocks || []).concat(lk ? [{ from: lk, to: "" }] : []) });
@@ -5485,7 +6754,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
     add(loan.status === "AwaitingApproval" ? "Approve (second approval)" : "Approve", (G.can(c, "loan.review") && loan.status === "Pending") || (G.can(c, "loan.secondApprove") && loan.status === "AwaitingApproval"), act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Done"), "primary");
     add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [reasonField("reason.Decline")], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
-    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
+    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")].concat(chargeFields()), act(async (f) => { await commit("disburseLoan", Object.assign({ loanId: id, assignedMonthlyInterest: f.rate, date: f.date }, chargeArgs(f))); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => payoutForm(loan, id));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => repayForm(loan, id), "primary");
     add("Correct loan", G.can(c, "loan.editInterest") && loan.status === "Active", () => correctForm(loan, v), "primary");
@@ -5505,11 +6774,59 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         Card("Backing needed", ugx(a.required), a.guarantorsApply ? "Only the part beyond the guideline" : "Guarantor policy starts " + D.longDate(a.guarantorPolicyStart) + "; none required yet"), Card("Backing accepted", ugx(a.backing), "Guarantees " + num(a.guaranteeCover) + " · security " + num(a.securityCover))),
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
+  /* ---------- Batch entry: several lines, checked together, submitted together ---------- */
+  function batchForm() {
+    const BT = S.batch, UI = window.SOBUI, rows = [], members = st.db.members.slice().sort((a, b) => a.name.localeCompare(b.name)), receiptsOn = (() => { try { return !!RMD.getReceipts(st.db).enabled; } catch (e) { return false; } })();
+    const blankRow = () => ({ memberId: "", type: "Savings", amount: "", date: today(), reference: "", purpose: "", bankCharge: "", chargedTo: "Member" });
+    let checked = null, accepted = false; rows.push(blankRow());
+    const list = h("div", { id: "batch-list" }), summary = h("div", { id: "batch-summary", role: "status" }), foot = h("div", { class: "row" });
+    const stale = () => { checked = null; accepted = false; paintState(); };
+    const field = (label, node, key, i) => h("div", { class: "bfld", "data-bf": key }, h("label", null, label), node, h("div", { class: "err bf-err", "data-err": key }));
+    const card = (r, i) => {
+      const sel = h("select", { onchange: (e) => { r.memberId = e.target.value; stale(); } }, [h("option", { value: "" }, "Choose member")].concat(members.map((m) => h("option", { value: m.id }, m.name + " (" + m.id + ")")))); sel.value = r.memberId;
+      const type = h("select", { onchange: (e) => { r.type = e.target.value; stale(); paintCards(); } }, [["Savings", "Savings deposit"], ["Withdraw", "Withdrawal"], ["Expense", "Group expense"], ["Income", "Group income"]].map(([v, t]) => h("option", { value: v }, t))); type.value = r.type;
+      const amt = UI.moneyInput({ name: "amount", label: "Amount (UGX)", value: r.amount, placeholder: "e.g. 125,000" }); amt.el.addEventListener("input", () => { r.amount = amt.get(); stale(); });
+      const date = h("input", { type: "date", value: r.date, max: today(), onchange: (e) => { r.date = e.target.value; stale(); } });
+      const ref = h("input", { type: "text", value: r.reference, placeholder: "Receipt or bank reference (optional)", maxlength: "40", oninput: (e) => { r.reference = e.target.value; stale(); } });
+      const purp = h("input", { type: "text", value: r.purpose, placeholder: r.type === "Expense" || r.type === "Income" ? "What is it for? (required)" : "Purpose (optional)", maxlength: "80", oninput: (e) => { r.purpose = e.target.value; stale(); } });
+      const chg = UI.moneyInput({ name: "bankCharge", label: "Bank charge (UGX)", value: r.bankCharge, placeholder: "0 if none" }); chg.el.addEventListener("input", () => { r.bankCharge = chg.get(); stale(); });
+      const by = h("select", { onchange: (e) => { r.chargedTo = e.target.value; stale(); } }, [["Member", "Paid by the member"], ["Group", "Paid by the group"]].map(([v, t]) => h("option", { value: v }, t))); by.value = r.chargedTo;
+      const w = r.type === "Withdraw";
+      return h("div", { class: "card bcard", "data-line": String(i + 1) }, h("div", { class: "bhead" }, h("b", null, "Line " + (i + 1)), rows.length > 1 ? h("button", { class: "linkbtn", "data-remove": String(i + 1), onclick: () => { rows.splice(i, 1); stale(); paintCards(); } }, "Remove") : null),
+        h("div", { class: "two" }, field("Type", type, "type"), field("Date", date, "date")), ["Savings", "Withdraw"].includes(r.type) ? field("Member", sel, "memberId") : null, field("Amount (UGX)", amt.el, "amount"),
+        w ? h("div", { class: "two" }, field("Bank charge (UGX)", chg.el, "bankCharge"), field("Paid by", by, "chargedTo")) : null, h("div", { class: "two" }, field("Reference", ref, "reference"), field("Purpose", purp, "purpose")), h("div", { class: "bl-issues", "data-issues": String(i + 1) }));
+    };
+    const paintCards = () => { list.replaceChildren(...rows.map(card)); paintState(); };
+    const paintState = () => {
+      list.querySelectorAll(".bf-err").forEach((e) => { e.textContent = ""; }); list.querySelectorAll(".bl-issues").forEach((e) => e.replaceChildren()); list.querySelectorAll(".bfld.bad").forEach((e) => e.classList.remove("bad"));
+      foot.replaceChildren();
+      if (checked) {
+        checked.rows.forEach((x) => { const idx = rows.filter((r, k) => k <= x.index).length; const c = list.querySelector('[data-line="' + (x.index + 1) + '"]'); if (!c) return;
+          Object.keys(x.fields).forEach((k) => { const e = c.querySelector('[data-err="' + k + '"]'); if (e) { e.textContent = x.fields[k]; e.parentElement.classList.add("bad"); } });
+          const box = c.querySelector(".bl-issues"); x.errors.filter((m) => !Object.values(x.fields).includes(m)).forEach((m) => box.append(h("div", { class: "err" }, m))); x.warnings.forEach((m) => box.append(h("div", { class: "warn-note" }, "Check: " + m))); });
+        const ok = checked.ok, wn = checked.warningCount;
+        summary.replaceChildren(h("div", { class: "card status-banner s-" + (ok ? (wn ? "warn" : "ok") : "fail") }, h("b", null, ok ? (wn ? "Ready, with " + wn + " thing" + (wn === 1 ? "" : "s") + " to check" : "All " + checked.total + " lines are fine") : checked.errorCount + " problem" + (checked.errorCount === 1 ? "" : "s") + " to fix before you can submit"), h("span", { class: "mute" }, " · " + ugx(checked.deposits) + " in, " + ugx(checked.payouts) + " out" + (checked.charges ? ", " + ugx(checked.charges) + " bank charges" : ""))));
+        if (ok && wn) foot.append(h("label", { class: "pickrow" }, h("input", { type: "checkbox", id: "batch-accept", onchange: (e) => { accepted = e.target.checked; go.disabled = !accepted; } }), " I have read the warnings and want to submit anyway"));
+      } else summary.replaceChildren(h("div", { class: "hint" }, "Fill in your lines, then tap Check all. Nothing is saved until you submit."));
+      go.disabled = !(checked && checked.ok && (!checked.warningCount || accepted)); foot.append(h("div", { class: "row" }, h("button", { id: "batch-add", onclick: () => { rows.push(blankRow()); stale(); paintCards(); list.lastChild && list.lastChild.scrollIntoView({ block: "center" }); } }, "+ Add line"), h("button", { id: "batch-check", onclick: check }, "Check all"), go));
+    };
+    const go = h("button", { class: "primary", id: "batch-submit", disabled: true }, "Submit all");
+    const check = () => { checked = BT.validate(st.db, rows, { today: today(), receiptsOn }); accepted = false; paintState(); const first = list.querySelector(".bfld.bad, .warn-note"); if (first) first.scrollIntoView({ block: "center" }); };
+    const err = h("div", { class: "err", role: "alert" });
+    const m = Modal("Batch entry", h("div", null, h("p", { class: "mute" }, "Add as many lines as you need. Check all of them together, fix anything flagged, then submit them all at once. If one line is refused, none are saved."), summary, list, err, foot), { sticky: true });
+    go.onclick = async () => { if (go.disabled) return; go.disabled = true; err.textContent = "";
+      try { await commit("createEntries", { entries: rows, acceptWarnings: accepted }); m.close(); toast(st.sentForApproval ? "Sent for approval" : checked.total + " lines recorded"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+    paintCards();
+  }
+  /* Bank charge typed by hand on a withdrawal or a loan payout: same form, saved as its own linked ledger line. */
+  const chargeFields = (when) => [{ name: "charge", label: "Bank charge (UGX), if any", type: "number", money: true, showWhen: when || (() => true), placeholder: "0 if none" }, { name: "chargedTo", label: "Bank charge is paid by", options: [{ value: "Member", label: "The member (taken from their savings)" }, { value: "Group", label: "The group (a group expense)" }], showWhen: when || (() => true) }];
+  const chargeArgs = (f) => (Number(f.charge) > 0 ? { bankCharge: Number(f.charge), chargedTo: f.chargedTo || "Member" } : {});
   /* ---------- who will get a text: masked number, confirmed or not, shared numbers ---------- */
   const maskPhone = (p) => { const d = String(p || "").replace(/\D/g, ""); return d.length >= 7 ? d.slice(0, 4) + " ••• " + d.slice(-3) : "no number"; };
   const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
   const recipientLine = (m, shared) => { const k = N.normalizePhone(m.phone), twin = k && shared[k] && shared[k].length > 1 ? shared[k].filter((x) => x !== m.id) : [];
     return h("span", { class: "mute", style: "font-size:13px" }, " · " + m.id + " · " + maskPhone(m.phone) + " · ", N.phoneConfirmed(m) ? h("span", { class: "ok" }, "number confirmed") : h("span", { class: "warn" }, "not confirmed"), twin.length ? h("b", { class: "warn" }, " · same number as " + twin.join(", ")) : null); };
+  const TPL = S.templates;
   const APOLOGY = "Tusonyiwe olw'obubaka bw'okujjukiza ebbanja bwofuna. Tetwagala kuswaaza tuli bakuumi b'obwesigwa. sasula b4 24 Nov. Blessing. Elder Pr. Kironde(c/p)";
   function numbersForm() {
     const shared = sharedNumbers(), picked = new Set(), rule = N.getSmsRule(st.db).requireConfirmed, go = h("button", { class: "primary", id: "confirm-go", disabled: true }, "Confirm 0"), note = h("input", { id: "confirm-note", placeholder: "How you checked, e.g. phoned the member" }), err = h("div", { class: "err", role: "alert" });
@@ -5528,7 +6845,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     ta.value = ""; const sync = () => { const len = (picked.size ? "SOB-000: " : "").length + ta.value.length; cnt.textContent = ta.value.length + " characters. Each text starts with the member's SOB ID and must stay in one SMS (160)."; go.textContent = "Send to " + picked.size; go.disabled = !picked.size || !ta.value.trim() || len > 160; };
     ta.oninput = sync;
     const m = Modal("Send a message", h("div", null, h("p", { class: "mute" }, "Tap who should get it. Plain letters only. The Chairperson approves before anything is queued."),
-      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text")),
+      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text"), (TPL.quick(st.db) || []).map((q) => h("button", { "data-quick": q.id, onclick: () => { ta.value = q.text.replace(/\{name\}/g, "").replace(/\{id\}/g, "").trim().slice(0, 160); sync(); } }, q.name))),
       ta, cnt,
       h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
       err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
@@ -5552,7 +6869,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   function loans() {
     const relief = G.can(ctx(), "loan.editInterest") ? RMD.interestRelief(st.db, today()).filter((r) => r.eligible && !r.told) : [];
     return h("div", null, h("div", { class: "row" }, relief.length ? h("button", { id: "tell-borrowers", onclick: () => reliefForm(relief) }, "Tell borrowers (" + relief.length + ")") : null, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }, listField("purpose", "What is the loan for?", "loan.Purpose")], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt, purpose: f.purpose }), "Application recorded")) }, "New application") : null,
-      G.can(ctx(), "loan.disburse") ? h("button", { id: "record-existing-loan", onclick: () => Form("Record a loan that was already paid out", [{ type: "note", text: "Use this for a loan paid out earlier (backdated). It starts on the date you choose and interest runs from that date. If the member's loan is only voided, open it and use Restore loan instead, so its history is kept." }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount paid out (UGX)", type: "number" }, dateF("date", "Date it was paid out"), { name: "rate", label: "Monthly interest (UGX) — required", type: "number" }, { name: "remarks", label: "Reason / note (required)" }], act(async (f) => { if (!String(f.remarks || "").trim()) throw new Error("REQUIRED: reason / note"); await commit("recordExistingLoan", { memberId: f.m, amount: Number(f.amt), date: f.date, assignedMonthlyInterest: f.rate, remarks: f.remarks }); }, "Loan recorded")) }, "Record existing loan") : null),
+      G.can(ctx(), "loan.disburse") ? h("button", { id: "record-existing-loan", onclick: () => Form("Record a loan that was already paid out", [{ type: "note", text: "Use this for a loan paid out earlier (backdated). It starts on the date you choose and interest runs from that date. If the member's loan is only voided, open it and use Restore loan instead, so its history is kept." }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount paid out (UGX)", type: "number" }, dateF("date", "Date it was paid out"), { name: "rate", label: "Monthly interest (UGX) — required", type: "number" }, { name: "remarks", label: "Reason / note (required)" }].concat(chargeFields()), act(async (f) => { if (!String(f.remarks || "").trim()) throw new Error("REQUIRED: reason / note"); await commit("recordExistingLoan", Object.assign({ memberId: f.m, amount: Number(f.amt), date: f.date, assignedMonthlyInterest: f.rate, remarks: f.remarks }, chargeArgs(f))); }, "Loan recorded")) }, "Record existing loan") : null),
       loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), null);
   }
@@ -5569,7 +6886,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   /* ---------- ledger ---------- */
   function ledger() {
     const all = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? [h("button", { id: "batch-open", onclick: batchForm }, "Batch entry"), h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }].concat(chargeFields((v) => v.type === "Withdraw")), act(async (f) => commit("createEntry", Object.assign({ memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }, f.type === "Withdraw" ? chargeArgs(f) : {})), "Entry recorded")) }, "New entry")] : null),
       Searchable("Search ledger", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
       return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", m: "s2", render: (t) => D.toDisplay(t.date) }, { label: "Member", m: "t", render: (t) => nameOf(t.memberId) }, { label: "Type", m: "s", key: "type" }, { label: "Amount", num: 1, m: "v", render: (t) => num(t.amount) }, { label: "State", m: "b", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
@@ -5666,6 +6983,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         else if (q.command === "voidLoan" || q.command === "restoreLoan") rows.push(["Action", q.command === "voidLoan" ? "Void (cancel) this loan" : "Restore this voided loan"]);
         else if (q.command === "addDisbursement") rows.push(["Further payout", money(a.amount) + " on " + D.toDisplay(a.date)], ["Loan after", money(Number(loan.loanAmount) + Number(a.amount))]);
         else rows.push(["Action", q.label]);
+        if (a && Number(a.bankCharge) > 0) rows.push(["Bank charge", money(a.bankCharge) + " paid by " + (a.chargedTo === "Group" ? "the group" : "the member")]);
       } else { rows.push(["Action", q.label], ["Detail", q.summary]); }
       rows.push(["Reason", q.reason || "(none given)"], ["Requested by", q.requestedBy + " (" + (q.requestedByRole || "") + ") on " + D.toDisplay(q.requestedDate)]); return rows; };
     const reqLine = (q) => reqRows(q).filter((x) => !["Reason", "Requested by", "Member", "Loan"].includes(x[0])).map((x) => (x[0] === "Action" ? "" : x[0] + ": ") + x[1]).join(" · ") + (q.reason ? " · Reason: " + q.reason : "");
@@ -5776,7 +7094,8 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
-  const MV = window.SOBMember({ st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, statementView });
+  const GR = window.SOBGrow({ st, act, commit, render, today, go });
+  const MV = window.SOBMember({ grow: (part) => GR.homeCards(part), st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, statementView });
 
   /* ---------- airtime (members request; Admin fulfils) ---------- */
   const airtimeCols = (staff) => [{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(staff ? [{ label: "Member", render: (r) => r.memberName + " (" + r.memberId + ")" }] : [], [{ label: "Phone", key: "phone" }, { label: "Airtime", num: 1, render: (r) => num(r.airtimeAmount) }, { label: "Fee", num: 1, render: (r) => num(r.fee) }, { label: "Total", num: 1, render: (r) => num(r.total) },
@@ -5950,6 +7269,24 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   }
 
   /* ---------- messages / outbox (Admin) ---------- */
+  /* MESSAGE WORDING: every automatic text is a setting. Edit with a live preview and a character counter; the Chairperson approves; clear it to go back to the default. */
+  function wordingForm(it) {
+    const cur = it.current, ta = h("textarea", { id: "tpl-text", rows: "5", maxlength: String(TPL.MAX) }), prev = h("div", { class: "preview", id: "tpl-preview" }), cnt = h("div", { class: "mute", id: "tpl-count" }), probs = h("div", { class: "err", id: "tpl-problems", role: "alert" });
+    ta.value = cur; const sync = () => { const t = ta.value, i = TPL.smsInfo(t), bad = TPL.check(it.key, t); prev.textContent = TPL.preview(it.key, t); cnt.textContent = i.length + " characters · " + i.segments + (i.segments === 1 ? " text message" : " text messages") + (i.unicode ? " · contains symbols that shorten each text to 70 characters" : "") + (i.segments > 1 ? " · the member's SOB ID is added at the start" : ""); probs.textContent = bad.join(" · "); save.disabled = !!bad.length; };
+    const save = h("button", { class: "primary", id: "tpl-save" }, "Send for approval");
+    const chips = it.placeholders.map((p) => h("button", { class: "chip", type: "button", title: p.about, "data-ph": p.name, onclick: () => { const a = ta.selectionStart || ta.value.length; ta.value = ta.value.slice(0, a) + "{" + p.name + "}" + ta.value.slice(ta.selectionEnd || a); ta.focus(); sync(); } }, "{" + p.name + "}"));
+    const m = Modal(it.label, h("div", null, h("p", { class: "mute" }, "Words only. Tap a name below to put it in; it is filled in automatically for each member. The Chairperson approves a change before it is used."), h("div", { class: "pal-chips" }, chips), ta, cnt, h("div", { class: "mute" }, "Preview with sample values:"), prev, probs,
+      h("div", { class: "row" }, save, h("button", { id: "tpl-reset", onclick: () => { ta.value = it.text; sync(); } }, "Use the standard wording"), h("button", { onclick: () => m.close() }, "Cancel"))));
+    ta.oninput = sync; sync();
+    save.onclick = act(async () => { await commit("setMessageTemplate", { key: it.key, text: ta.value, reason: "Wording changed" }); m.close(); }, "Saved");
+  }
+  function wordingPanel() {
+    const groups = []; TPL.list(st.db).forEach((it) => { let g = groups.find((x) => x.n === it.group); if (!g) groups.push(g = { n: it.group, items: [] }); g.items.push(it); });
+    const quickForm = (q) => Form(q ? "Edit quick message" : "New quick message", [{ name: "name", label: "Name (short)", value: q ? q.name : "" }, { name: "text", label: "Message (you may use {name} and {id})", type: "textarea", value: q ? q.text : "" }], act(async (f) => { await commit("saveQuickMessage", { id: q && q.id, name: f.name, text: f.text }); }, "Saved"), "Save");
+    return h("div", { id: "wording-panel" }, h("h2", { class: "sec" }, "Message wording"), h("p", { class: "mute" }, "The words of every automatic message. Change them here: no update to the system is needed. Amounts, dates and names fill in by themselves."),
+      groups.map((g) => h("div", { class: "card" }, h("h3", { class: "sec" }, g.n), g.items.map((it) => h("button", { class: "mrow", "data-tpl": it.key, onclick: () => wordingForm(it) }, h("span", { class: "mt" }, it.label, h("small", { class: "mute", style: "display:block" }, TPL.preview(it.key, it.current).slice(0, 90) + (it.isCustom ? "" : ""))), it.broken ? badge("Needs fixing", "bad") : it.isCustom ? badge("Changed", "warn") : h("span", { class: "mute" }, "Standard"))))),
+      h("div", { class: "card" }, h("h3", { class: "sec" }, "Quick messages (for Send a message)"), (TPL.quick(st.db) || []).map((q) => h("div", { class: "row", "data-qm": q.id }, h("b", null, q.name), h("span", { class: "mute" }, q.text.slice(0, 60)), h("button", { onclick: () => quickForm(q) }, "Edit"), h("button", { class: "danger", onclick: act(async () => { await commit("removeQuickMessage", { id: q.id }); }, "Removed") }, "Remove"))), h("div", { class: "row" }, h("button", { id: "qm-new", onclick: () => quickForm(null) }, "Add a quick message"))));
+  }
   function messages() {
     if (st.live && !st.gw) { st.gw = { SMS: false, WHATSAPP: false, loading: true }; st.store.call({ action: "gatewayStatus" }).then((r) => { st.gw = r.live; render(); }).catch(() => { st.gw = { SMS: false, WHATSAPP: false }; render(); }); }
     const gw = st.live ? (st.gw || {}) : { SMS: false, WHATSAPP: false }, sum = N.summary(st.db), ob = (st.db.outbox || []).slice().reverse().slice(0, 200);
@@ -5969,7 +7306,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       Table([{ label: "Created", render: (m) => D.toDisplay(String(m.createdAt).slice(0, 10)) }, { label: "To", render: (m) => m.to === "ADMIN" ? "Admin phone" : (m.memberId ? nameOf(m.memberId) + " " : "") + m.to }, { label: "Channel", key: "channel" }, { label: "Message", key: "body" },
         { label: "Status", render: (m) => badge(m.status, m.status === "SENT" ? "ok" : m.status === "FAILED" ? "bad" : m.status === "QUEUED" || m.status === "DRY_RUN" ? "warn" : "mute") }, { label: "Note", key: "reason" },
         { label: "", render: (m) => ["SENT", "CANCELLED"].includes(m.status) ? "" : h("button", { "data-cancel-msg": m.id, onclick: () => Form("Cancel message", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelMessage", { id: m.id, reason: f.reason }), "Cancelled")) }, "Cancel") }], ob),
-      null);
+      wordingPanel());
   }
 
 
@@ -6052,6 +7389,23 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       oc.res ? h("div", { id: "out-result" }, Banner("ok", (oc.res.dryRun ? "Check passed. Nothing was posted. " : "") + oc.res.posted + " to post or posted, " + oc.res.awaitingApproval + " waiting for the Chairperson, " + oc.res.alreadyProcessed + " already done."),
         Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }, { label: "Member", key: "memberId" }, { label: "Type", key: "type" }, { label: "Loan", key: "loanId" }, { label: "Amount (UGX)", num: 1, render: (r) => num(r.amount) }, { label: "Result", key: "result" }], oc.res.rows)) : null);
   }
+  /* ---------- System Status Centre: one page that says what works, what needs attention, and what to do ---------- */
+  function statusView() {
+    if (!st.live) return h("div", { class: "blocked" }, "The System Status Centre works on the live deployment, where there is a server to check.");
+    const load = () => { st.stat = { loading: true }; st.store.call({ action: "systemStatus" }).then((r) => { st.stat = { facts: r.facts, backups: r.backups || [], at: new Date() }; render(); }).catch((e) => { st.stat = { error: (e && e.message) || String(e), at: new Date() }; render(); }); };
+    if (!st.stat) { load(); }
+    const s = st.stat || { loading: true };
+    if (s.loading) return h("div", { class: "hint", role: "status" }, "Checking the system…");
+    let auto = {}, cfg = {}; try { auto = RMD.getAuto(st.db); cfg = RMD.getConfig(st.db); } catch (e) {}
+    const rep = S.status.compose(st.db, s.error ? null : s.facts, { today: today(), appBuild: CFG.build || "", error: s.error ? friendly(new Error(s.error)) : "", autoEnabled: !!auto.enabled, deadlineApproved: !!cfg.deadline, backups: s.backups });
+    const KIND = { ok: "ok", info: "mute", warn: "warn", fail: "bad" }, WORD = { ok: "All good", warn: "Needs attention", fail: "Action needed" }, groups = [];
+    rep.items.forEach((i) => { let g = groups.find((x) => x.name === i.group); if (!g) groups.push(g = { name: i.group, items: [] }); g.items.push(i); });
+    return h("div", { id: "status-centre" },
+      h("div", { class: "card status-banner s-" + rep.overall, role: "status" }, h("b", null, WORD[rep.overall]), h("span", { class: "mute" }, " · " + rep.counts.ok + " fine, " + rep.counts.warn + " to check, " + rep.counts.fail + " failing · checked " + (s.at ? s.at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""))),
+      rep.actions.length ? h("div", { class: "card" }, h("h3", { class: "sec" }, "What to do"), h("ol", { id: "status-actions" }, rep.actions.map((a) => h("li", null, h("b", null, a.label + ": "), a.action)))) : h("div", { class: "hint" }, "Nothing needs your attention."),
+      groups.map((g) => h("div", { class: "card" }, h("h3", { class: "sec" }, g.name), g.items.map((i) => h("div", { class: "status-row", "data-check": i.id }, h("div", { class: "status-top" }, h("b", null, i.label), " ", badge(i.state === "ok" ? "OK" : i.state === "info" ? "Info" : i.state === "warn" ? "Check" : "Failing", KIND[i.state])), h("div", { class: "mute" }, i.detail), i.action && i.state !== "ok" ? h("div", { class: "status-do" }, "→ " + i.action) : null)))),
+      h("div", { class: "row" }, h("button", { id: "status-refresh", onclick: () => { st.stat = null; render(); } }, "Check again")));
+  }
   function system() {
     if (!st.live) return h("div", { class: "blocked" }, "Available on the live deployment only.");
     if (!st.sys) { st.sys = { loading: true, backups: [] }; st.store.call({ action: "listBackups" }).then((r) => { st.sys = { backups: r.backups }; render(); }).catch((e) => { st.sys = { backups: [], error: friendly(e) }; render(); }); }
@@ -6094,7 +7448,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, status: statusView, content: GR.staffView, grow: GR.memberView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the SOB backend is older than this app (server " + String(r.build).slice(0, 6) + ", app " + String(CFG.build || "").slice(0, 6) + "). Admin: redeploy the latest Code_Ledger.gs as a New version of the same deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (app " + String(CFG.build || "").slice(0, 6) + " · server " + String(r.build).slice(0, 6) + ")" : "") + "."; };
