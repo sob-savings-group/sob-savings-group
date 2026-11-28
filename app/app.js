@@ -558,10 +558,11 @@
     if (di) { di.addEventListener("input", upd); di.addEventListener("change", upd); upd(); }
   }
   /* a small live-preview panel for a form: compute() returns {rows:[[label,value,cls]], error, note}; the Save button is off while there is an error */
+  const withCommasUI = (v) => (window.SOBUI && window.SOBUI.withCommas ? window.SOBUI.withCommas(String(Math.round(Number(v) || 0))) : String(v));
   function livePanel(m, names, compute) {
     const box = h("div", { class: "preview" }), go = m.el.querySelector("[data-submit]"); m.el.querySelector(".err").before(box);
     const q = (n) => m.el.querySelector('[name="' + n + '"]'), row = (r) => h("div", { class: "pv-row " + (r[2] || "") }, h("span", null, r[0]), h("b", null, r[1]));
-    const upd = () => { let r; try { r = compute((n) => (q(n) ? q(n).value : "")); } catch (e) { console.error("[SOB] preview:", e); r = { error: "Cannot show the result for these values." }; }
+    const upd = () => { let r; try { r = compute((n) => (q(n) ? (q(n).dataset && q(n).dataset.money ? q(n).value.replace(/,/g, "") : q(n).value) : "")); } catch (e) { console.error("[SOB] preview:", e); r = { error: "Cannot show the result for these values." }; }
       box.replaceChildren(...(r.rows || []).map(row), r.error ? Banner("bad", r.error) : null, r.note ? h("p", { class: "mute" }, r.note) : null); if (go) go.disabled = !!r.error; };
     names.forEach((n) => { const e = q(n); if (e) { e.addEventListener("input", upd); e.addEventListener("change", upd); } }); upd();
   }
@@ -574,7 +575,7 @@
       return { rows: [["Owed on " + D.toDisplay(d), ugx(owed)], ["This payment", ugx(a)], ["Owed after", ugx(owed - a), "good"], ["Loan after", owed - a === 0 ? "Cleared · interest stops" : "Still running", owed - a === 0 ? "good" : ""]] }; });
   }
   function payoutForm(loan, id) {
-    const m = Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }], act(async (f) => { await commit("addDisbursement", { loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"));
+    const m = Form("Add a further payout to this loan", [{ name: "amount", label: "Amount paid out now (UGX)", type: "number" }, dateF("date", "Date paid out"), { name: "reason", label: "Reason (e.g. second instalment of the approved loan)" }].concat(chargeFields()), act(async (f) => { await commit("addDisbursement", Object.assign({ loanId: id, amount: Number(f.amount), date: f.date, reason: f.reason }, chargeArgs(f))); M().remove(); openLoan(id); }, "Sent to the Chairperson for approval"));
     livePanel(m, ["amount", "date"], (g) => { const a = Number(g("amount")), d = g("date"); if (!(a > 0)) return { rows: [["Loan now", ugx(loan.loanAmount)]], note: "Type the amount to see the result." };
       if (D.isISO(d) && loan.date && d < loan.date) return { error: "A further payout cannot be before the first payout (" + D.toDisplay(loan.date) + ")." };
       return { rows: [["Loan now", ugx(loan.loanAmount)], ["Further payout", ugx(a)], ["Loan after", ugx(Number(loan.loanAmount) + a), "good"]], note: "The Chairperson approves before it counts." }; });
@@ -596,8 +597,8 @@
       if (loan.date && d < loan.date) return say([Banner("bad", "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ").")], false);
       const owed = L.loanOutstanding(loan, st.db, d), sav = L.memberVerifiedSavingsAsOf(st.db, loan.memberId, d), w = L.loanInterestPosition(loan, st.db, d), due = (w.unpaidInterest || 0) + (w.unpaidPenalties || 0);
       if (!(owed > 0)) return say([Banner("warn", "Nothing is owed on " + D.toDisplay(d) + ".")], false);
-      if (ai && !touched) ai.value = Math.min(owed, sav) > 0 ? Math.min(owed, sav) : "";
-      const take = Number(ai && ai.value);
+      if (ai && !touched) ai.value = Math.min(owed, sav) > 0 ? withCommasUI(Math.min(owed, sav)) : "";
+      const take = Number(ai && String(ai.value).replace(/,/g, ""));
       const head = [row("Owed on " + D.toDisplay(d), ugx(owed)), row("Member's savings", ugx(sav))];
       if (!(take > 0)) return say(head.concat([h("p", { class: "mute" }, "Type the amount to take from savings.")]), false);
       if (take > owed) return say(head.concat([Banner("bad", "That is more than is owed (" + ugx(owed) + ").")]), false);
@@ -623,7 +624,7 @@
       { name: "reason", label: "Reason (required)" });
     const m = Form("Correct this loan", fields, act(async (f) => { await commit("correctLoan", { loanId: id, restore: f.restore === "yes", amount: f.amount, lockFrom: f.lockFrom, reason: f.reason }); M().remove(); openLoan(id); }, "Correction sent to the Chairperson for one approval"), "Send for approval");
     const q = (n) => m.el.querySelector('[name="' + n + '"]');
-    const upd = () => { const a = q("amount") && q("amount").value, lk = q("lockFrom") && q("lockFrom").value, amt = a === "" || a == null ? Number(v.assignedMonthlyInterest) || 0 : Number(a);
+    const upd = () => { const a = q("amount") && q("amount").value.replace(/,/g, ""), lk = q("lockFrom") && q("lockFrom").value, amt = a === "" || a == null ? Number(v.assignedMonthlyInterest) || 0 : Number(a);
       if (lk && !D.isISO(lk)) { preview.textContent = ""; return; }
       if (lk && loan.date && lk < loan.date) { preview.textContent = "That date is before the loan was paid out (" + D.toDisplay(loan.date) + ")."; return; }
       const c2 = Object.assign({}, loan, { voided: false, assignedMonthlyInterest: amt, interestLocks: (loan.interestLocks || []).concat(lk ? [{ from: lk, to: "" }] : []) });
@@ -658,7 +659,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     add("Release guarantors", G.can(c, "guarantee.manage") && preDisb && (st.db.guarantees || []).some((g) => g.loanId === id && ["Active", "Requested"].includes(g.status)), () => Form("Release guarantors (before disbursement only)", [{ name: "reason", label: "Reason (required)" }], act(async (f) => { await commit("releaseGuarantor", { loanId: id, reason: f.reason }); M().remove(); openLoan(id); }, "Guarantors released")));
     add(loan.status === "AwaitingApproval" ? "Approve (second approval)" : "Approve", (G.can(c, "loan.review") && loan.status === "Pending") || (G.can(c, "loan.secondApprove") && loan.status === "AwaitingApproval"), act(async () => { await commit("approveLoan", { loanId: id }); M().remove(); openLoan(id); }, "Done"), "primary");
     add("Decline", (G.can(c, "loan.review") || G.can(c, "loan.secondApprove")) && preDisb, () => Form("Decline loan", [reasonField("reason.Decline")], act(async (f) => { await commit("declineLoan", { loanId: id, reason: f.reason }); M().remove(); }, "Loan declined")));
-    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")], act(async (f) => { await commit("disburseLoan", { loanId: id, assignedMonthlyInterest: f.rate, date: f.date }); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
+    add("Disburse", G.can(c, "loan.disburse") && loan.status === "Approved", () => Form("Disburse loan", [{ name: "rate", label: "Assigned monthly interest (UGX) — required", type: "number" }, dateF("date")].concat(chargeFields()), act(async (f) => { await commit("disburseLoan", Object.assign({ loanId: id, assignedMonthlyInterest: f.rate, date: f.date }, chargeArgs(f))); M().remove(); openLoan(id); }, "Loan disbursed")), "primary");
     add("Add a further payout", G.can(c, "loan.disburse") && loan.status === "Active", () => payoutForm(loan, id));
     add("Record repayment", G.can(c, "loan.repay") && loan.status === "Active", () => repayForm(loan, id), "primary");
     add("Correct loan", G.can(c, "loan.editInterest") && loan.status === "Active", () => correctForm(loan, v), "primary");
@@ -678,6 +679,53 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         Card("Backing needed", ugx(a.required), a.guarantorsApply ? "Only the part beyond the guideline" : "Guarantor policy starts " + D.longDate(a.guarantorPolicyStart) + "; none required yet"), Card("Backing accepted", ugx(a.backing), "Guarantees " + num(a.guaranteeCover) + " · security " + num(a.securityCover))),
       a.canApprove ? h("p", { class: "ok" }, !a.guarantorsApply && !a.withinGuideline ? "Guarantors are not required before " + D.longDate(a.guarantorPolicyStart) + " (SOB policy)." : a.withinGuideline && !a.required ? "Qualifies on the member's own savings." : "Backing is sufficient.") : h("div", { class: "blocked" }, a.reasons.join(" ")), a.securityBacked ? h("p", { class: "mute" }, "Exceptional route: relies on approved security, not only on guarantors.") : null);
   }
+  /* ---------- Batch entry: several lines, checked together, submitted together ---------- */
+  function batchForm() {
+    const BT = S.batch, UI = window.SOBUI, rows = [], members = st.db.members.slice().sort((a, b) => a.name.localeCompare(b.name)), receiptsOn = (() => { try { return !!RMD.getReceipts(st.db).enabled; } catch (e) { return false; } })();
+    const blankRow = () => ({ memberId: "", type: "Savings", amount: "", date: today(), reference: "", purpose: "", bankCharge: "", chargedTo: "Member" });
+    let checked = null, accepted = false; rows.push(blankRow());
+    const list = h("div", { id: "batch-list" }), summary = h("div", { id: "batch-summary", role: "status" }), foot = h("div", { class: "row" });
+    const stale = () => { checked = null; accepted = false; paintState(); };
+    const field = (label, node, key, i) => h("div", { class: "bfld", "data-bf": key }, h("label", null, label), node, h("div", { class: "err bf-err", "data-err": key }));
+    const card = (r, i) => {
+      const sel = h("select", { onchange: (e) => { r.memberId = e.target.value; stale(); } }, [h("option", { value: "" }, "Choose member")].concat(members.map((m) => h("option", { value: m.id }, m.name + " (" + m.id + ")")))); sel.value = r.memberId;
+      const type = h("select", { onchange: (e) => { r.type = e.target.value; stale(); paintCards(); } }, [["Savings", "Savings deposit"], ["Withdraw", "Withdrawal"], ["Expense", "Group expense"], ["Income", "Group income"]].map(([v, t]) => h("option", { value: v }, t))); type.value = r.type;
+      const amt = UI.moneyInput({ name: "amount", label: "Amount (UGX)", value: r.amount, placeholder: "e.g. 125,000" }); amt.el.addEventListener("input", () => { r.amount = amt.get(); stale(); });
+      const date = h("input", { type: "date", value: r.date, max: today(), onchange: (e) => { r.date = e.target.value; stale(); } });
+      const ref = h("input", { type: "text", value: r.reference, placeholder: "Receipt or bank reference (optional)", maxlength: "40", oninput: (e) => { r.reference = e.target.value; stale(); } });
+      const purp = h("input", { type: "text", value: r.purpose, placeholder: r.type === "Expense" || r.type === "Income" ? "What is it for? (required)" : "Purpose (optional)", maxlength: "80", oninput: (e) => { r.purpose = e.target.value; stale(); } });
+      const chg = UI.moneyInput({ name: "bankCharge", label: "Bank charge (UGX)", value: r.bankCharge, placeholder: "0 if none" }); chg.el.addEventListener("input", () => { r.bankCharge = chg.get(); stale(); });
+      const by = h("select", { onchange: (e) => { r.chargedTo = e.target.value; stale(); } }, [["Member", "Paid by the member"], ["Group", "Paid by the group"]].map(([v, t]) => h("option", { value: v }, t))); by.value = r.chargedTo;
+      const w = r.type === "Withdraw";
+      return h("div", { class: "card bcard", "data-line": String(i + 1) }, h("div", { class: "bhead" }, h("b", null, "Line " + (i + 1)), rows.length > 1 ? h("button", { class: "linkbtn", "data-remove": String(i + 1), onclick: () => { rows.splice(i, 1); stale(); paintCards(); } }, "Remove") : null),
+        h("div", { class: "two" }, field("Type", type, "type"), field("Date", date, "date")), ["Savings", "Withdraw"].includes(r.type) ? field("Member", sel, "memberId") : null, field("Amount (UGX)", amt.el, "amount"),
+        w ? h("div", { class: "two" }, field("Bank charge (UGX)", chg.el, "bankCharge"), field("Paid by", by, "chargedTo")) : null, h("div", { class: "two" }, field("Reference", ref, "reference"), field("Purpose", purp, "purpose")), h("div", { class: "bl-issues", "data-issues": String(i + 1) }));
+    };
+    const paintCards = () => { list.replaceChildren(...rows.map(card)); paintState(); };
+    const paintState = () => {
+      list.querySelectorAll(".bf-err").forEach((e) => { e.textContent = ""; }); list.querySelectorAll(".bl-issues").forEach((e) => e.replaceChildren()); list.querySelectorAll(".bfld.bad").forEach((e) => e.classList.remove("bad"));
+      foot.replaceChildren();
+      if (checked) {
+        checked.rows.forEach((x) => { const idx = rows.filter((r, k) => k <= x.index).length; const c = list.querySelector('[data-line="' + (x.index + 1) + '"]'); if (!c) return;
+          Object.keys(x.fields).forEach((k) => { const e = c.querySelector('[data-err="' + k + '"]'); if (e) { e.textContent = x.fields[k]; e.parentElement.classList.add("bad"); } });
+          const box = c.querySelector(".bl-issues"); x.errors.filter((m) => !Object.values(x.fields).includes(m)).forEach((m) => box.append(h("div", { class: "err" }, m))); x.warnings.forEach((m) => box.append(h("div", { class: "warn-note" }, "Check: " + m))); });
+        const ok = checked.ok, wn = checked.warningCount;
+        summary.replaceChildren(h("div", { class: "card status-banner s-" + (ok ? (wn ? "warn" : "ok") : "fail") }, h("b", null, ok ? (wn ? "Ready, with " + wn + " thing" + (wn === 1 ? "" : "s") + " to check" : "All " + checked.total + " lines are fine") : checked.errorCount + " problem" + (checked.errorCount === 1 ? "" : "s") + " to fix before you can submit"), h("span", { class: "mute" }, " · " + ugx(checked.deposits) + " in, " + ugx(checked.payouts) + " out" + (checked.charges ? ", " + ugx(checked.charges) + " bank charges" : ""))));
+        if (ok && wn) foot.append(h("label", { class: "pickrow" }, h("input", { type: "checkbox", id: "batch-accept", onchange: (e) => { accepted = e.target.checked; go.disabled = !accepted; } }), " I have read the warnings and want to submit anyway"));
+      } else summary.replaceChildren(h("div", { class: "hint" }, "Fill in your lines, then tap Check all. Nothing is saved until you submit."));
+      go.disabled = !(checked && checked.ok && (!checked.warningCount || accepted)); foot.append(h("div", { class: "row" }, h("button", { id: "batch-add", onclick: () => { rows.push(blankRow()); stale(); paintCards(); list.lastChild && list.lastChild.scrollIntoView({ block: "center" }); } }, "+ Add line"), h("button", { id: "batch-check", onclick: check }, "Check all"), go));
+    };
+    const go = h("button", { class: "primary", id: "batch-submit", disabled: true }, "Submit all");
+    const check = () => { checked = BT.validate(st.db, rows, { today: today(), receiptsOn }); accepted = false; paintState(); const first = list.querySelector(".bfld.bad, .warn-note"); if (first) first.scrollIntoView({ block: "center" }); };
+    const err = h("div", { class: "err", role: "alert" });
+    const m = Modal("Batch entry", h("div", null, h("p", { class: "mute" }, "Add as many lines as you need. Check all of them together, fix anything flagged, then submit them all at once. If one line is refused, none are saved."), summary, list, err, foot), { sticky: true });
+    go.onclick = async () => { if (go.disabled) return; go.disabled = true; err.textContent = "";
+      try { await commit("createEntries", { entries: rows, acceptWarnings: accepted }); m.close(); toast(st.sentForApproval ? "Sent for approval" : checked.total + " lines recorded"); render(); } catch (e) { err.textContent = friendly(e); go.disabled = false; } };
+    paintCards();
+  }
+  /* Bank charge typed by hand on a withdrawal or a loan payout: same form, saved as its own linked ledger line. */
+  const chargeFields = (when) => [{ name: "charge", label: "Bank charge (UGX), if any", type: "number", money: true, showWhen: when || (() => true), placeholder: "0 if none" }, { name: "chargedTo", label: "Bank charge is paid by", options: [{ value: "Member", label: "The member (taken from their savings)" }, { value: "Group", label: "The group (a group expense)" }], showWhen: when || (() => true) }];
+  const chargeArgs = (f) => (Number(f.charge) > 0 ? { bankCharge: Number(f.charge), chargedTo: f.chargedTo || "Member" } : {});
   /* ---------- who will get a text: masked number, confirmed or not, shared numbers ---------- */
   const maskPhone = (p) => { const d = String(p || "").replace(/\D/g, ""); return d.length >= 7 ? d.slice(0, 4) + " ••• " + d.slice(-3) : "no number"; };
   const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
@@ -725,7 +773,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   function loans() {
     const relief = G.can(ctx(), "loan.editInterest") ? RMD.interestRelief(st.db, today()).filter((r) => r.eligible && !r.told) : [];
     return h("div", null, h("div", { class: "row" }, relief.length ? h("button", { id: "tell-borrowers", onclick: () => reliefForm(relief) }, "Tell borrowers (" + relief.length + ")") : null, G.can(ctx(), "loan.apply") ? h("button", { class: "primary", id: "new-loan", onclick: () => Form("New loan application", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount (UGX)", type: "number" }, listField("purpose", "What is the loan for?", "loan.Purpose")], act(async (f) => commit("applyForLoan", { memberId: f.m, amount: f.amt, purpose: f.purpose }), "Application recorded")) }, "New application") : null,
-      G.can(ctx(), "loan.disburse") ? h("button", { id: "record-existing-loan", onclick: () => Form("Record a loan that was already paid out", [{ type: "note", text: "Use this for a loan paid out earlier (backdated). It starts on the date you choose and interest runs from that date. If the member's loan is only voided, open it and use Restore loan instead, so its history is kept." }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount paid out (UGX)", type: "number" }, dateF("date", "Date it was paid out"), { name: "rate", label: "Monthly interest (UGX) — required", type: "number" }, { name: "remarks", label: "Reason / note (required)" }], act(async (f) => { if (!String(f.remarks || "").trim()) throw new Error("REQUIRED: reason / note"); await commit("recordExistingLoan", { memberId: f.m, amount: Number(f.amt), date: f.date, assignedMonthlyInterest: f.rate, remarks: f.remarks }); }, "Loan recorded")) }, "Record existing loan") : null),
+      G.can(ctx(), "loan.disburse") ? h("button", { id: "record-existing-loan", onclick: () => Form("Record a loan that was already paid out", [{ type: "note", text: "Use this for a loan paid out earlier (backdated). It starts on the date you choose and interest runs from that date. If the member's loan is only voided, open it and use Restore loan instead, so its history is kept." }, { name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "amt", label: "Amount paid out (UGX)", type: "number" }, dateF("date", "Date it was paid out"), { name: "rate", label: "Monthly interest (UGX) — required", type: "number" }, { name: "remarks", label: "Reason / note (required)" }].concat(chargeFields()), act(async (f) => { if (!String(f.remarks || "").trim()) throw new Error("REQUIRED: reason / note"); await commit("recordExistingLoan", Object.assign({ memberId: f.m, amount: Number(f.amt), date: f.date, assignedMonthlyInterest: f.rate, remarks: f.remarks }, chargeArgs(f))); }, "Loan recorded")) }, "Record existing loan") : null),
       loanTotals(),
       Table(loanCols, K.loanBook(st.db, today()), (v) => openLoan(v.id)), null);
   }
@@ -742,7 +790,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   /* ---------- ledger ---------- */
   function ledger() {
     const all = st.db.transactions.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
-    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }], act(async (f) => commit("createEntry", { memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }), "Entry recorded")) }, "New entry") : null),
+    return h("div", null, h("div", { class: "row" }, G.can(ctx(), "ledger.create") ? [h("button", { id: "batch-open", onclick: batchForm }, "Batch entry"), h("button", { class: "primary", id: "add-entry", onclick: () => Form("New ledger entry", [{ name: "m", label: "Member", options: st.db.members.map((m) => ({ value: m.id, label: m.name })) }, { name: "type", label: "Type", options: ["Savings", "Withdraw", "Expense", "Income", "Profit", "Bank Charge"] }, { name: "amount", label: "Amount (UGX)", type: "number" }, dateF("date"), { name: "purpose", label: "Purpose", other: true, options: purposeChoices() }].concat(chargeFields((v) => v.type === "Withdraw")), act(async (f) => commit("createEntry", Object.assign({ memberId: f.m, type: f.type, amount: f.amount, date: f.date, purpose: f.purpose }, f.type === "Withdraw" ? chargeArgs(f) : {})), "Entry recorded")) }, "New entry")] : null),
       Searchable("Search ledger", (q) => { const hit = all.filter((t) => !q || (nameOf(t.memberId) + " " + t.memberId + " " + t.type + " " + (t.purpose || "") + " " + t.amount + " " + D.toDisplay(t.date)).toLowerCase().includes(q)), rows = hit.slice(0, 200);
       return h("div", null, h("p", { class: "mute", style: "font-size:13px" }, hit.length > rows.length ? "Showing the latest " + rows.length + " of " + hit.length + " — type in the search box to narrow." : hit.length + " entries"), Table([{ label: "Date", m: "s2", render: (t) => D.toDisplay(t.date) }, { label: "Member", m: "t", render: (t) => nameOf(t.memberId) }, { label: "Type", m: "s", key: "type" }, { label: "Amount", num: 1, m: "v", render: (t) => num(t.amount) }, { label: "State", m: "b", render: (t) => t.voided ? badge("Voided", "bad") : t.approvalStatus === "PendingApproval" ? badge("Awaiting Chairperson", "warn") : t.approvalStatus === "Rejected" ? badge("Rejected", "bad") : badge("Counted", "ok") }], rows, (t) => openEntry(t.id))); }));
   }
@@ -839,6 +887,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
         else if (q.command === "voidLoan" || q.command === "restoreLoan") rows.push(["Action", q.command === "voidLoan" ? "Void (cancel) this loan" : "Restore this voided loan"]);
         else if (q.command === "addDisbursement") rows.push(["Further payout", money(a.amount) + " on " + D.toDisplay(a.date)], ["Loan after", money(Number(loan.loanAmount) + Number(a.amount))]);
         else rows.push(["Action", q.label]);
+        if (a && Number(a.bankCharge) > 0) rows.push(["Bank charge", money(a.bankCharge) + " paid by " + (a.chargedTo === "Group" ? "the group" : "the member")]);
       } else { rows.push(["Action", q.label], ["Detail", q.summary]); }
       rows.push(["Reason", q.reason || "(none given)"], ["Requested by", q.requestedBy + " (" + (q.requestedByRole || "") + ") on " + D.toDisplay(q.requestedDate)]); return rows; };
     const reqLine = (q) => reqRows(q).filter((x) => !["Reason", "Requested by", "Member", "Loan"].includes(x[0])).map((x) => (x[0] === "Action" ? "" : x[0] + ": ") + x[1]).join(" · ") + (q.reason ? " · Reason: " + q.reason : "");

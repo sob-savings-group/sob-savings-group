@@ -61,13 +61,15 @@
     if (!dates.isISO(e.date)) throw new Error("INVALID: date must be YYYY-MM-DD");
     need(e.type, "type");
     if (e.memberId && !db.members.some((m) => m.id === e.memberId)) throw new Error("UNKNOWN_MEMBER: " + e.memberId);
+    const chg = chargeOf(e), memberCharge = chg.amount > 0 && chg.chargedTo === "Member" && e.type === "Withdraw" ? chg.amount : 0;
     if (["Withdraw", "Share-Out", "Bank Charge"].includes(e.type) && e.memberId) {
-      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. */
+      /* A guarantor can never withdraw money committed against an unpaid loan: only savings genuinely AVAILABLE after commitments can leave. A member-borne bank charge leaves too, so it counts. */
       const pos = ledger.memberPosition(db, e.memberId);
-      if (amount > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
+      if (amount + memberCharge > pos.withdrawable) throw new Error("COMMITTED_GUARANTEE: only " + pos.withdrawable + " is available to withdraw" + (memberCharge ? " (the bank charge of " + memberCharge + " also comes out of the member's savings)" : "") + " (savings " + pos.savings + ", committed to guarantees " + pos.committed + ")");
     }
     const needsApproval = config.approval.requiredTypes.concat(ledger.getPolicy(db, "approval").requiredTypes || []).includes(e.type);
-    const entry = Object.assign({}, e, {
+    const clean = Object.assign({}, e); delete clean.bankCharge; delete clean.chargedTo;
+    const entry = Object.assign({}, clean, {
       id: e.id || uid("TXN"), amount, createdBy: ctx.by, createdByRole: ctx.role, createdAt: ctx.now,
       approvalStatus: needsApproval ? "PendingApproval" : "Approved"
     });
@@ -75,7 +77,19 @@
     if (!needsApproval) { entry.approvedBy = ctx.by; entry.approvedAt = ctx.now; }
     db.transactions.push(entry);
     audit(db, ctx, "Transaction", entry.id, "Created", null, { type: entry.type, amount, memberId: entry.memberId, date: entry.date });
+    if (chg.amount > 0 && e.type === "Withdraw") addBankCharge(db, ctx, entry, chg);
     return entry;
+  }
+  /* A bank charge is entered by hand (it varies) beside the transaction it belongs to, and is recorded as its OWN ledger line so reports and the audit can show it:
+     chargedTo "Member" -> a Bank Charge taken from the member's savings; "Group" -> a group expense (purpose "Bank charges"). It is linked (chargeFor) to its transaction,
+     is approved, rejected or voided together with it, and is created in the same command, so either both are saved or neither. */
+  function chargeOf(e) { const amount = e.bankCharge === undefined || e.bankCharge === null || e.bankCharge === "" ? 0 : Number(e.bankCharge); if (!(amount >= 0) || !isFinite(amount)) throw new Error("INVALID: the bank charge must be a number, 0 or more"); return { amount, chargedTo: e.chargedTo === "Group" ? "Group" : (e.chargedTo === "Member" || !e.chargedTo ? "Member" : (() => { throw new Error("INVALID: choose who bears the bank charge: Member or Group"); })()) }; }
+  function addBankCharge(db, ctx, main, chg) {
+    const base = { date: main.date, amount: chg.amount, purpose: "Bank charges", chargeFor: main.id, chargedTo: chg.chargedTo, sourceRef: main.sourceRef || "", details: "Bank charge on " + main.type + " " + main.id };
+    const c = chg.chargedTo === "Member" ? createEntry(db, ctx, Object.assign({}, base, { type: "Bank Charge", memberId: main.memberId, purpose: "Bank charge" })) : createEntry(db, ctx, Object.assign({}, base, { type: "Expense" }));
+    c.approvalStatus = main.approvalStatus; if (main.approvalStatus !== "Approved") { delete c.approvedBy; delete c.approvedAt; }
+    audit(db, ctx, "Transaction", main.id, "Bank charge added", null, { charge: c.id, amount: chg.amount, chargedTo: chg.chargedTo });
+    return c;
   }
   function approveEntry(db, ctx, id, decision, reason) {
     require_(ctx, "ledger.approve");
@@ -86,6 +100,7 @@
     if (next === "Rejected") need(reason, "reason");
     audit(db, ctx, "Transaction", id, next, t.approvalStatus, next, reason);
     t.approvalStatus = next; t.approvedBy = ctx.by; t.approvedAt = ctx.now;
+    db.transactions.filter((x) => x.chargeFor === id && x.approvalStatus === "PendingApproval").forEach((c) => { c.approvalStatus = next; c.approvedBy = ctx.by; c.approvedAt = ctx.now; audit(db, ctx, "Transaction", c.id, next, "PendingApproval", next, "With " + id); });
     return t;
   }
   function voidEntry(db, ctx, id, reason) {
@@ -96,6 +111,7 @@
     if (t.voided) throw new Error("ALREADY_VOIDED: " + id);
     Object.assign(t, { voided: true, voidReason: reason.trim(), voidDate: ctx.today, voidTimestamp: ctx.now, voidedByRole: ctx.role, voidedBy: ctx.by });
     audit(db, ctx, "Transaction", id, "Voided", { voided: false }, { voided: true }, reason);
+    db.transactions.filter((x) => x.chargeFor === id && !x.voided).forEach((c) => { Object.assign(c, { voided: true, voidReason: "Bank charge of voided " + id + ": " + reason.trim(), voidDate: ctx.today, voidTimestamp: ctx.now, voidedByRole: ctx.role, voidedBy: ctx.by }); audit(db, ctx, "Transaction", c.id, "Voided", { voided: false }, { voided: true }, "With " + id); });
     return t;
   }
   function restoreEntry(db, ctx, id, reason) {
@@ -210,5 +226,5 @@
     if (!it) { it = { id: uid("LST"), list: a.list, label, active: false, addedBy: ctx.by, addedDate: ctx.today }; db.listItems.push(it); } else it.active = false;
     audit(db, ctx, "List", it.id, "Option retired", { active: true }, { active: false }, reason); return it;
   }
-  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
+  return { LIST_DEFAULTS, LIST_TITLES, listOptions, addListItem, retireListItem, ALL, ROLES, setPolicy, WRITE, APPROVE, READ, config, can, require: require_, need, uid, makeCtx, audit, createEntry, addBankCharge, chargeOf, approveEntry, voidEntry, restoreEntry, addMember, updateMemberContact };
 });

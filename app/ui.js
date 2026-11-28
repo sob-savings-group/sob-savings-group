@@ -57,6 +57,16 @@
   /* kind: true/"bad" = error, "warn" = needs attention, anything else = success */
   function toast(msg, kind) { const k = kind === true || kind === "bad" ? "bad" : kind === "warn" ? "warn" : "ok"; const old = document.querySelector(".toast"); if (old) old.remove();
     const t = h("div", { class: "toast " + k, role: k === "bad" ? "alert" : "status" }, Icon(k === "ok" ? "check" : "alert"), h("span", null, msg)); document.body.append(t); setTimeout(() => t.remove(), k === "bad" ? 7000 : 3500); }
+  /* Accounting-style entry: 1250000 shows as 1,250,000 while typing; the value handed on is the plain number (no commas). Money fields = type "number" labelled UGX, or {money:true}. */
+  const isMoney = (f) => f.money === true || (f.type === "number" && /UGX|amount/i.test(f.label || "") && f.money !== false);
+  const withCommas = (d) => String(d).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  function moneyInput(f) {
+    const el = h("input", { name: f.name, type: "text", "data-money": "1", inputmode: "numeric", autocomplete: "off", placeholder: f.placeholder || "e.g. 125,000", "aria-label": f.label });
+    const fmt = (raw) => { const d = String(raw == null ? "" : raw).replace(/[^\d]/g, "").replace(/^0+(?=\d)/, ""); return withCommas(d); };
+    el.addEventListener("input", () => { const pos = el.selectionStart, before = el.value, digitsBefore = before.slice(0, pos == null ? before.length : pos).replace(/[^\d]/g, "").length; el.value = fmt(before); let i = 0, seen = 0; while (i < el.value.length && seen < digitsBefore) { if (/\d/.test(el.value[i])) seen++; i++; } try { el.setSelectionRange(i, i); } catch (e) {} });
+    el.value = f.value != null && f.value !== "" ? fmt(f.value) : "";
+    return { el, get: () => el.value.replace(/,/g, ""), set: (v) => { el.value = fmt(v); } };
+  }
   /* Form modal: fields [{name,label,type,value,options,required}] -> onSubmit(values) may throw; the message is shown, nothing is half-saved. */
   function Form(title, fields, onSubmit, submitLabel) {
     const inputs = {};
@@ -78,13 +88,17 @@
         paint(); inputs[f.name] = { get value() { return val === OTHER ? txt.value.trim() : val; }, set value(v) { val = v; paint(); }, setAttribute() {} };
         return h("div", null, h("label", null, f.label), box, txt);
       }
+      if (isMoney(f)) { const mi = moneyInput(f); inputs[f.name] = { get value() { return mi.get(); }, set value(v) { mi.set(v); }, setAttribute() {}, el: mi.el }; return h("div", { "data-field": f.name }, h("label", null, f.label), mi.el); }
       const el = f.options ? h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value ?? o }, o.label ?? o))) : h(f.type === "textarea" ? "textarea" : "input", { name: f.name, type: f.type || "text", value: f.value ?? "" });
       if (f.max) el.setAttribute("max", f.max); if (f.min != null) el.setAttribute("min", f.min); if (f.inputmode) el.setAttribute("inputmode", f.inputmode); if (f.type === "number" && !f.inputmode) el.setAttribute("inputmode", "decimal"); if (f.type === "date") el.required = true;
-      if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", null, h("label", null, f.label), el);
+      if (f.value != null && f.options) el.value = f.value; inputs[f.name] = el; return h("div", { "data-field": f.name }, h("label", null, f.label), el);
     }));
+    const showWhen = fields.filter((f) => typeof f.showWhen === "function" && f.type !== "note"), cur = () => { const v = {}; fields.forEach((f) => { if (f.type !== "note" && inputs[f.name]) v[f.name] = inputs[f.name].value; }); return v; };
+    const applyWhen = () => { if (!showWhen.length) return; const v = cur(); showWhen.forEach((f) => { const wrap = body.querySelector('[data-field="' + f.name + '"]'); if (wrap) wrap.hidden = !f.showWhen(v); }); };
+    body.addEventListener("change", applyWhen); body.addEventListener("input", applyWhen); setTimeout(applyWhen, 0);
     const err = h("div", { class: "err", role: "alert" });
     const m = Modal(title, h("div", null, body, err, h("div", { class: "row" }, h("button", { class: "primary", "data-submit": "1", onclick: async () => {
-      const v = {}; fields.forEach((f) => { if (f.type !== "note") v[f.name] = inputs[f.name].value; });
+      const v = {}; fields.forEach((f) => { if (f.type !== "note") { const w = body.querySelector('[data-field="' + f.name + '"]'); v[f.name] = w && w.hidden ? "" : inputs[f.name].value; } });
       const btn = m.el.querySelector("[data-submit]"); if (btn.disabled) return; btn.disabled = true; err.textContent = "";
       try { await onSubmit(v); m.close(); } catch (e) { err.textContent = friendly(e); btn.disabled = false; }
     } }, submitLabel || "Save"), h("button", { "data-cancel": "1", onclick: () => m.close() }, "Cancel"))), { sticky: true });
@@ -135,5 +149,5 @@
   }
   const Field = (label, value) => h("div", { class: "kv" }, h("span", null, label), h("b", null, value));
   const Avatar = (name) => h("span", { class: "avatar", "aria-hidden": "true" }, String(name || "?").split(/\s+/).map((x) => x[0]).slice(0, 2).join("").toUpperCase());
-  window.SOBUI = { h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Skeleton, Banner, Chips, Confirm, Field, Avatar };
+  window.SOBUI = { moneyInput, withCommas, h, ugx, num, badge, Card, Table, State, Modal, Form, toast, friendly, Busy, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Skeleton, Banner, Chips, Confirm, Field, Avatar };
 })();

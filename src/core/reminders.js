@@ -409,6 +409,7 @@
   }
   /* called after a command succeeded (commands.js); queues at most one receipt per entry; never throws into a financial command */
   function receiptAfter(db, ctx, name, args, result) {
+    if (name === "createEntries" && Array.isArray(result)) { result.forEach((e) => receiptAfter(db, ctx, "createEntry", args, e)); return; }
     try {
       if (!getReceipts(db).enabled) return; args = args || {}; let e = null;
       if (name === "createEntry" || name === "recordSubscription" || name === "approveEntry") e = result;

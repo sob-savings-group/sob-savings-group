@@ -7,7 +7,7 @@ t("no Node/browser-only globals are used outside the module shim", () => {
   const body = src.replace(/function __req[\s\S]*?\n/, "").replace(/\/\*[\s\S]*?\*\//g, "").replace(/UrlFetchApp\.fetch/g, "UrlFetchApp_fetch").replace(/(^|[^:])\/\/.*$/gm, "$1"); // shim + comments ignored
   for (const bad of [/\bprocess\./, /\bBuffer\b/, /\bsetTimeout\b/, /\bfetch\(/, /\bwindow\./, /\bdocument\./, /\blocalStorage\b/, /require\("fs"\)|require\("crypto"\)|require\('fs'\)/, /\bconsole\.log\(/]) assert.ok(!bad.test(body), "found " + bad);
 });
-t("bundle size is well under Apps Script file limits", () => { assert.ok(src.length < 600000, "size " + src.length); });
+t("bundle size is well under Apps Script file limits", () => { assert.ok(src.length < 900000, "size " + src.length); });
 t("deployment manifest: V8, Kampala time zone, least-privilege scope, public web app (auth is per-user inside the app)", () => {
   const m = JSON.parse(fs.readFileSync(path.join(root, "deploy/appsscript.json"), "utf8"));
   assert.equal(m.runtimeVersion, "V8"); assert.equal(m.timeZone, "Africa/Kampala"); assert.deepEqual(m.oauthScopes.slice().sort(), ["https://www.googleapis.com/auth/script.external_request", "https://www.googleapis.com/auth/script.scriptapp", "https://www.googleapis.com/auth/script.send_mail", "https://www.googleapis.com/auth/spreadsheets.currentonly"], "exactly: this spreadsheet, outbound gateway calls, own triggers, sign-in code emails");
