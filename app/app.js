@@ -135,11 +135,11 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["status", "System Status", "Admin", "shield"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
+  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["status", "System Status", "Admin", "shield"], ["content", "Content", "Admin", "book"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
   /* the four tabs on a phone's bottom bar depend on the role: each role sees its own most-used screens first, everything else is under More or Search */
   const PHONE_TABS = { Admin: ["dash", "members", "loans", "ledger"], Chairperson: ["dash", "approvals", "loans", "reports"], Treasurer: ["dash", "ledger", "members", "loans"], Secretary: ["dash", "members", "reports", "ledger"], Committee: ["dash", "reports", "members", "loans"] };
   const phoneTab = (k) => (PHONE_TABS[st.user && st.user.role] || PHONE_TABS.Admin).indexOf(k);
-  const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
+  const NAV_MEMBER = [["home", "Home", null, "home"], ["savings", "Savings", null, "wallet"], ["myloans", "Loans", null, "loan"], ["myguar", "Guarantees", null, "shield"], ["grow", "Grow", null, "chart"], ["more", "More", null, "more", "only-mobile"], ["mysubs", "Subscription", null, "receipt", "sec"], ["myshare", "Share-out", null, "gift", "sec"], ["airtime", "Airtime", null, "phone", "sec"]];
   const pendingAirtime = () => (st.db.airtimeRequests || []).filter((r) => r.status === "Pending").length;
   async function refresh(quiet) {
     if (!st.live || !st.user || st.user.mustChangePin || st.refreshing) return; st.refreshing = true;
@@ -998,7 +998,8 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
 
   /* ---------- member portal ---------- */
   const me = () => st.user.memberId;
-  const MV = window.SOBMember({ st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, statementView });
+  const GR = window.SOBGrow({ st, act, commit, render, today, go });
+  const MV = window.SOBMember({ grow: (part) => GR.homeCards(part), st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, statementView });
 
   /* ---------- airtime (members request; Admin fulfils) ---------- */
   const airtimeCols = (staff) => [{ label: "Date", render: (r) => D.toDisplay(r.date) }].concat(staff ? [{ label: "Member", render: (r) => r.memberName + " (" + r.memberId + ")" }] : [], [{ label: "Phone", key: "phone" }, { label: "Airtime", num: 1, render: (r) => num(r.airtimeAmount) }, { label: "Fee", num: 1, render: (r) => num(r.fee) }, { label: "Total", num: 1, render: (r) => num(r.total) },
@@ -1333,7 +1334,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, status: statusView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, status: statusView, content: GR.staffView, grow: GR.memberView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the SOB backend is older than this app (server " + String(r.build).slice(0, 6) + ", app " + String(CFG.build || "").slice(0, 6) + "). Admin: redeploy the latest Code_Ledger.gs as a New version of the same deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (app " + String(CFG.build || "").slice(0, 6) + " · server " + String(r.build).slice(0, 6) + ")" : "") + "."; };

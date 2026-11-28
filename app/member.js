@@ -2,7 +2,7 @@
    Colours always mean the same thing: green = available, amber = held for guarantees, coral = loan owed, blue = interest, teal = profit. */
 window.SOBMember = function (E) {
   const { h, ugx, num, badge, Table, Modal, Form, toast, Icon, fdate, pct, Hero, StackBar, Progress, Section, Row, List, Empty, Banner, Chips, Confirm, Field } = window.SOBUI;
-  const { st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
+  const { st, act, commit, render, today, printReport, downloadReport, go, printAccount, openStatement, grow } = E, S = window.SOB, L = S.ledger, LN = S.loans, R = S.reports, D = S.dates;
   const me = () => st.user.memberId, myName = () => (st.db.members.find((m) => m.id === me()) || {}).name || st.user.name;
   const help = () => S.reports.OFFICERS.filter((o) => ["Treasurer", "Secretary"].includes(o[1]));
 
@@ -62,6 +62,7 @@ window.SOBMember = function (E) {
     const el = h("div", null, signInfo());
     if (reqs.length) el.append(Banner("warn", reqs.length === 1 ? "Someone has asked you to guarantee a loan." : reqs.length + " people have asked you to guarantee a loan.", { label: "Review", onclick: () => go("myguar") }));
     if (!paidSub) el.append(Banner("info", "Your " + year + " annual subscription is not recorded yet. Please see the Treasurer.", { label: "Details", onclick: () => go("mysubs") }));
+    if (grow) grow("top").forEach((n) => el.append(n));
     cheer(pos, paidSub);
     el.append(Hero({ hook: "My Savings", label: "Hello " + first() + " — your total savings", value: ugx(pos.savings), sub: "Your lifetime savings with SOB", children: h("div", null, StackBar([{ label: "Available to you", value: pos.available, cls: "c-avail" }].concat(showHeld(pos) ? [{ label: "Held for loans you guarantee", value: pos.committed, cls: "c-commit" }] : [])),
       h("div", { class: "mini-grid" }, h("div", { class: "mini" }, h("div", { class: "ml" }, "You can withdraw"), h("div", { class: "mv t-avail" }, ugx(pos.withdrawable))), showHeld(pos) ? h("div", { class: "mini" }, h("div", { class: "ml" }, "Held for guarantees"), h("div", { class: "mv t-commit" }, ugx(pos.committed))) : null)) }));
@@ -78,6 +79,7 @@ window.SOBMember = function (E) {
     /* Guarantees summary */
     const given = (st.db.guarantees || []).filter((g) => g.guarantorId === id && g.status === "Active");
     if (given.length) el.append(Section("Loans I guarantee"), List([Row({ icon: "shield", tone: "commit", title: given.length + (given.length === 1 ? " active guarantee" : " active guarantees"), sub: "Held until the borrowers repay", right: ugx(pos.committed), onOpen: () => go("myguar") })]));
+    if (grow) grow().forEach((n) => el.append(n));
     /* Shortcuts */
     el.append(Section("Quick actions"), h("div", { class: "grid" }, quick("book", "My statement", "See every transaction", () => openStatement(me(), false)), quick("phone", "Airtime", "Request airtime", () => go("airtime")), quick("gift", "Share-out & profit", "What December pays", () => go("myshare"))));
     /* Recent activity */

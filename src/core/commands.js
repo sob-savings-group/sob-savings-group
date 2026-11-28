@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./batch.js") : root.SOB.batch);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./batch.js") : root.SOB.batch, isNode ? require("./content.js") : root.SOB.content, isNode ? require("./content_seed.js") : root.SOB.contentSeed);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L, BT) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L, BT, CT, SEED) {
   /* A bank charge typed on a loan payout: attached to the payout entry this command just created (same transaction, saved or refused together). */
   function withDisbursementCharge(db, ctx, a, n0) {
     const chg = G.chargeOf(a); if (!(chg.amount > 0)) return;
@@ -12,6 +12,9 @@
     G.addBankCharge(db, ctx, main, chg);
   }
   const COMMANDS = {
+    saveContent: (db, ctx, a) => CT.save(db, ctx, a),
+    setContentStatus: (db, ctx, a) => CT.setStatus(db, ctx, a),
+    loadStarterContent: (db, ctx) => CT.loadStarter(db, ctx, SEED),
     createEntries: (db, ctx, a) => BT.apply(db, ctx, a.entries, { acceptWarnings: a.acceptWarnings }),   // many ledger lines in one go: all saved or none
     createEntry: (db, ctx, a) => G.createEntry(db, ctx, { date: a.date, memberId: a.memberId, amount: a.amount, type: a.type, purpose: a.purpose, loanId: a.loanId, receipt: a.receipt, reference: a.reference || undefined, bankCharge: a.type === "Withdraw" ? a.bankCharge : 0, chargedTo: a.chargedTo }),
 

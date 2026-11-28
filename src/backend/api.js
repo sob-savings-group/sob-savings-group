@@ -4,9 +4,9 @@
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
   const api = factory(isNode ? require("./store.js") : root.SOB.store, isNode ? require("./auth.js") : root.SOB.auth, isNode ? require("../core/commands.js") : root.SOB.commands,
-    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup, isNode ? require("../core/reminders.js") : root.SOB.reminders);
+    isNode ? require("../core/kpis.js") : root.SOB.kpis, isNode ? require("../core/dates.js") : root.SOB.dates, isNode ? require("../core/governance.js") : root.SOB.gov, isNode ? require("../core/airtime.js") : root.SOB.airtime, isNode ? require("../core/notify.js") : root.SOB.notify, isNode ? require("./backup.js") : root.SOB.backup, isNode ? require("../core/reminders.js") : root.SOB.reminders, isNode ? require("../core/content.js") : root.SOB.content);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.api = api; }
-})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B, RM) {
+})(typeof self !== "undefined" ? self : this, function (S, A, CMD, K, D, G, AT, N, B, RM, CT) {
   const fail = (error) => ({ ok: false, error });
   const gwStatus = (env) => ({ SMS: !!(env.gateways && env.gateways.SMS && env.gateways.SMS.live), WHATSAPP: !!(env.gateways && env.gateways.WHATSAPP && env.gateways.WHATSAPP.live) });
   
@@ -39,7 +39,7 @@
       transactions: (db.transactions || []).filter((t) => !t.voided && (t.memberId === me || mine.some((l) => l.id === t.loanId))).map(memberTx),   // a cancelled entry counts nowhere, so a member is not sent it (or the fact it was cancelled)
       loans: loans.map((l) => without(l, LOAN_INTERNAL)), guarantees: (db.guarantees || []).filter((g) => g.guarantorId === me || mine.some((l) => l.id === g.loanId)).map((g) => without(g, GUAR_INTERNAL)), securities: (db.securities || []).filter((x) => mine.some((l) => l.id === x.loanId)).map((x) => ({ id: x.id, loanId: x.loanId, kind: x.kind, status: x.status, acceptedCover: x.acceptedCover })), policy: (db.policy || []).filter((p) => p.id === "loan"),
       loanPurposes: G.listOptions(db, "loan.Purpose"),   // only the wording of the loan purposes on offer: no other configuration is sent
-      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: []
+      yearCycles: (db.yearCycles || []).map((c) => without(c, YEAR_INTERNAL)), shareOutEvents: [], profitDistributions: [], yearOpenings: (db.yearOpenings || []).filter((o) => !o.voided && o.memberId === me).map((o) => ({ id: o.id, year: o.year, memberId: o.memberId, amount: o.amount, date: o.date })), auditLog: [], users: [], requests: [], airtimeRequests: (db.airtimeRequests || []).filter((r) => r.memberId === me), airtime: me ? AT.eligibility(db, me, asOf) : null, outbox: [], reconciliations: [], smsFailures: [], legacyAdministration: [], contentItems: CT.published(db, asOf || new Date().toISOString().slice(0, 10)).map((c) => without(c, ["createdBy", "updatedBy", "seedKey"]))   // members read only what is published today, never drafts
     });
   }
 
