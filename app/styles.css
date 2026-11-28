@@ -869,3 +869,4 @@ body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);backg
 body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);background-attachment:fixed}
 .lg-head{background:none}.lg-head .tag{color:#dbe5ff}.login .help{color:#dbe5ff}
 .card.login .lg-body button:not(.primary),.card.login .linkbtn{background:#fff;border-color:#c3d0f2;color:#1b4fd8}
+#pin-toggle,#welcome-box .linkbtn,.login .linkbtn{background:#fff!important;border-color:#c3d0f2!important;color:#1b4fd8!important}
