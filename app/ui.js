@@ -107,14 +107,14 @@
   const RAW_JS = /\b(is not defined|is not a function|is not iterable|Cannot read propert|Cannot set propert|undefined|null is not|Unexpected token|SyntaxError|ReferenceError|TypeError|RangeError|at \w+ \()/;
   const friendly = (e) => {
     const m = String((e && e.message) || e);
-    if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost. Please try again. If it happens again, tell the Treasurer or Secretary."; }
+    if (RAW_JS.test(m) && !/^[A-Z][A-Z_]+:/.test(m.trim())) { try { console.error("[SOB] internal error:", e); } catch (x) {} return "Something went wrong on our side. Nothing was lost and no figure was changed. Please try again. If it happens again, tell the Treasurer or Secretary and say what you were doing."; }
     if (/PENDING_SOB_DECISION/.test(m)) return "Blocked: SOB has not yet decided this rule. " + m.replace(/^.*?PENDING_SOB_DECISION:?\s*/, "");
-    if (e && e.code === "CONFLICT") return "Someone else changed the ledger. Your change was not saved — reload and try again.";
-    if ((e && e.code === "NETWORK") || /^NETWORK:/.test(m) || /Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection. Check your data or Wi-Fi and try again.";
-    if ((e && e.code === "TIMEOUT") || /^TIMEOUT/.test(m)) return "This is taking too long. Check your connection and try again.";
-    if (/^ENDPOINT_/.test((e && e.code) || m)) return "The SOB records are not available right now. Please try again in a few minutes. If it continues, tell the Treasurer or Secretary.";
+    if (e && e.code === "CONFLICT") return "Someone else changed the ledger at the same moment. Your change was NOT saved. Reload, check the latest figures, then enter it again.";
+    if ((e && e.code === "NETWORK") || /^NETWORK:/.test(m) || /Failed to fetch|NetworkError|Load failed/i.test(m)) return "No internet connection, so nothing was saved. Check your data or Wi-Fi and try again.";
+    if ((e && e.code === "TIMEOUT") || /^TIMEOUT/.test(m)) return "This is taking too long. Your change may or may not have been saved: open the Ledger and check before you try again.";
+    if (/^ENDPOINT_/.test((e && e.code) || m)) return "The SOB records could not be reached, so nothing was changed. Please try again in a few minutes. If it continues, tell the Treasurer or Secretary.";
     if (e && e.code === "UNAUTHENTICATED") return "Your session has ended. Please sign in again.";
-    if (/^\s*UNKNOWN_COMMAND:/.test(m)) return "The Google backend is out of date. Paste the latest Code.gs in Apps Script, deploy a New version and reload. (Action: " + m.replace(/^\s*UNKNOWN_COMMAND:\s*/, "") + ")";
+    if (/^\s*UNKNOWN_COMMAND:/.test(m)) return "The records server is older than this app, so this action is not available yet. Nothing was changed. Ask an officer to install the latest update (the System Status screen shows what is out of date). (Action: " + m.replace(/^\s*UNKNOWN_COMMAND:\s*/, "") + ")";
     const PLAIN = { ALREADY_APPLIED: "You already have a loan application in progress. Please wait until it is decided.", ALREADY_VOIDED: "This record has already been cancelled.", NOT_VOIDED: "This record is not cancelled.", RESTORE_WINDOW_CLOSED: "The time allowed to restore this record has passed. Please enter a new correcting entry instead.", OFFLINE_MODE: "This copy is not connected to the SOB server.", FORBIDDEN: "You do not have permission to do this.", NOT_FOUND: "We could not find that record. Please refresh and try again.", UNKNOWN_MEMBER: "That member was not found.", UNKNOWN_ACTION: "Something went wrong. Please refresh and try again.", INVALID_REQUEST: "Something went wrong. Please refresh and try again.", UNAUTHENTICATED: "Your session has ended. Please sign in again.", BAD_CREDENTIALS: "That did not match. Please check and try again." };
     const code = (/^([A-Z][A-Z_]+)(?::\s*(.*))?$/s.exec(m.trim()) || [])[1];
     if (code && PLAIN[code] && !/\S/.test((/^[A-Z_]+:\s*(.*)$/s.exec(m.trim()) || [, ""])[1])) return PLAIN[code];
