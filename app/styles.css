@@ -760,3 +760,11 @@ body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);backg
 #batch-summary{margin:8px 0}
 .bcard .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.bcard .two>*{min-width:0}
 .gr-verse{border-left:4px solid var(--accent,#7a5c1e)}.gr-q{font-size:17px;line-height:1.5;font-style:italic}.gr-ref{margin-top:8px;font-weight:600;font-size:13px}.gr-p{margin:0 0 10px;line-height:1.55;white-space:pre-wrap}.gr-cat{margin:8px 0}.gr-cat select{width:100%}.gr-note{border-left:4px solid var(--accent,#7a5c1e)}
+.pal{width:min(680px,100%);max-height:84vh;display:flex;flex-direction:column;background:var(--surface,#fff);border-radius:16px;box-shadow:0 20px 60px rgba(20,10,40,.35);overflow:hidden}
+.pal-top{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line2)}.pal-top input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:17px;min-height:44px}
+.pal-fb,.pal-x{border:0;background:transparent;min-width:40px;min-height:40px;border-radius:10px;color:var(--mute2)}.pal-fb:hover,.pal-x:hover{background:var(--surface2,#f3f4fb)}
+.pal-f{padding:10px 12px;border-bottom:1px solid var(--line2);display:grid;gap:8px}.pal-chips{display:flex;flex-wrap:wrap;gap:6px}.pal-dates{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.pal-dates label{display:grid;gap:2px;font-size:12px;color:var(--mute2)}
+.pal-n{float:right;font-weight:600;letter-spacing:0}.pal-t mark,.pal-i small mark{background:#ffe9a8;color:inherit;border-radius:3px;padding:0 1px}.pal-more{border:0;background:transparent;color:var(--brand,#4f46e5);font-weight:600;padding:8px 12px}.pal-tip{padding:12px;color:var(--mute2);font-size:13px}.pal-clear{float:right;border:0;background:transparent;color:var(--brand,#4f46e5);font-size:12px;text-transform:none;letter-spacing:0}.pal-empty{display:grid;gap:4px}
+@media(max-width:600px){.pal-bg{padding:0}.pal{max-height:100vh;height:100vh;border-radius:0}}
+.pal-f[hidden]{display:none}.pal-top input::-webkit-search-cancel-button{display:none}
+.pal-chips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch}.pal-chips .chip{flex:0 0 auto}.pal-dates input,.pal-dates select{min-height:38px;max-width:150px}

@@ -362,23 +362,12 @@
     return h("div", { id: "menu-screen" }, h("section", { class: "panel acct" }, h("span", { class: "avatar" }, (st.user.name || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()), h("div", { class: "am" }, h("div", { class: "an" }, st.user.name), h("div", { class: "ar" }, roleLabel(st.user.role) + (st.live ? "" : " · demo")))), groups.map((g) => h("section", { class: "mgroup" }, h("h2", { class: "sec" }, g.g), h("div", { class: "mlist" }, g.items.map(([k, l, , ic]) => { const b = navBadge(k); return h("button", { class: "mrow", "data-menu": k, onclick: () => go(k) }, Icon(ic, 22), h("span", { class: "mt" }, l), b ? h("span", { class: "badge-n" }, String(b)) : null, Icon("chevron", 16, "go")); })))));
   }
   /* SEARCH: reach any screen, member or loan from anywhere (press / or Ctrl+K on a computer) */
+  let SS = null;
   function openSearch() {
-    if (document.querySelector(".pal-bg")) return;
-    const staff = isStaff(), nav = (staff ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && !["menu", "more"].includes(n[0]));
-    const input = h("input", { type: "search", id: "pal-input", placeholder: staff ? "Search screens, members, loans…" : "Where do you want to go?", "aria-label": "Search", autocomplete: "off", inputmode: "search" }), list = h("div", { class: "pal-list", id: "pal-list", role: "listbox" });
-    const bg = h("div", { class: "pal-bg", onclick: (e) => { if (e.target === bg) close(); } }, h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Search" }, input, list, h("div", { class: "pal-foot" }, h("span", null, "↑↓ to move"), h("span", null, "Enter to open"), h("span", null, "Esc to close"))));
-    let items = [], sel = 0; const close = () => { document.removeEventListener("keydown", key, true); bg.remove(); };
-    const run = (it) => { close(); it.run(); };
-    const draw = () => { list.replaceChildren(); if (!items.length) { list.append(h("div", { class: "pal-empty" }, "Nothing matches that. Try a name, an SOB ID or a screen.")); return; } let lastH = "";
-      items.forEach((it, i) => { if (it.h !== lastH) { list.append(h("div", { class: "pal-h" }, it.h)); lastH = it.h; } list.append(h("button", { class: "pal-i" + (i === sel ? " sel" : ""), role: "option", "data-pal": it.id, onclick: () => run(it) }, Icon(it.ic, 20), h("span", null, it.t, it.s ? h("small", null, it.s) : null))); });
-      const s = list.querySelector(".sel"); if (s && s.scrollIntoView) s.scrollIntoView({ block: "nearest" }); };
-    const build = (q) => { q = q.trim().toLowerCase(); const out = [];
-      nav.filter((n) => !q || n[1].toLowerCase().includes(q) || (NAV_GROUP[n[0]] || "").toLowerCase().includes(q)).slice(0, q ? 6 : 8).forEach((n) => out.push({ h: "Go to", id: n[0], ic: n[3], t: n[1], s: NAV_GROUP[n[0]] || "", run: () => go(n[0]) }));
-      if (staff && q.length >= 2) { (st.db.members || []).filter((m) => (m.name || "").toLowerCase().includes(q) || (m.id || "").toLowerCase().includes(q) || String(m.phone || "").replace(/\s/g, "").includes(q.replace(/\s/g, ""))).slice(0, 6).forEach((m) => out.push({ h: "Members", id: m.id, ic: "user", t: m.name, s: m.id, run: () => { go("members"); openMember(m.id); } }));
-        (st.db.loans || []).filter((l) => !l.voided && ((l.id || "").toLowerCase().includes(q) || nameOf(l.memberId).toLowerCase().includes(q))).slice(0, 5).forEach((l) => out.push({ h: "Loans", id: l.id, ic: "loan", t: nameOf(l.memberId), s: l.id + " · " + l.status, run: () => { go("loans"); openLoan(l.id); } })); }
-      items = out; sel = 0; draw(); };
-    const key = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } else if (e.key === "ArrowDown") { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); } else if (e.key === "ArrowUp") { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); } else if (e.key === "Enter" && items[sel]) { e.preventDefault(); run(items[sel]); } };
-    document.addEventListener("keydown", key, true); input.addEventListener("input", () => build(input.value)); document.body.append(bg); build(""); input.focus();
+    if (!SS) SS = window.SOBSmartSearch({ st, go, isStaff, nameOf, openMember, openLoan, today,
+      screens: () => (isStaff() ? NAV_STAFF : NAV_MEMBER).filter((n) => (!n[2] || n[2] === st.user.role) && !["menu", "more"].includes(n[0]) && !(!isStaff() && MV.hiddenTab(n[0]))).map((n) => ({ id: n[0], title: n[1], group: NAV_GROUP[n[0]] || "", ic: n[3] })),
+      reports: () => (isStaff() ? S.reportcentre.catalogue().filter((c) => !c.personal || canExport()) : []).map((c) => ({ id: c.id, title: c.title, about: c.about, group: c.group })) });
+    SS.open();
   }
   document.addEventListener("keydown", (e) => { if (!st.user || document.querySelector(".pal-bg")) return; const t = e.target, typing = t && /INPUT|TEXTAREA|SELECT/.test(t.tagName); if ((e.key === "k" && (e.ctrlKey || e.metaKey)) || (e.key === "/" && !typing)) { e.preventDefault(); openSearch(); } });
   /* ---------- the full member statement: one account object feeds this screen, the PDF and the WhatsApp text ---------- */
