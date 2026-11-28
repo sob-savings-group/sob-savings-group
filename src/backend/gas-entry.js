@@ -34,8 +34,18 @@ function __gwTest(ch){
 }
 function testSms(){ return __gwTest("SMS"); }
 function testWhatsApp(){ return __gwTest("WHATSAPP"); }
+/* What the System Status Centre reports about the server. Never returns a key or token: only whether each is set. */
+function __diag(){
+  var o = { build: SOB_BUILD }, p = PropertiesService.getScriptProperties();
+  try { o.sms = { configured: !!p.getProperty("SOB_SMS_GATEWAY_KEY"), live: p.getProperty("SOB_SMS_LIVE") === "yes-tested", adminPhone: !!p.getProperty("SOB_ADMIN_PHONE") };
+        o.wa = { configured: !!p.getProperty("SOB_WA_TOKEN") && !!p.getProperty("SOB_WA_PHONE_ID"), live: p.getProperty("SOB_WA_LIVE") === "yes-tested" }; } catch (e) { o.propsError = String(e.message || e).slice(0, 80); }
+  try { o.emailQuota = MailApp.getRemainingDailyQuota(); } catch (e) { o.emailError = String(e.message || e).slice(0, 80); }
+  try { o.triggers = ScriptApp.getProjectTriggers().map(function(t){ return { fn: t.getHandlerFunction(), type: String(t.getEventType()) }; }); } catch (e) { o.triggersError = String(e.message || e).slice(0, 80); }
+  try { var r = p.getProperty("SOB_LAST_REMINDER_RUN"); if (r) o.lastReminderRun = JSON.parse(r); } catch (e) {}
+  return o;
+}
 function __env(){
-  return { gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
+  return { diag: __diag, gateways: __gateways(), ss: SpreadsheetApp.getActiveSpreadsheet(), lock: LockService.getScriptLock(), hash: __hash, cache: __cacheImpl,
     mail: function(to, subject, body){ MailApp.sendEmail({ to: to, subject: subject, body: body, name: "Sons of Bethel Savings Group" }); }, randomToken: function(){ return Utilities.getUuid().replace(/-/g, ""); }, now: function(){ return new Date().toISOString(); } };
 }
 var SOB_BUILD = "__BUILD__";
@@ -119,7 +129,9 @@ function dailyReminders(){
     var r = RM.autoRun(db, ctx, env.gateways || {});
     S.guardNoLoss(before, db); var changed = S.writeChanged(env.ss, before, db);
     if (changed.length) { var rev = Number(S.readMeta(env.ss).revision || 0) + 1; S.writeMeta(env.ss, { revision: rev, schemaVersion: db.schemaVersion || 2, seq: db.seq || 0, lastWrite: env.now() }); }
-    return JSON.stringify({ date: r.date, enabled: r.enabled, sent: r.sent.length, failed: r.failed.length, skipped: r.skipped.length, note: r.note });
+    var summary = { date: r.date, enabled: r.enabled, sent: r.sent.length, failed: r.failed.length, skipped: r.skipped.length, note: r.note || "", at: new Date().toISOString() };
+    try { PropertiesService.getScriptProperties().setProperty("SOB_LAST_REMINDER_RUN", JSON.stringify(summary)); } catch (e) {}   // heartbeat for the System Status Centre
+    return JSON.stringify(summary);
   } finally { env.lock.releaseLock(); }
 }
 /* Run once from the editor: schedules dailyReminders() every day around 09:00. Safe to run again (replaces the old trigger). */

@@ -100,6 +100,12 @@
         } finally { env.lock.releaseLock(); }
       }
 
+      if (body.action === "systemStatus") {   // officers only; reports facts about the server, never a key or token
+        if (!["Admin", "Chairperson", "Treasurer"].includes(user.role)) return fail("FORBIDDEN");
+        let facts = {}; try { facts = typeof env.diag === "function" ? env.diag() : {}; } catch (e) { facts = { diagError: String((e && e.message) || e).slice(0, 80) }; }
+        let backups = []; try { backups = B.list(env.ss).slice(0, 3); } catch (e) {}
+        return { ok: true, facts, backups };
+      }
       if (body.action === "gatewayStatus") { if (user.role !== "Admin") return fail("FORBIDDEN"); return { ok: true, live: gwStatus(env), note: "No channel is live unless real gateway credentials are configured AND a live test has passed." }; }
       if (body.action === "dispatchOutbox") {   // Admin only; with no live gateway this only marks messages DRY_RUN (rendered, NOT sent)
         env.lock.waitLock(20000);

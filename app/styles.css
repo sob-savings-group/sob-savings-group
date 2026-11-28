@@ -748,3 +748,8 @@ body:has(.login){background:linear-gradient(160deg,#1239a8 0,#2b64f5 100%);backg
 .steps4{display:flex;gap:6px;margin:0 0 12px}.steps4 b{flex:1;height:6px;border-radius:9px;background:#d5ddec}.steps4 b.on{background:#1d4ed8}
 #reg-box .lg-help{margin:0 0 6px}#reg-change{display:block;margin:6px auto 0;text-align:center}
 #reg-change[hidden]{display:none!important}
+
+/* System Status Centre */
+.status-banner{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;border-left:6px solid var(--save-t,#0a6e4c)}.status-banner.s-warn{border-left-color:#b45309}.status-banner.s-fail{border-left-color:#b91c1c}
+.status-row{padding:10px 0;border-top:1px solid #0001}.status-row:first-of-type{border-top:0}.status-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.status-do{margin-top:4px;font-size:14px}
+#status-actions{padding-left:20px;display:grid;gap:8px}

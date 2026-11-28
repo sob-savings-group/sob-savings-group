@@ -135,7 +135,7 @@
 
   /* ---------- navigation ---------- */
   /* [key, label, onlyRole, icon, class]  — classes: sec = desktop sidebar only (phones reach it through More), mob = phones only */
-  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
+  const NAV_STAFF = [["dash", "Overview", null, "home"], ["members", "Members", null, "users"], ["loans", "Loans", null, "loan"], ["ledger", "Ledger", null, "wallet"], ["subs", "Subscriptions", null, "receipt"], ["fyears", "Financial Years", null, "book"], ["profit", "Profit", null, "chart"], ["shareout", "Share-Out", null, "gift"], ["reserve", "General Reserve", null, "shield"], ["approvals", "Approvals", null, "check"], ["recon", "Reconciliation", null, "shield"], ["audit", "Audit", null, "clock"], ["reports", "Reports", null, "download"], ["airtime", "Airtime", null, "phone"], ["messages", "Messages", "Admin", "bell"], ["reminders", "Loan Reminders", "Admin", "bell"], ["status", "System Status", "Admin", "shield"], ["system", "System", "Admin", "sliders"], ["menu", "More", null, "more", "only-mobile tab"]];
   /* the four tabs on a phone's bottom bar depend on the role: each role sees its own most-used screens first, everything else is under More or Search */
   const PHONE_TABS = { Admin: ["dash", "members", "loans", "ledger"], Chairperson: ["dash", "approvals", "loans", "reports"], Treasurer: ["dash", "ledger", "members", "loans"], Secretary: ["dash", "members", "reports", "ledger"], Committee: ["dash", "reports", "members", "loans"] };
   const phoneTab = (k) => (PHONE_TABS[st.user && st.user.role] || PHONE_TABS.Admin).indexOf(k);
@@ -1225,6 +1225,23 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       oc.res ? h("div", { id: "out-result" }, Banner("ok", (oc.res.dryRun ? "Check passed. Nothing was posted. " : "") + oc.res.posted + " to post or posted, " + oc.res.awaitingApproval + " waiting for the Chairperson, " + oc.res.alreadyProcessed + " already done."),
         Table([{ label: "Date", render: (r) => D.toDisplay(r.date) }, { label: "Member", key: "memberId" }, { label: "Type", key: "type" }, { label: "Loan", key: "loanId" }, { label: "Amount (UGX)", num: 1, render: (r) => num(r.amount) }, { label: "Result", key: "result" }], oc.res.rows)) : null);
   }
+  /* ---------- System Status Centre: one page that says what works, what needs attention, and what to do ---------- */
+  function statusView() {
+    if (!st.live) return h("div", { class: "blocked" }, "The System Status Centre works on the live deployment, where there is a server to check.");
+    const load = () => { st.stat = { loading: true }; st.store.call({ action: "systemStatus" }).then((r) => { st.stat = { facts: r.facts, backups: r.backups || [], at: new Date() }; render(); }).catch((e) => { st.stat = { error: (e && e.message) || String(e), at: new Date() }; render(); }); };
+    if (!st.stat) { load(); }
+    const s = st.stat || { loading: true };
+    if (s.loading) return h("div", { class: "hint", role: "status" }, "Checking the system…");
+    let auto = {}, cfg = {}; try { auto = RMD.getAuto(st.db); cfg = RMD.getConfig(st.db); } catch (e) {}
+    const rep = S.status.compose(st.db, s.error ? null : s.facts, { today: today(), appBuild: CFG.build || "", error: s.error ? friendly(new Error(s.error)) : "", autoEnabled: !!auto.enabled, deadlineApproved: !!cfg.deadline, backups: s.backups });
+    const KIND = { ok: "ok", info: "mute", warn: "warn", fail: "bad" }, WORD = { ok: "All good", warn: "Needs attention", fail: "Action needed" }, groups = [];
+    rep.items.forEach((i) => { let g = groups.find((x) => x.name === i.group); if (!g) groups.push(g = { name: i.group, items: [] }); g.items.push(i); });
+    return h("div", { id: "status-centre" },
+      h("div", { class: "card status-banner s-" + rep.overall, role: "status" }, h("b", null, WORD[rep.overall]), h("span", { class: "mute" }, " · " + rep.counts.ok + " fine, " + rep.counts.warn + " to check, " + rep.counts.fail + " failing · checked " + (s.at ? s.at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""))),
+      rep.actions.length ? h("div", { class: "card" }, h("h3", { class: "sec" }, "What to do"), h("ol", { id: "status-actions" }, rep.actions.map((a) => h("li", null, h("b", null, a.label + ": "), a.action)))) : h("div", { class: "hint" }, "Nothing needs your attention."),
+      groups.map((g) => h("div", { class: "card" }, h("h3", { class: "sec" }, g.name), g.items.map((i) => h("div", { class: "status-row", "data-check": i.id }, h("div", { class: "status-top" }, h("b", null, i.label), " ", badge(i.state === "ok" ? "OK" : i.state === "info" ? "Info" : i.state === "warn" ? "Check" : "Failing", KIND[i.state])), h("div", { class: "mute" }, i.detail), i.action && i.state !== "ok" ? h("div", { class: "status-do" }, "→ " + i.action) : null)))),
+      h("div", { class: "row" }, h("button", { id: "status-refresh", onclick: () => { st.stat = null; render(); } }, "Check again")));
+  }
   function system() {
     if (!st.live) return h("div", { class: "blocked" }, "Available on the live deployment only.");
     if (!st.sys) { st.sys = { loading: true, backups: [] }; st.store.call({ action: "listBackups" }).then((r) => { st.sys = { backups: r.backups }; render(); }).catch((e) => { st.sys = { backups: [], error: friendly(e) }; render(); }); }
@@ -1267,7 +1284,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       h("h2", { class: "sec" }, "Every movement"),
       Table([{ label: "Date", render: (e) => D.toDisplay(e.date) }, { label: "Movement", key: "kind" }, { label: "Amount", num: 1, render: (e) => num(e.amount) }, { label: "Approved by", render: (e) => e.authorisedBy || "" }, { label: "Evidence", key: "evidence" }, { label: "Reason", key: "reason" }], stmt.entries));
   }
-  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
+  const VIEWS = { menu: menuScreen, fyears: fyearsView, reminders: remindersView, reserve: reserveView, status: statusView, profit, approvals, airtime, messages, system, dash: dashboard, members, loans, ledger, subs, shareout, reports, recon, audit, home: MV.home, savings: MV.savings, myloans: MV.loans, myguar: MV.guarantees, more: MV.more, mysubs: MV.subs, myshare: MV.share };
 
   /* ---------- boot ---------- */
   const paintConn = (r) => { const cs = document.getElementById("conn-status"); if (!cs || !r) return; cs.className = "hint"; if (!r.ok) cs.textContent = "Not connected to the SOB records."; else if (CFG.build && r.build && r.build !== CFG.build) { cs.textContent = "Connected, but the SOB backend is older than this app (server " + String(r.build).slice(0, 6) + ", app " + String(CFG.build || "").slice(0, 6) + "). Admin: redeploy the latest Code_Ledger.gs as a New version of the same deployment."; cs.className = "hint warn"; } else cs.textContent = "✓ Connected to the SOB records" + (r.build ? " (app " + String(CFG.build || "").slice(0, 6) + " · server " + String(r.build).slice(0, 6) + ")" : "") + "."; };
