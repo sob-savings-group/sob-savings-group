@@ -135,7 +135,7 @@
   function run(db, id, filters, today) {
     const d = DEFS.find((x) => x.id === id); if (!d) throw new Error("NOT_FOUND: report " + id);
     const f = Object.assign({}, filters || {}); if (f.year) f.year = Number(f.year);
-    const p = periodOf(db, f, today), rep = d.build(db, f, p);
+    const p = periodOf(db, f, today), rep = L.indexed(db, () => d.build(db, f, p));
     if (f.category && rep.columns.indexOf("details") >= 0) {   /* Category = the purpose recorded on the entry (a managed list); totals are re-added from the lines that remain */
       const want = String(f.category).trim().toLowerCase(); rep.rows = rep.rows.filter((r) => String(r.details || "").toLowerCase().indexOf(want) === 0);
       const t2 = {}; Object.keys(rep.totals || {}).forEach((k) => { if (rep.columns.indexOf(k) >= 0) t2[k] = rep.rows.reduce((a, r) => a + (Number(r[k]) || 0), 0); }); rep.totals = t2;

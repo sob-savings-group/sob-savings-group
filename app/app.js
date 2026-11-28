@@ -192,7 +192,7 @@
     try { const nv = shell.querySelector("nav button.active"), nb = shell.querySelector("nav"); if (nv && nb && nb.scrollWidth > nb.clientWidth && getComputedStyle(nb).flexDirection === "row") nb.scrollLeft = Math.max(0, nv.offsetLeft - (nb.clientWidth - nv.offsetWidth) / 2); } catch (e) { /* cosmetic */ }
     if (staff) { const cur = nav.find((n) => n[0] === st.view); if (cur) { main.append(h("div", { class: "pagetitle" + (st.view === "dash" ? " hide-m" : "") }, backBtn, h("h1", null, cur[1]))); backPlaced = !!backBtn; } }
     if (backBtn && !backPlaced) main.prepend(backBtn);
-    try { main.append(VIEWS[st.view]()); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
+    try { main.append(L.indexed(st.db, () => VIEWS[st.view]())); } catch (e) { console.error(e); main.append(State("error", "We could not show this screen. " + friendly(e), () => render())); }
   }
 
   /* ---------- drill-down helpers ---------- */

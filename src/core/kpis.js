@@ -107,9 +107,9 @@
   /* The total of the entries listed in the drill-down, computed independently of the card; the screen shows both and says whether they tie. */
   const TIE = { totalSavings: (d) => sum(d.rows, "savings"), availableCash: (d) => (d.rows.length ? d.rows[d.rows.length - 1].balance : d.opening), outstandingLoans: (d) => sum(d.rows, "balance"), interestReceivable: (d) => sum(d.rows, "unpaidInterest"), loanExposure: (d) => sum(d.rows, "committed"), members: (d) => d.rows.length,
     loansDisbursed: (d) => sum(d.rows, "amount"), repaymentsReceived: (d) => sum(d.rows, "payment"), interestReceived: (d) => sum(d.rows, "interest") };
-  const detail = (db, key, period) => { if (!BUILD[key]) throw new Error("Unknown KPI: " + key); const d = BUILD[key](frame(db, period)); d.rowsTotal = (TIE[key] || ((x) => sum(x.rows, "amount")))(d); d.tied = key === "loanExposure" ? d.rowsTotal === d.guaranteed : d.rowsTotal === d.value; return d; };
+  const detail = (db, key, period) => { if (!BUILD[key]) throw new Error("Unknown KPI: " + key); const f0 = frame(db, period), d = L.indexed(f0.d, () => BUILD[key](f0)); d.rowsTotal = (TIE[key] || ((x) => sum(x.rows, "amount")))(d); d.tied = key === "loanExposure" ? d.rowsTotal === d.guaranteed : d.rowsTotal === d.value; return d; };
   /* The dashboard: every KPI computed once for the chosen period (a card shows value + basis; a click opens report(key) for the same period). */
-  function overview(db, period) { const f = frame(db, period), o = {}; KEYS.forEach((k) => { o[k] = BUILD[k](f); }); o.awaitingApproval = awaiting(db); o.period = { from: f.from, to: f.to }; return o; }
+  function overview(db, period) { const f = frame(db, period), o = {}; L.indexed(f.d, () => { KEYS.forEach((k) => { o[k] = BUILD[k](f); }); }); o.awaitingApproval = awaiting(db); o.period = { from: f.from, to: f.to }; return o; }
   /* The report/PDF behind a KPI: the very same detail, in the shape every printable report uses. */
   function report(db, key, period, opt) {
     const d = detail(db, key, period), clean = (r) => { const o = {}; Object.keys(r).forEach((k) => { if (k !== "_open") o[k] = r[k]; }); return o; };

@@ -27,7 +27,16 @@
 
   // Entries awaiting/failed second-person approval never count toward any figure.
   const isCounted = (t) => !t.voided && (t.approvalStatus === undefined || t.approvalStatus === "Approved");
-  const activeTransactions = (db) => (db.transactions || []).filter(isCounted);
+  /* PERFORMANCE: while a screen or report is being worked out, indexed(db, fn) keeps one list of counted entries and groups it by loan and by member, so each
+     per-loan or per-member question is answered without scanning the whole ledger again. The index lives only for that call (it is dropped even on an error), and is
+     ignored if the ledger changes length meanwhile, so it can never serve stale figures to a later screen. Outside indexed() everything behaves exactly as before. */
+  let SCOPE = null;
+  const scopeFor = (db) => (SCOPE && SCOPE.arr === db.transactions && SCOPE.n === (db.transactions || []).length ? SCOPE : null);
+  const activeTransactions = (db) => { const s = scopeFor(db); if (s) return s.active || (s.active = (db.transactions || []).filter(isCounted)); return (db.transactions || []).filter(isCounted); };
+  const groupBy = (list, k) => { const m = new Map(); list.forEach((t) => { const g = m.get(t[k]); if (g) g.push(t); else m.set(t[k], [t]); }); return m; };
+  const txOfLoan = (db, id) => { const s = scopeFor(db); if (!s) return activeTransactions(db).filter((t) => t.loanId === id); s.byLoan = s.byLoan || groupBy(activeTransactions(db), "loanId"); return s.byLoan.get(id) || []; };
+  const txOfMember = (db, id) => { const s = scopeFor(db); if (!s) return activeTransactions(db).filter((t) => t.memberId === id); s.byMember = s.byMember || groupBy(activeTransactions(db), "memberId"); return s.byMember.get(id) || []; };
+  function indexed(db, fn) { const prev = SCOPE; SCOPE = { arr: db.transactions, n: (db.transactions || []).length }; try { return fn(); } finally { SCOPE = prev; } }
   // Loans that are not (yet / any longer) booked never count toward outstanding or exposure.
   const NOT_BOOKED = ["Pending", "AwaitingApproval", "Approved", "Declined", "Reversed"];
   const activeLoans = (db) => (db.loans || []).filter((l) => !l.voided && !NOT_BOOKED.includes(l.status));
@@ -116,15 +125,15 @@
     return loanMonthsAfterGrace(loan, asOf) * (Number(loan.assignedMonthlyInterest) || 0);
   };
   const loanTotalPenalties = (loan, db) =>
-    activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
+    txOfLoan(db, loan.id).filter((t) => t.type === "Penalty").reduce((a, t) => a + Number(t.amount), 0);
   const loanPayable = (loan, asOf, db) =>
     Number(loan.loanAmount) + loanAccumulatedInterest(loan, asOf, db) + (db ? loanTotalPenalties(loan, db) : 0);
   const loanTotalRepaid = (loan, db) =>
-    activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
+    txOfLoan(db, loan.id).filter((t) => t.type === "Loan Repayment").reduce((a, t) => a + Number(t.amount), 0);
   const loanOutstanding = (loan, db, asOf) => loanPayable(loan, asOf, db) - loanTotalRepaid(loan, db);
 
   function memberSavings(db, memberId) {
-    return activeTransactions(db).filter((t) => t.memberId === memberId)
+    return txOfMember(db, memberId)
       .reduce((a, t) => a + classifyTransaction(t).savings, 0);
   }
   /* --- guarantees: the guarantor's own money committed to other people's loans. Committed savings stay in the account (they are still
@@ -144,7 +153,7 @@
     return Math.max(0, Number(g.amount) - rel.filter((r) => !r.date || r.date <= asOf).reduce((a, r) => a + Number(r.amount), 0));
   }
   const memberCommittedAsOf = (db, memberId, asOf) => (db.guarantees || []).filter((g) => g.guarantorId === memberId).reduce((a, g) => a + guaranteeRemainingAsOf(g, asOf), 0);
-  const memberSavingsAsOf = (db, memberId, asOf) => activeTransactions(db).filter((t) => t.memberId === memberId && t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
+  const memberSavingsAsOf = (db, memberId, asOf) => txOfMember(db, memberId).filter((t) => t.date <= asOf).reduce((a, t) => a + classifyTransaction(t).savings, 0);
   /* VERIFIED SAVINGS (used for settling a loan from savings). The register records each member's savings for the current savings year only: deposits + profit - withdrawals since the
      last share-out. Balances brought forward from earlier years are NOT counted here, because the old share-out entries do not clear them and the register does not confirm them.
      The loan books and the member's lifetime position are unchanged; this only decides what may be offset against a loan. */
@@ -161,8 +170,8 @@
   const confirmedAllocation = () => REPAYMENT_RULE;
   function walkAllocation(loan, db, asOf) {
     const principal = Number(loan.loanAmount) || 0, e = effectiveAsOf(loan, asOf);
-    const reps = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
-    const pens = activeTransactions(db).filter((t) => t.loanId === loan.id && t.type === "Penalty");
+    const reps = txOfLoan(db, loan.id).filter((t) => t.type === "Loan Repayment" && t.date <= e).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : 1));
+    const pens = txOfLoan(db, loan.id).filter((t) => t.type === "Penalty");
     let interestPaid = 0, principalPaid = 0, penaltiesPaid = 0; const steps = [];
     reps.forEach((t) => {
       let amt = Number(t.amount); const was = { i: interestPaid, p: principalPaid, n: penaltiesPaid };
@@ -214,7 +223,7 @@
   }
   function memberLifetimeHistory(db, memberId, period) {
     let run = 0;
-    return activeTransactions(db).filter((t) => t.memberId === memberId)
+    return txOfMember(db, memberId).slice()
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
       .map((t) => { run += classifyTransaction(t).savings; return { ...t, runningSavings: run }; })
       .filter((t) => inPeriod(t, period));
@@ -230,7 +239,7 @@
   const eligibleForDistribution = (db, memberId, asOf) => !memberHasOutstandingLoan(db, memberId, asOf);
 
   return {
-    RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, activeLoans, classifyTransaction, withinRestoreWindow,
+    RESTORE_WINDOW_HOURS, NOT_BOOKED, effectiveAsOf, isCounted, activeTransactions, indexed, txOfLoan, txOfMember, activeLoans, classifyTransaction, withinRestoreWindow,
     loanGraceMonths, loanMonthsAfterGrace, loanInterestLocked, loanAccumulatedInterest, loanTotalPenalties, loanPayable, loanTotalRepaid, loanOutstanding,
     POLICY_DEFAULTS, getPolicy, confirmedAllocation, loanRepaymentSplit, REPAYMENT_RULE, guaranteeRemaining, liveGuarantee, memberCommitted, memberAvailable, memberPosition, loanInterestPosition,
     memberSavings, activeLoansAsAt, guaranteeRemainingAsOf, memberCommittedAsOf, memberSavingsAsOf, memberVerifiedSavingsAsOf, cycleStartAsOf, memberPositionAsAt, memberHasOutstandingLoan, computeGroupTotals, inPeriod, memberLifetimeHistory,

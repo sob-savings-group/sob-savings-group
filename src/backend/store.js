@@ -122,10 +122,26 @@
   function writeAll(ss, db) {
     Object.keys(COLLECTIONS).forEach((k) => { if (k !== "users") writeCollection(ss, k, db[k] || []); });
   }
+  /* PERFORMANCE: a ledger that only GREW (new entries, and a few existing rows edited, e.g. an entry voided) is written as just those rows, not rewritten whole. Rewriting
+     the whole sheet on every command takes longer every year; this keeps a save the same speed however many years of records there are. It is used only when the sheet is
+     exactly what was read (same row count, same width); in any doubt it returns false and the full, proven rewrite is used instead. Nothing is ever removed this way. */
+  const DELTA_MAX_CHANGED = 200;
+  function writeDelta(ss, k, before, after) {
+    const c = COLLECTIONS[k], sh = ss.getSheetByName(c.sheet); if (!sh || !before.length || after.length < before.length) return false;
+    const width = c.cols.length ? c.cols.length + 1 : 1; if (sh.getLastRow() - 1 !== before.length || sh.getLastColumn() > width) return false;
+    const rowOf = (o) => (c.cols.length ? toRow(c.cols, o) : [enc(o)]), changed = [];
+    for (let i = 0; i < before.length; i++) { if (JSON.stringify(before[i]) !== JSON.stringify(after[i])) { changed.push(i); if (changed.length > DELTA_MAX_CHANGED) return false; } }
+    const edits = changed.map((i) => ({ at: i, row: rowOf(after[i]) })), added = after.slice(before.length).map(rowOf);
+    edits.concat(added.map((r) => ({ row: r }))).forEach((e, n) => e.row.forEach((v) => { if (typeof v === "string" && v.length > CELL_LIMIT) throw new Error("CELL_TOO_LARGE: " + k + " row exceeds the Sheets cell limit"); }));
+    if (added.length && c.cols.length) ensureText(sh, c.cols, after.length + 1);
+    let i = 0; while (i < edits.length) { let j = i; while (j + 1 < edits.length && edits[j + 1].at === edits[j].at + 1) j++; sh.getRange(2 + edits[i].at, 1, j - i + 1, width).setValues(edits.slice(i, j + 1).map((e) => e.row)); i = j + 1; }
+    if (added.length) sh.getRange(2 + before.length, 1, added.length, width).setValues(added);
+    return true;
+  }
   /* Persist only the collections a command actually changed (faster, and untouched sheets cannot be damaged). */
   function writeChanged(ss, before, after) {
     const changed = [];
-    Object.keys(COLLECTIONS).forEach((k) => { if (k === "users") return; if (JSON.stringify(before[k] || []) !== JSON.stringify(after[k] || [])) { writeCollection(ss, k, after[k] || []); changed.push(k); } });
+    Object.keys(COLLECTIONS).forEach((k) => { if (k === "users") return; if (JSON.stringify(before[k] || []) !== JSON.stringify(after[k] || [])) { if (!writeDelta(ss, k, before[k] || [], after[k] || [])) writeCollection(ss, k, after[k] || []); changed.push(k); } });
     return changed;
   }
   function readMeta(ss) {
@@ -137,5 +153,5 @@
     const sh = sheetOf(ss, META); const keys = Object.keys(m);
     sh.getRange(1, 1, keys.length, 2).setValues(keys.map((k) => [k, m[k]]));
   }
-  return { COLLECTIONS, writeChanged, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow, damagedByEarlierVersion, resetPlatformData };
+  return { COLLECTIONS, writeChanged, writeDelta, readCollection, writeCollection, readAll, writeAll, guardNoLoss, readMeta, writeMeta, toRow, fromRow, damagedByEarlierVersion, resetPlatformData };
 });
