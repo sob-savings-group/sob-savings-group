@@ -3,9 +3,9 @@
    DRY_RUN ("rendered, NOT sent"). A message is only ever marked SENT after a live adapter confirmed it. Failures are logged, never hidden. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.notify = api; }
-})(typeof self !== "undefined" ? self : this, function (G, D) {
+})(typeof self !== "undefined" ? self : this, function (G, D, TP) {
   const CHANNELS = ["SMS", "WHATSAPP"];
   const MAX_ATTEMPTS = 3;
   const RECEIPT_TEMPLATES = ["receipt", "repaymentReceived", "loanDisbursed", "transactionReceipt"];
@@ -28,6 +28,9 @@
     transactionReceipt: (v) => String(v.text || ""),
     custom: (v) => String(v.text || "").slice(0, 320)
   };
+  /* The wording of the editable messages comes from the Message wording setting (core/templates); everything else is fixed. A broken saved wording falls back to the default. */
+  const prep = (v) => ({ amount: money(v.amount), date: D.toDisplay(v.date), ref: v.ref, type: v.type, year: v.year, fee: money(v.fee), reasonLine: v.reason ? " Reason: " + v.reason : "" });
+  function renderFor(db, template, vars) { return TP && TP.has(template) ? TP.render(db, template, prep(vars || {})) : render(template, vars); }
   /* Uganda numbers: 07XXXXXXXX / 2567XXXXXXXX / +2567XXXXXXXX -> +2567XXXXXXXX. Anything else is rejected (never guessed). */
   function normalizePhone(p) {
     const s = String(p == null ? "" : p).replace(/[\s\-().]/g, "");
@@ -62,7 +65,7 @@
     if (member && member.notifyOptOut) { status = "SKIPPED"; reason = "OPTED_OUT"; }
     else if (!to) { status = "SKIPPED"; reason = "NO_VALID_PHONE"; }
     const rec = { id: G.uid("MSG"), createdAt: ctx.now, createdBy: ctx.by, memberId: o.memberId || "", to: to || "", channel, template: o.template,
-      body: channel === "SMS" && member ? identify(render(o.template, o.vars), member.id) : render(o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
+      body: channel === "SMS" && member ? identify(renderFor(db, o.template, o.vars), member.id) : renderFor(db, o.template, o.vars), status, reason, dedupeKey: o.dedupeKey || "", attempts: 0, mode: "" };
     /* when the committee switched the rule on, amounts and warnings go only to a confirmed number; any other number gets a plain notice */
     if (channel === "SMS" && member && status === "QUEUED" && !NO_RULE_TEMPLATES.includes(o.template) && getSmsRule(db).requireConfirmed && !phoneConfirmed(member)) { rec.body = identify(NOT_CONFIRMED_TEXT, member.id); rec.downgraded = true; rec.reason = "Number not confirmed: sent a plain notice without amounts"; }
     outbox.push(rec);

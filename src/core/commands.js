@@ -2,9 +2,9 @@
    with a ctx built from the authenticated session, never from anything the client sends. Each command re-checks its permission in core. */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./batch.js") : root.SOB.batch, isNode ? require("./content.js") : root.SOB.content, isNode ? require("./content_seed.js") : root.SOB.contentSeed);
+  const api = factory(isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./loans.js") : root.SOB.loans, isNode ? require("./cycle.js") : root.SOB.cycle, isNode ? require("./reconcile.js") : root.SOB.reconcile, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./airtime.js") : root.SOB.airtime, isNode ? require("./history.js") : root.SOB.history, isNode ? require("./security.js") : root.SOB.security, isNode ? require("./profit.js") : root.SOB.profit, isNode ? require("./histloans.js") : root.SOB.histloans, isNode ? require("./fy.js") : root.SOB.fy, isNode ? require("./reserve.js") : root.SOB.reserve, isNode ? require("./profitrec.js") : root.SOB.profitrec, isNode ? require("./reminders.js") : root.SOB.reminders, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./batch.js") : root.SOB.batch, isNode ? require("./content.js") : root.SOB.content, isNode ? require("./content_seed.js") : root.SOB.contentSeed, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.commands = api; }
-})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L, BT, CT, SEED) {
+})(typeof self !== "undefined" ? self : this, function (G, LN, C, RC, N, AT, H, SEC, PR, HL, FYR, RSV, PRC, RM, L, BT, CT, SEED, TPL) {
   /* A bank charge typed on a loan payout: attached to the payout entry this command just created (same transaction, saved or refused together). */
   function withDisbursementCharge(db, ctx, a, n0) {
     const chg = G.chargeOf(a); if (!(chg.amount > 0)) return;
@@ -12,6 +12,9 @@
     G.addBankCharge(db, ctx, main, chg);
   }
   const COMMANDS = {
+    setMessageTemplate: (db, ctx, a) => TPL.set(db, ctx, a),
+    saveQuickMessage: (db, ctx, a) => TPL.saveQuick(db, ctx, a),
+    removeQuickMessage: (db, ctx, a) => TPL.removeQuick(db, ctx, a),
     saveContent: (db, ctx, a) => CT.save(db, ctx, a),
     setContentStatus: (db, ctx, a) => CT.setStatus(db, ctx, a),
     loadStarterContent: (db, ctx) => CT.loadStarter(db, ctx, SEED),
@@ -225,6 +228,7 @@
      handled in governance.createEntry.) The Super Admin cannot bypass this: the command is NOT executed, it is stored as a request with its arguments and the
      result of a trial run, and approveRequest alone (Chairperson only, never the requester) executes it. Routine savings deposits and loan repayments are not gated. */
   const GATED = {
+    setMessageTemplate: { perm: "notify.manage", label: "Change the wording of an automatic message" },
     voidEntry: { perm: "ledger.void", label: "Void a transaction" }, restoreEntry: { perm: "ledger.restore", label: "Restore a voided transaction" },
     voidLoan: { perm: "loan.reverse", label: "Void a loan" }, restoreLoan: { perm: "ledger.restore", label: "Restore a voided loan" },
     correctLoan: { perm: "loan.editInterest", label: "Correct a loan (restore, monthly interest, lock)" },

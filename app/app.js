@@ -720,6 +720,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   const sharedNumbers = () => { const by = {}; (st.db.members || []).forEach((m) => { const k = N.normalizePhone(m.phone); if (k) (by[k] = by[k] || []).push(m.id); }); return by; };
   const recipientLine = (m, shared) => { const k = N.normalizePhone(m.phone), twin = k && shared[k] && shared[k].length > 1 ? shared[k].filter((x) => x !== m.id) : [];
     return h("span", { class: "mute", style: "font-size:13px" }, " · " + m.id + " · " + maskPhone(m.phone) + " · ", N.phoneConfirmed(m) ? h("span", { class: "ok" }, "number confirmed") : h("span", { class: "warn" }, "not confirmed"), twin.length ? h("b", { class: "warn" }, " · same number as " + twin.join(", ")) : null); };
+  const TPL = S.templates;
   const APOLOGY = "Tusonyiwe olw'obubaka bw'okujjukiza ebbanja bwofuna. Tetwagala kuswaaza tuli bakuumi b'obwesigwa. sasula b4 24 Nov. Blessing. Elder Pr. Kironde(c/p)";
   function numbersForm() {
     const shared = sharedNumbers(), picked = new Set(), rule = N.getSmsRule(st.db).requireConfirmed, go = h("button", { class: "primary", id: "confirm-go", disabled: true }, "Confirm 0"), note = h("input", { id: "confirm-note", placeholder: "How you checked, e.g. phoned the member" }), err = h("div", { class: "err", role: "alert" });
@@ -738,7 +739,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
     ta.value = ""; const sync = () => { const len = (picked.size ? "SOB-000: " : "").length + ta.value.length; cnt.textContent = ta.value.length + " characters. Each text starts with the member's SOB ID and must stay in one SMS (160)."; go.textContent = "Send to " + picked.size; go.disabled = !picked.size || !ta.value.trim() || len > 160; };
     ta.oninput = sync;
     const m = Modal("Send a message", h("div", null, h("p", { class: "mute" }, "Tap who should get it. Plain letters only. The Chairperson approves before anything is queued."),
-      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text")),
+      h("div", { class: "row" }, h("button", { id: "notice-apology", onclick: () => { ta.value = APOLOGY; sync(); } }, "Use the apology text"), (TPL.quick(st.db) || []).map((q) => h("button", { "data-quick": q.id, onclick: () => { ta.value = q.text.replace(/\{name\}/g, "").replace(/\{id\}/g, "").trim().slice(0, 160); sync(); } }, q.name))),
       ta, cnt,
       h("div", { class: "preview" }, list.map((x) => h("label", { class: "pickrow", style: "display:block;margin:8px 0" }, h("input", { type: "checkbox", "data-member": x.id, onchange: (e) => { e.target.checked ? picked.add(x.id) : picked.delete(x.id); sync(); } }), " ", h("b", null, x.name), recipientLine(x, shared)))),
       err, h("div", { class: "row" }, go, h("button", { onclick: () => m.close() }, "Cancel"))));
@@ -1162,6 +1163,24 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
   }
 
   /* ---------- messages / outbox (Admin) ---------- */
+  /* MESSAGE WORDING: every automatic text is a setting. Edit with a live preview and a character counter; the Chairperson approves; clear it to go back to the default. */
+  function wordingForm(it) {
+    const cur = it.current, ta = h("textarea", { id: "tpl-text", rows: "5", maxlength: String(TPL.MAX) }), prev = h("div", { class: "preview", id: "tpl-preview" }), cnt = h("div", { class: "mute", id: "tpl-count" }), probs = h("div", { class: "err", id: "tpl-problems", role: "alert" });
+    ta.value = cur; const sync = () => { const t = ta.value, i = TPL.smsInfo(t), bad = TPL.check(it.key, t); prev.textContent = TPL.preview(it.key, t); cnt.textContent = i.length + " characters · " + i.segments + (i.segments === 1 ? " text message" : " text messages") + (i.unicode ? " · contains symbols that shorten each text to 70 characters" : "") + (i.segments > 1 ? " · the member's SOB ID is added at the start" : ""); probs.textContent = bad.join(" · "); save.disabled = !!bad.length; };
+    const save = h("button", { class: "primary", id: "tpl-save" }, "Send for approval");
+    const chips = it.placeholders.map((p) => h("button", { class: "chip", type: "button", title: p.about, "data-ph": p.name, onclick: () => { const a = ta.selectionStart || ta.value.length; ta.value = ta.value.slice(0, a) + "{" + p.name + "}" + ta.value.slice(ta.selectionEnd || a); ta.focus(); sync(); } }, "{" + p.name + "}"));
+    const m = Modal(it.label, h("div", null, h("p", { class: "mute" }, "Words only. Tap a name below to put it in; it is filled in automatically for each member. The Chairperson approves a change before it is used."), h("div", { class: "pal-chips" }, chips), ta, cnt, h("div", { class: "mute" }, "Preview with sample values:"), prev, probs,
+      h("div", { class: "row" }, save, h("button", { id: "tpl-reset", onclick: () => { ta.value = it.text; sync(); } }, "Use the standard wording"), h("button", { onclick: () => m.close() }, "Cancel"))));
+    ta.oninput = sync; sync();
+    save.onclick = act(async () => { await commit("setMessageTemplate", { key: it.key, text: ta.value, reason: "Wording changed" }); m.close(); }, "Saved");
+  }
+  function wordingPanel() {
+    const groups = []; TPL.list(st.db).forEach((it) => { let g = groups.find((x) => x.n === it.group); if (!g) groups.push(g = { n: it.group, items: [] }); g.items.push(it); });
+    const quickForm = (q) => Form(q ? "Edit quick message" : "New quick message", [{ name: "name", label: "Name (short)", value: q ? q.name : "" }, { name: "text", label: "Message (you may use {name} and {id})", type: "textarea", value: q ? q.text : "" }], act(async (f) => { await commit("saveQuickMessage", { id: q && q.id, name: f.name, text: f.text }); }, "Saved"), "Save");
+    return h("div", { id: "wording-panel" }, h("h2", { class: "sec" }, "Message wording"), h("p", { class: "mute" }, "The words of every automatic message. Change them here: no update to the system is needed. Amounts, dates and names fill in by themselves."),
+      groups.map((g) => h("div", { class: "card" }, h("h3", { class: "sec" }, g.n), g.items.map((it) => h("button", { class: "mrow", "data-tpl": it.key, onclick: () => wordingForm(it) }, h("span", { class: "mt" }, it.label, h("small", { class: "mute", style: "display:block" }, TPL.preview(it.key, it.current).slice(0, 90) + (it.isCustom ? "" : ""))), it.broken ? badge("Needs fixing", "bad") : it.isCustom ? badge("Changed", "warn") : h("span", { class: "mute" }, "Standard"))))),
+      h("div", { class: "card" }, h("h3", { class: "sec" }, "Quick messages (for Send a message)"), (TPL.quick(st.db) || []).map((q) => h("div", { class: "row", "data-qm": q.id }, h("b", null, q.name), h("span", { class: "mute" }, q.text.slice(0, 60)), h("button", { onclick: () => quickForm(q) }, "Edit"), h("button", { class: "danger", onclick: act(async () => { await commit("removeQuickMessage", { id: q.id }); }, "Removed") }, "Remove"))), h("div", { class: "row" }, h("button", { id: "qm-new", onclick: () => quickForm(null) }, "Add a quick message"))));
+  }
   function messages() {
     if (st.live && !st.gw) { st.gw = { SMS: false, WHATSAPP: false, loading: true }; st.store.call({ action: "gatewayStatus" }).then((r) => { st.gw = r.live; render(); }).catch(() => { st.gw = { SMS: false, WHATSAPP: false }; render(); }); }
     const gw = st.live ? (st.gw || {}) : { SMS: false, WHATSAPP: false }, sum = N.summary(st.db), ob = (st.db.outbox || []).slice().reverse().slice(0, 200);
@@ -1181,7 +1200,7 @@ add("Pay from savings", G.can(c, "loan.repay") && loan.status === "Active" && !l
       Table([{ label: "Created", render: (m) => D.toDisplay(String(m.createdAt).slice(0, 10)) }, { label: "To", render: (m) => m.to === "ADMIN" ? "Admin phone" : (m.memberId ? nameOf(m.memberId) + " " : "") + m.to }, { label: "Channel", key: "channel" }, { label: "Message", key: "body" },
         { label: "Status", render: (m) => badge(m.status, m.status === "SENT" ? "ok" : m.status === "FAILED" ? "bad" : m.status === "QUEUED" || m.status === "DRY_RUN" ? "warn" : "mute") }, { label: "Note", key: "reason" },
         { label: "", render: (m) => ["SENT", "CANCELLED"].includes(m.status) ? "" : h("button", { "data-cancel-msg": m.id, onclick: () => Form("Cancel message", [{ name: "reason", label: "Reason (required)" }], act(async (f) => commit("cancelMessage", { id: m.id, reason: f.reason }), "Cancelled")) }, "Cancel") }], ob),
-      null);
+      wordingPanel());
   }
 
 

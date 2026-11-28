@@ -7,9 +7,9 @@
    "Opened WhatsApp" is NOT delivery: wa.me gives no receipt. Delivery states are PREPARED -> OPENED -> SENT_CONFIRMED (the officer's own confirmation). */
 (function (root, factory) {
   const isNode = typeof module === "object" && module.exports;
-  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./notify.js") : root.SOB.notify);
+  const api = factory(isNode ? require("./dates.js") : root.SOB.dates, isNode ? require("./ledger.js") : root.SOB.ledger, isNode ? require("./governance.js") : root.SOB.gov, isNode ? require("./notify.js") : root.SOB.notify, isNode ? require("./templates.js") : root.SOB.templates);
   if (isNode) module.exports = api; else { root.SOB = root.SOB || {}; root.SOB.reminders = api; }
-})(typeof self !== "undefined" ? self : this, function (D, L, G, N) {
+})(typeof self !== "undefined" ? self : this, function (D, L, G, N, TP) {
   const KEY = "reminders";
   const LEVELS = ["FRIENDLY", "URGENT", "FINAL"], RANK = { FRIENDLY: 1, URGENT: 2, FINAL: 3 };
   const LEVEL_LABEL = { FRIENDLY: "Friendly Reminder", URGENT: "Urgent Reminder", FINAL: "Final Notice" };
@@ -263,7 +263,7 @@
     const COUNT = left === null || left < 0 ? null : left === 0 ? ["SOB: Due TODAY {dl}. Pay {total} now.", "SOB: Due today. Pay {amt} now.", "SOB: Due today. Pay {amt}."] : left === 1 ? ["SOB: Due TOMORROW. Pay {total} today.", "SOB: Due tomorrow. Pay {amt} today.", "SOB: Due tomorrow. Pay {amt}."] : left === 2 ? ["SOB: Only 2 days left! Pay {total} by {dl}.", "SOB: 2 days left! Pay {amt} by {dl}.", "SOB: 2 days left. Pay {amt}."] : ["SOB: {n} days left. Pay {total} by {dl}.", "SOB: {n} days left. Pay {amt} by {dl}.", "SOB: {n} days left. Pay {amt}."];
     if (rec.auto && rec.stage === "BISHOP" && !custom) {   // automatic Bishop notice: says what was paid, or asks the member not to keep quiet
       const dl0 = D.isISO(rec.deadline) ? Number(rec.deadline.slice(8, 10)) + " " + SHORT_MONTHS[Number(rec.deadline.slice(5, 7)) - 1] : "", n0 = Math.round(f.totalOutstanding), paid = Math.round(Number(rec.paidSinceLast) || 0);
-      const t0 = smsText(fill(paid > 0 ? PART_TEXT : NONE_TEXT, { tel: getAuto(db).contactPhone || "", paid: paid.toLocaleString("en-US"), amt: n0.toLocaleString("en-US"), dl: dl0 })), full0 = N.identify(t0.replace(/Chairperson (?=[.:])/, "the Chairperson").replace(/ +([.:])/g, "$1"), rec.memberId);
+      const t0 = smsText(fill(paid > 0 ? TP.text(db, "reminderPart") : TP.text(db, "reminderNone"), { tel: getAuto(db).contactPhone || "", paid: paid.toLocaleString("en-US"), amt: n0.toLocaleString("en-US"), dl: dl0 })), full0 = N.identify(t0.replace(/Chairperson (?=[.:])/, "the Chairperson").replace(/ +([.:])/g, "$1"), rec.memberId);
       if (full0.length <= SMS_ONE) return full0;
     }
     const list = custom ? [custom] : (rec.level === "FRIENDLY" && COUNT ? COUNT : SMS_TEMPLATES[rec.level]);
@@ -470,7 +470,7 @@
         const f = figures(db, loan, today); if (f.error) { out.skipped.push({ loanId: loan.id, reason: f.error }); continue; } if (!(f.totalOutstanding > 0)) {   // paid in full: a one-off thank-you if they were reminded and have paid since
           const reminded = (db.reminders || []).some((r) => r.loanId === loan.id && r.delivery !== "CANCELLED"), repaidAfter = reminded && paidSince(db, loan, today) > 0;
           if (repaidAfter) { const key = "THANKS:" + loan.id, had = (db.outbox || []).find((x) => x.dedupeKey === key && x.status !== "CANCELLED");
-            if (!had || had.status === "QUEUED" || had.status === "DRY_RUN") { const q = N.queue(db, ctx, { memberId: member.id, template: "custom", vars: { text: THANKS_TEXT }, channel: "SMS", dedupeKey: key }); N.dispatch(db, ctx, gateways, { ids: [q.id] }); if (q.status === "SENT") out.sent.push({ loanId: loan.id, memberId: member.id, stage: "THANKS", sms: q.body }); else out.failed.push({ loanId: loan.id, memberId: member.id, stage: "THANKS" }); } }
+            if (!had || had.status === "QUEUED" || had.status === "DRY_RUN") { const q = N.queue(db, ctx, { memberId: member.id, template: "custom", vars: { text: TP.text(db, "reminderThanks") }, channel: "SMS", dedupeKey: key }); N.dispatch(db, ctx, gateways, { ids: [q.id] }); if (q.status === "SENT") out.sent.push({ loanId: loan.id, memberId: member.id, stage: "THANKS", sms: q.body }); else out.failed.push({ loanId: loan.id, memberId: member.id, stage: "THANKS" }); } }
           continue; }
         const sch = schedule(db, cfg, loan, today); if (sch.error) { out.note = sch.error; break; }
         if (sch.daysToDeadline < 0) { out.skipped.push({ loanId: loan.id, memberId: member.id, reason: "deadline has passed: officers follow up" }); continue; }
